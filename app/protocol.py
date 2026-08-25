@@ -111,3 +111,10 @@ class CommandResult(BaseModel):
 
     status: str = Field(min_length=1, max_length=64)
     detail: dict[str, Any] = Field(default_factory=dict)
+
+
+class PublicOrderCreateRequest(BaseModel):
+    recipeId: str = Field(min_length=1, max_length=160)
+    recipeVersion: str = Field(min_length=1, max_length=64)
+    quantity: Literal[1] = 1
+    paymentMode: Literal["TEST_FREE"] = "TEST_FREE"

@@ -180,6 +180,76 @@ MIGRATIONS: tuple[tuple[int, str, str], ...] = (
           from terminal_command
         on conflict(command_id, revision) do nothing;
     """),
+    (2, "public-orders-and-production", """
+        create table if not exists sales_order (
+            id uuid primary key,
+            order_no text not null unique,
+            terminal_id bigint not null references terminal(id),
+            access_token_hash char(64) not null unique,
+            idempotency_key text not null,
+            request_digest char(64) not null,
+            status text not null,
+            payment_mode text not null default 'TEST_FREE',
+            payment_status text not null default 'NOT_REQUIRED',
+            currency char(3) not null default 'TWD',
+            total_amount_minor integer not null default 0,
+            recipe_id text not null,
+            recipe_version text not null,
+            sku_code text,
+            product_name text not null,
+            product_snapshot jsonb not null,
+            failure_code text,
+            failure_message text,
+            created_at timestamptz not null default now(),
+            updated_at timestamptz not null default now(),
+            started_at timestamptz,
+            completed_at timestamptz,
+            cancelled_at timestamptz,
+            unique(terminal_id, idempotency_key)
+        );
+        create index if not exists ix_sales_order_terminal_status
+            on sales_order(terminal_id, status, created_at);
+        create index if not exists ix_sales_order_created
+            on sales_order(created_at desc);
+
+        create table if not exists production_job (
+            id uuid primary key,
+            task_id text not null unique,
+            order_id uuid not null unique references sales_order(id),
+            terminal_id bigint not null references terminal(id),
+            command_id bigint unique references terminal_command(id),
+            status text not null,
+            revision bigint not null default 0,
+            progress double precision not null default 0,
+            current_step_id text,
+            current_step_name text,
+            planned_duration_seconds double precision,
+            step_durations jsonb not null default '[]'::jsonb,
+            failure_json jsonb,
+            created_at timestamptz not null default now(),
+            updated_at timestamptz not null default now(),
+            accepted_at timestamptz,
+            started_at timestamptz,
+            completed_at timestamptz
+        );
+        create index if not exists ix_production_job_dispatch
+            on production_job(terminal_id, status, created_at);
+
+        create table if not exists order_transition (
+            id bigserial primary key,
+            order_id uuid not null references sales_order(id),
+            revision bigint not null,
+            from_status text,
+            to_status text not null,
+            actor text not null,
+            reason text,
+            payload_json jsonb,
+            created_at timestamptz not null default now(),
+            unique(order_id, revision)
+        );
+        create index if not exists ix_order_transition_order
+            on order_transition(order_id, revision);
+    """),
 )
 
 

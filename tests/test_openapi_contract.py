@@ -10,13 +10,18 @@ from app.main import app, event_task_id  # noqa: E402
 
 def test_openapi_exposes_identity_and_formal_command_contracts() -> None:
     schema = app.openapi()
-    assert schema["info"]["version"] == "0.2.0"
+    assert schema["info"]["version"] == "0.3.0"
     paths = schema["paths"]
     assert "/api/v1/device-activations" in paths
     assert "/api/v1/devices/{device_id}/credentials/rotate" in paths
     assert "/api/v1/admin/devices" in paths
     assert "/api/v1/admin/devices/{identifier}/commands" in paths
     assert "/api/v1/admin/devices/{identifier}/commands/{message_id}" in paths
+    assert "/api/v1/public/devices/{identifier}/menu" in paths
+    assert "/api/v1/public/devices/{identifier}/orders" in paths
+    assert "/api/v1/public/orders/{order_id}" in paths
+    assert "/api/v1/admin/devices/{identifier}/inventory" in paths
+    assert "/api/v1/admin/orders" in paths
     schemes = schema["components"]["securitySchemes"]
     assert schemes["deviceBearer"]["scheme"] == "bearer"
     assert schemes["adminBearer"]["scheme"] == "bearer"

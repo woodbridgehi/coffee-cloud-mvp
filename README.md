@@ -1,74 +1,180 @@
 # Coffee Cloud MVP
 
-用于验证 `coffee-terminal-simulator` 的 `coffee-bot-002` 通过 HTTPS 连接 VPS。该服务是模块化单体的最小实现，不包含支付、正式订单、库存账本或 OTA。
+面向自动贩卖咖啡终端的早期运营后台。当前 `0.3.0` 已打通真实公网扫码下单、设备菜单与余量、单设备制作队列、终端命令、制作进度、共享物料同步和运营监控；架构保持为 FastAPI + PostgreSQL 的模块化单体，适合初创阶段小规模试运营。
 
-当前 `0.2.0` 核心能力：一次性设备激活、终端生成凭证、双凭证轮换宽限、撤销/过期、心跳幂等与乱序保护、能力/库存快照、事件 Inbox、正式命令幂等创建和状态迁移历史、受保护管理 API。
+当前订单采用 `TEST_FREE`（测试免支付）。页面会明确提示不收款，不会把尚未接入的第三方支付伪装成成功支付。支付、退款、会员和正式库存财务账本留到支付渠道确定后接入。
 
-它仍不是销售后台：没有支付、正式订单、库存账本、退款或 OTA。正式命令 API 仅用于验证终端接入与制作任务边界。
+## 1. 已实现的运营闭环
 
-## 本地检查
+```text
+终端上传 recipes/materials
+  → 云端形成设备实时菜单与可售杯数
+  → 终端显示该设备专属 HTTPS 二维码
+  → 手机扫码选择饮品并创建幂等订单
+  → 云端按设备串行派发 MAKE_DRINK
+  → 终端整杯预占、按步骤扣减共享物料
+  → 终端可靠上报进度、成功或失败
+  → 手机订单页轮询显示实时状态
+  → 运营台查看订单、设备和逐项物料余量
+```
+
+关键规则：
+
+- 二维码为真实公网地址：`{PUBLIC_BASE_URL}/order?device_id={deviceId}`，每台设备动态生成，不使用写死的 002 链接。
+- 终端离线、生命周期未激活、配方下架或物料不足时禁止下单。
+- 创建订单必须携带 `Idempotency-Key`；同键同载荷返回原订单，同键异载荷返回 `409`。
+- 状态页使用独立的不可猜测订单访问令牌，通过请求头传输；令牌不写入 URL 查询参数或服务日志。
+- 每台设备同时只派发一个制作任务；其余订单保持 `QUEUED`。
+- 设备 ACK 是物料预占成功的事实，设备事件是制作状态和实际扣料的事实。
+- 未在时限内送达设备的命令会进入 `EXPIRED`，不会无限停留在 `DISPATCHED`。
+- 终端 outbox 至少一次重投；云端事件 Inbox 和状态迁移保证重复事件不重复制作或扣料。
+
+## 2. 页面入口
+
+- 手机下单：`https://coffee-api.woodbridge.top/order?device_id=coffee-bot-002`
+- 订单状态：下单成功后自动进入 `/order/status#order=...&token=...`。敏感令牌位于 URL fragment，不会发送给 Web 服务器。
+- 设备运营台：`https://coffee-api.woodbridge.top/admin`
+- OpenAPI：`https://coffee-api.woodbridge.top/docs`
+- 健康检查：`https://coffee-api.woodbridge.top/health`
+
+运营台使用 `ADMIN_TOKEN` 登录，Token 只保存在当前页面内存。页面显示历史/在线设备、进行中订单、最近订单；选择设备后查询实时共享物料的 `available / capacity / unit / status`。
+
+## 3. 核心 API
+
+### 公开下单
+
+```text
+GET  /api/v1/public/devices/{deviceId}/menu
+POST /api/v1/public/devices/{deviceId}/orders
+GET  /api/v1/public/orders/{orderId}
+POST /api/v1/public/orders/{orderId}/cancel
+```
+
+创建测试订单：
+
+```bash
+curl -X POST https://coffee-api.woodbridge.top/api/v1/public/devices/coffee-bot-002/orders \
+  -H 'Content-Type: application/json' \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -d '{"recipeId":"espresso-v1","recipeVersion":"1.0.0","quantity":1,"paymentMode":"TEST_FREE"}'
+```
+
+响应中的 `accessToken` 只在客户状态页使用。查询时放在 `X-Order-Access-Token`，不要写进日志或分享给其他人。
+
+### 设备接口
+
+```text
+POST /api/v1/device-activations
+POST /api/v1/devices/{deviceId}/heartbeat
+PUT  /api/v1/devices/{deviceId}/capabilities
+PUT  /api/v1/devices/{deviceId}/inventory
+GET  /api/v1/devices/{deviceId}/commands
+POST /api/v1/tasks/{taskId}/ack
+POST /api/v1/devices/{deviceId}/events
+GET  /api/v1/devices/{deviceId}/display-config
+```
+
+### 运营接口
+
+```text
+GET  /api/v1/admin/devices
+GET  /api/v1/admin/devices/{deviceId}
+GET  /api/v1/admin/devices/{deviceId}/inventory
+GET  /api/v1/admin/orders
+POST /api/v1/admin/devices
+POST /api/v1/admin/devices/{deviceId}/activation-codes
+POST /api/v1/admin/devices/{deviceId}/commands
+```
+
+所有管理接口使用 `Authorization: Bearer $ADMIN_TOKEN`。完整字段和错误响应以 `/docs` 与 `openapi/openapi.json` 为准。
+
+## 4. 状态模型
+
+订单：
+
+```text
+QUEUED → DISPATCHED → ACCEPTED → MAKING → READY
+   └──────────────→ CANCELLED / EXPIRED / FAILED
+```
+
+制作任务：
+
+```text
+QUEUED → DISPATCHED → ACCEPTED → EXECUTING → SUCCEEDED
+   └──────────────────────────→ REJECTED / FAILED / CANCELLED / EXPIRED
+```
+
+- `ACCEPTED`：终端已校验配方版本并成功预占整杯物料。
+- `MAKING`：收到 `task.started`；`task.progress` 与步骤事件更新当前步骤。
+- `READY`：只由终端 `task.succeeded` 推进。
+- 客户仅能取消尚未派发的 `QUEUED` 订单。派发后不允许用网页强行取消真实动作。
+
+## 5. 配置
+
+`.env` 不得提交。关键字段见 `.env.example`：
+
+- `DATABASE_URL`：PostgreSQL 连接。
+- `ADMIN_TOKEN`：运营后台管理凭证。
+- `PUBLIC_BASE_URL`：二维码和手机端公网根地址。
+- `PUBLIC_ORDER_QUEUE_LIMIT`：单设备进行中/排队订单上限，默认 20。
+- `ORDER_ACCESS_SECRET`：独立随机密钥，用于派生订单状态访问令牌；生产必须配置且不应与管理员 Token 共用。
+- `OFFLINE_THRESHOLD_SECONDS`：超过该心跳租约后禁止下单。
+
+现网第一次升级到 `0.3.0` 时应在 VPS `.env` 增加独立密钥：
+
+```bash
+openssl rand -hex 32
+```
+
+把输出安全写入 `ORDER_ACCESS_SECRET`，不要贴到聊天、日志或 Git。未配置时程序暂时回退到 `ADMIN_TOKEN` 以兼容旧部署，但管理员 Token 轮换会令旧订单状态链接失效。
+
+## 6. 本地检查与部署
 
 ```bash
 .venv/bin/pytest -q
+node --check public/order.js
 .venv/bin/python scripts/export_openapi.py
 docker compose config
 ```
 
-OpenAPI 在线入口为 `/openapi.json` 和 `/docs`，固定导出文件为 `openapi/openapi.json`。契约变化后必须重新导出并运行契约测试。
-
-## VPS 启动
-
-VPS 使用独立 `.env`，不得提交。准备数据库后：
+VPS 更新前先备份数据库，再同步代码且排除 `.env/.git/.venv`：
 
 ```bash
+docker exec postgres-web pg_dump -U coffee_cloud -Fc coffee_cloud_mvp > coffee-cloud-before-upgrade.dump
 docker compose up -d --build
 docker compose ps
 curl http://127.0.0.1:8788/health
 ```
 
-公网健康检查：
+数据库迁移由应用启动时按 `schema_migration` 顺序执行。迁移 2 新增 `sales_order`、`production_job` 和 `order_transition`。
 
-```bash
-curl https://coffee-api.woodbridge.top/health
-```
+## 7. 设备激活和启动
 
-管理查询必须携带 `ADMIN_TOKEN`：
-
-```bash
-curl -H "Authorization: Bearer $ADMIN_TOKEN" \
-  https://coffee-api.woodbridge.top/api/v1/admin/devices/002
-```
-
-管理页面位于 `/admin`，页面不会保存管理员 Token。
-
-管理台现在是设备总览页：会列出所有已登记终端，包括当前在线、当前离线和从未上线的历史实例，并显示最近心跳、最后上线时间、生命周期、软件版本以及心跳/事件/命令数量。页面每 10 秒自动刷新，Token 只保留在当前页面内存中。
-
-新增本地模拟器实例时，先在管理台点击“登记新设备”，填写 `deviceId`、序列号、`instanceId` 和 `storeId`，复制一次性激活码；然后在模拟器本地执行：
+在 `/admin` 登记设备并生成一次性激活码，然后在模拟器目录执行：
 
 ```bash
 .venv/bin/python scripts/activate_instance.py coffee-bot-003 \
   --activation-code-file .secrets/coffee-bot-003.activation-code \
   --secrets-file .secrets/coffee-bot-003.env
-```
 
-激活成功后启动：
-
-```bash
 ./start-instance.command coffee-bot-003 \
   --env-file .secrets/coffee-bot-003.env
 ```
 
-“已登记”是云端历史记录，“在线”由最近心跳租约判断；进程停止后设备不会从列表消失，而会转为离线。
+“已登记”是历史记录，“在线”由最近心跳判断；停止进程后设备会转为离线，但不会从运营台消失。
 
-## 身份与正式命令
+## 8. 当前边界与近期优先级
 
-- `POST /api/v1/admin/devices/{id}/activation-codes`：管理员创建一次性激活码，明文只返回一次。
-- `POST /api/v1/device-activations`：终端提交激活码和自己生成的新 Token；可用相同载荷安全重试。
-- `POST /api/v1/devices/{deviceId}/credentials/rotate`：终端轮换凭证，必须携带 `Idempotency-Key`。
-- `GET /api/v1/admin/devices/{id}/credentials`：只返回版本和状态，不返回哈希或明文。
-- `POST /api/v1/admin/devices/{id}/commands`：正式创建设备命令，必须携带 `Idempotency-Key`。
-- `GET /api/v1/admin/devices/{id}/commands/{messageId}`：查询命令及完整迁移历史。
+当前必须保持：订单幂等、单设备串行派单、设备 ACK/事件裁决、终端共享物料预占与扣减、数据库备份、秘密文件隔离。
 
-命令主路径为 `CREATED → DELIVERING → ACKED → EXECUTING → SUCCEEDED/FAILED`；拒绝、取消和过期是独立终态。实际设备事件中的关联键位于 `payload.taskId`，服务启动时会使用已入库事件补偿尚未推进的命令投影。
+近期应做：
 
-完整部署、测试和回滚说明见 `../plan-gpt/10-vps-online-mvp/`。
+1. 选择支付服务商后增加支付/退款状态机与 webhook Inbox；支付成功前不得派发制作任务。
+2. 增加运营员账号/RBAC，替换共享管理员 Token。
+3. 增加制作执行超时、人工处置和告警通知。
+4. 增加云端库存交易投影与补料工单，而不只保存设备快照。
+5. 增加公网接口速率限制、WAF 规则和订单滥用监控。
+
+当前不急于引入：微服务、Kafka、Kubernetes、独立时序数据库。现阶段 PostgreSQL 模块化单体更容易保证订单—制作一致性和快速迭代。
+
+完整架构决策和 VPS 手册见 `../plan-gpt/`。
