@@ -139,7 +139,13 @@ class AlipayProvider(PaymentProvider):
         signature = self.private_key.sign(self._signing_text(values).encode("utf-8"), padding.PKCS1v15(), hashes.SHA256())
         return base64.b64encode(signature).decode("ascii")
 
-    def _request(self, method: str, biz_content: dict[str, Any], common_params: dict[str, Any] | None = None) -> dict[str, Any]:
+    def _request(
+        self,
+        method: str,
+        biz_content: dict[str, Any],
+        common_params: dict[str, Any] | None = None,
+        accepted_sub_codes: set[str] | None = None,
+    ) -> dict[str, Any]:
         values: dict[str, Any] = {
             "app_id": self.app_id,
             "method": method,
@@ -155,8 +161,11 @@ class AlipayProvider(PaymentProvider):
         response = httpx.post(self.gateway, data=values, timeout=self.timeout_seconds)
         response.raise_for_status()
         response_key = method.replace(".", "_") + "_response"
+        # The newer Alipay sandbox gateway may respond as text/html;charset=GBK.
+        # Parse response.text so httpx honours the declared charset; Response.json()
+        # assumes UTF-8 for raw JSON bytes and fails when messages contain Chinese.
         raw_text = response.text
-        body = response.json()
+        body = json.loads(raw_text)
         response_signature = body.get("sign")
         match = re.search(rf'"{re.escape(response_key)}"\s*:\s*', raw_text)
         if not response_signature or not match:
@@ -164,14 +173,15 @@ class AlipayProvider(PaymentProvider):
         _, end = json.JSONDecoder().raw_decode(raw_text[match.end():])
         signed_text = raw_text[match.end():match.end() + end]
         try:
+            response_charset = response.encoding or "utf-8"
             self.public_key.verify(
-                base64.b64decode(response_signature), signed_text.encode("utf-8"),
+                base64.b64decode(response_signature), signed_text.encode(response_charset),
                 padding.PKCS1v15(), hashes.SHA256(),
             )
         except Exception as exc:
             raise RuntimeError(f"Alipay {method} response signature verification failed") from exc
         result = body.get(response_key) or {}
-        if result.get("code") != "10000":
+        if result.get("code") != "10000" and result.get("sub_code") not in (accepted_sub_codes or set()):
             raise RuntimeError(f"Alipay {method} failed: {result.get('sub_code') or result.get('code')} {result.get('sub_msg') or result.get('msg')}")
         return result
 
@@ -186,12 +196,20 @@ class AlipayProvider(PaymentProvider):
         return ProviderResult("PENDING", raw.get("trade_no"), raw.get("qr_code"), raw)
 
     def query_payment(self, merchant_payment_no: str) -> ProviderResult:
-        raw = self._request("alipay.trade.query", {"out_trade_no": merchant_payment_no})
+        raw = self._request(
+            "alipay.trade.query", {"out_trade_no": merchant_payment_no},
+            accepted_sub_codes={"ACQ.TRADE_NOT_EXIST"},
+        )
+        if raw.get("sub_code") == "ACQ.TRADE_NOT_EXIST":
+            return ProviderResult("NOT_FOUND", raw=raw)
         status = {"TRADE_SUCCESS": "PAID", "TRADE_FINISHED": "PAID", "WAIT_BUYER_PAY": "PENDING", "TRADE_CLOSED": "CLOSED"}.get(raw.get("trade_status"), "FAILED")
         return ProviderResult(status, raw.get("trade_no"), raw=raw)
 
     def close_payment(self, merchant_payment_no: str) -> ProviderResult:
-        raw = self._request("alipay.trade.close", {"out_trade_no": merchant_payment_no})
+        raw = self._request(
+            "alipay.trade.close", {"out_trade_no": merchant_payment_no},
+            accepted_sub_codes={"ACQ.TRADE_NOT_EXIST"},
+        )
         return ProviderResult("CLOSED", raw.get("trade_no"), raw=raw)
 
     def refund(self, request: RefundRequest) -> ProviderResult:

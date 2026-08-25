@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     alipay_app_id: str | None = Field(default=None, alias="ALIPAY_APP_ID")
     alipay_app_private_key_file: str | None = Field(default=None, alias="ALIPAY_APP_PRIVATE_KEY_FILE")
     alipay_public_key_file: str | None = Field(default=None, alias="ALIPAY_PUBLIC_KEY_FILE")
+    alipay_timeout_seconds: float = Field(default=15, alias="ALIPAY_TIMEOUT_SECONDS", ge=3, le=60)
     internal_gateway_token: str = Field(default="development-gateway-token-change-before-deploy", alias="INTERNAL_GATEWAY_TOKEN", min_length=24)
     outbox_scan_seconds: float = Field(default=0.5, alias="OUTBOX_SCAN_SECONDS", ge=0.1, le=60)
     command_publish_lease_seconds: int = Field(default=30, alias="COMMAND_PUBLISH_LEASE_SECONDS", ge=5, le=300)

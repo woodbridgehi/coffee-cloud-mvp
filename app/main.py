@@ -62,6 +62,7 @@ def payment_provider(name: str) -> PaymentProvider:
         return AlipayProvider(
             app_id=settings.alipay_app_id or "", app_private_key=private_key,
             alipay_public_key=public_key, gateway=settings.alipay_gateway,
+            timeout_seconds=settings.alipay_timeout_seconds,
         )
     except OSError as exc:
         logger.error("payment key file unavailable: %s", exc)
@@ -1878,7 +1879,7 @@ def create_payment(
         if payment["status"] == "CREATED":
             try:
                 result = provider.query_payment(payment["merchant_payment_no"])
-                if result.status == "FAILED" and provider_name == "mock":
+                if result.status == "NOT_FOUND" or (result.status == "FAILED" and provider_name == "mock"):
                     result = provider.create_payment(request_value)
             except Exception:
                 result = provider.create_payment(request_value)
