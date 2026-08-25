@@ -8,6 +8,23 @@ ACTIVE_ORDER_STATUSES = frozenset({"QUEUED", "DISPATCHED", "ACCEPTED", "MAKING"}
 TERMINAL_ORDER_STATUSES = frozenset({"READY", "FAILED", "CANCELLED", "EXPIRED"})
 
 
+def device_progress(
+    payload: dict[str, Any],
+    current_overall: float = 0.0,
+    current_step: float = 0.0,
+) -> tuple[float, float]:
+    """Normalize v1.1 device progress while keeping legacy step-only events monotonic."""
+    legacy = payload.get("progress")
+    if payload.get("overallProgress") is not None:
+        overall = float(payload["overallProgress"])
+    elif legacy is not None:
+        overall = max(float(current_overall), float(legacy))
+    else:
+        overall = float(current_overall)
+    step = float(payload.get("stepProgress", legacy if legacy is not None else current_step))
+    return max(0.0, min(1.0, overall)), max(0.0, min(1.0, step))
+
+
 def terminal_is_online(terminal: dict[str, Any], threshold_seconds: int, *, now: datetime | None = None) -> bool:
     heartbeat = terminal.get("last_heartbeat_at")
     if not heartbeat:

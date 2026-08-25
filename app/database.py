@@ -250,6 +250,12 @@ MIGRATIONS: tuple[tuple[int, str, str], ...] = (
         create index if not exists ix_order_transition_order
             on order_transition(order_id, revision);
     """),
+    (3, "device-authoritative-production-progress", """
+        alter table production_job add column if not exists step_progress double precision not null default 0;
+        alter table production_job add column if not exists elapsed_seconds double precision not null default 0;
+        alter table production_job add column if not exists remaining_seconds double precision;
+        alter table production_job add column if not exists last_device_revision bigint not null default 0;
+    """),
 )
 
 

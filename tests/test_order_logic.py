@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from app.order_logic import order_state_for_event, public_menu
+from app.order_logic import device_progress, order_state_for_event, public_menu
 from app.security import derive_order_access_token
 
 
@@ -52,3 +52,17 @@ def test_order_event_mapping_and_access_token_are_stable() -> None:
     first = derive_order_access_token("secret", "device", "request")
     assert first == derive_order_access_token("secret", "device", "request")
     assert first != derive_order_access_token("secret", "device", "another")
+
+
+def test_device_authoritative_progress_is_separate_from_step_progress() -> None:
+    overall, step = device_progress(
+        {"progress": 0.4, "stepProgress": 0.4, "overallProgress": 0.24},
+        current_overall=0.2,
+        current_step=0.3,
+    )
+    assert overall == 0.24
+    assert step == 0.4
+
+    legacy_overall, legacy_step = device_progress({"progress": 0.1}, current_overall=0.8)
+    assert legacy_overall == 0.8
+    assert legacy_step == 0.1

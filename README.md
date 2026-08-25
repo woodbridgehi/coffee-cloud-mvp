@@ -105,7 +105,7 @@ QUEUED → DISPATCHED → ACCEPTED → EXECUTING → SUCCEEDED
 ```
 
 - `ACCEPTED`：终端已校验配方版本并成功预占整杯物料。
-- `MAKING`：收到 `task.started`；`task.progress` 与步骤事件更新当前步骤。
+- `MAKING`：收到 `task.started`；`task.progress` 与步骤事件保存设备给出的 `stepName`、`stepProgress`、`overallProgress` 和剩余时间。手机端不自行推导步骤或重新计算随机时长。
 - `READY`：只由终端 `task.succeeded` 推进。
 - 客户仅能取消尚未派发的 `QUEUED` 订单。派发后不允许用网页强行取消真实动作。
 
@@ -146,7 +146,7 @@ docker compose ps
 curl http://127.0.0.1:8788/health
 ```
 
-数据库迁移由应用启动时按 `schema_migration` 顺序执行。迁移 2 新增 `sales_order`、`production_job` 和 `order_transition`。
+数据库迁移由应用启动时按 `schema_migration` 顺序执行。迁移 2 新增订单与制作表；迁移 3 为制作任务增加当前步骤进度、整杯总进度配套时间字段及设备 revision 水位。
 
 ## 7. 设备激活和启动
 

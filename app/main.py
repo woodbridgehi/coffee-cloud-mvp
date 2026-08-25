@@ -27,7 +27,7 @@ from .protocol import (
     CredentialRotationRequest, DeviceEvent, Heartbeat, PublicOrderCreateRequest, Snapshot, TaskAck,
     canonical_digest, utc_now,
 )
-from .order_logic import ACTIVE_ORDER_STATUSES, TERMINAL_ORDER_STATUSES, order_state_for_event, public_menu
+from .order_logic import ACTIVE_ORDER_STATUSES, TERMINAL_ORDER_STATUSES, device_progress, order_state_for_event, public_menu
 from .security import derive_order_access_token, hash_token, tokens_equal
 from .settings import Settings, get_settings
 
@@ -992,14 +992,22 @@ def reconcile_order_event(
     if not row:
         return None
     event_payload = body.get("payload") if isinstance(body.get("payload"), dict) else {}
+    device_revision = event_payload.get("taskRevision")
+    if isinstance(device_revision, int) and device_revision < int(row.get("last_device_revision") or 0):
+        return {"orderId": str(row["sales_order_id"]), "status": "STALE", "duplicate": True}
     if event_type in {"task.progress", "step.started", "step.completed"}:
-        progress = float(event_payload.get("progress", row["progress"] or 0))
-        if event_type == "step.completed":
-            progress = max(progress, row["progress"] or 0)
+        progress, step_progress = device_progress(
+            event_payload, float(row["progress"] or 0), float(row.get("step_progress") or 0)
+        )
         connection.execute(
-            """update production_job set progress=%s,current_step_id=coalesce(%s,current_step_id),
-                 current_step_name=coalesce(%s,current_step_name),revision=revision+1,updated_at=now() where id=%s""",
-            (max(0.0, min(1.0, progress)), event_payload.get("stepId"), body.get("message"), row["id"]),
+            """update production_job set progress=%s,step_progress=%s,
+                 current_step_id=coalesce(%s,current_step_id),current_step_name=coalesce(%s,current_step_name),
+                 elapsed_seconds=coalesce(%s,elapsed_seconds),remaining_seconds=coalesce(%s,remaining_seconds),
+                 last_device_revision=greatest(last_device_revision,coalesce(%s,last_device_revision)),
+                 revision=revision+1,updated_at=now() where id=%s""",
+            (progress, step_progress,
+             event_payload.get("stepId"), event_payload.get("stepName") or body.get("message"),
+             event_payload.get("elapsedSeconds"), event_payload.get("remainingSeconds"), device_revision, row["id"]),
         )
         return {"orderId": str(row["sales_order_id"]), "status": "PROGRESS"}
     mapped = order_state_for_event(event_type)
@@ -1008,18 +1016,24 @@ def reconcile_order_event(
     order_status, job_status = mapped
     order = connection.execute("select * from sales_order where id=%s for update", (row["sales_order_id"],)).fetchone()
     planned = event_payload.get("plannedDurationSeconds")
-    steps = event_payload.get("stepDurations")
+    steps = event_payload.get("stepPlan") or event_payload.get("stepDurations")
     failure = event_payload.get("failure") or ({"code": event_payload.get("reasonCode"), "details": event_payload.get("details")} if event_type == "task.rejected" else None)
-    progress = 1.0 if event_type == "task.succeeded" else row["progress"]
+    progress = 1.0 if event_type == "task.succeeded" else float(event_payload.get("overallProgress", row["progress"] or 0))
+    step_progress = 1.0 if event_type == "task.succeeded" else float(event_payload.get("stepProgress", row.get("step_progress") or 0))
+    elapsed_seconds = planned if event_type == "task.succeeded" and planned is not None else event_payload.get("elapsedSeconds")
+    remaining_seconds = 0.0 if event_type == "task.succeeded" else event_payload.get("remainingSeconds")
     accepted_at = utc_now() if job_status == "ACCEPTED" and not row.get("accepted_at") else row.get("accepted_at")
     started_at = utc_now() if job_status == "EXECUTING" and not row.get("started_at") else row.get("started_at")
     completed_at = utc_now() if job_status in {"SUCCEEDED", "FAILED", "CANCELLED", "REJECTED"} else row.get("completed_at")
     connection.execute(
-        """update production_job set status=%s,progress=%s,planned_duration_seconds=coalesce(%s,planned_duration_seconds),
+        """update production_job set status=%s,progress=%s,step_progress=%s,
+             planned_duration_seconds=coalesce(%s,planned_duration_seconds),
              step_durations=coalesce(%s::jsonb,step_durations),failure_json=coalesce(%s,failure_json),
+             elapsed_seconds=coalesce(%s,elapsed_seconds),remaining_seconds=coalesce(%s,remaining_seconds),
+             last_device_revision=greatest(last_device_revision,coalesce(%s,last_device_revision)),
              revision=revision+1,accepted_at=%s,started_at=%s,completed_at=%s,updated_at=now() where id=%s""",
-        (job_status, progress, planned, Jsonb(steps) if steps is not None else None, Jsonb(failure) if failure else None,
-         accepted_at, started_at, completed_at, row["id"]),
+        (job_status, progress, step_progress, planned, Jsonb(steps) if steps is not None else None, Jsonb(failure) if failure else None,
+         elapsed_seconds, remaining_seconds, device_revision, accepted_at, started_at, completed_at, row["id"]),
     )
     if failure:
         failure_code = failure.get("code") or failure.get("errorCode") or "PRODUCTION_FAILED"
@@ -1123,9 +1137,12 @@ def public_order_payload(connection: Any, order: dict[str, Any]) -> dict[str, An
         "queuePosition": int(queue_position),
         "failure": {"code": order["failure_code"], "message": order["failure_message"]} if order["failure_code"] else None,
         "production": {
-            "taskId": job["task_id"], "status": job["status"], "progress": job["progress"],
+            "taskId": job["task_id"], "status": job["status"],
+            "progress": job["progress"], "overallProgress": job["progress"], "stepProgress": job["step_progress"],
             "currentStepId": job["current_step_id"], "currentStepName": job["current_step_name"],
-            "plannedDurationSeconds": job["planned_duration_seconds"], "stepDurations": job["step_durations"],
+            "plannedDurationSeconds": job["planned_duration_seconds"],
+            "elapsedSeconds": job["elapsed_seconds"], "remainingSeconds": job["remaining_seconds"],
+            "stepPlan": job["step_durations"], "stepDurations": job["step_durations"],
             "acceptedAt": iso(job["accepted_at"]), "startedAt": iso(job["started_at"]), "completedAt": iso(job["completed_at"]),
         } if job else None,
         "createdAt": iso(order["created_at"]), "updatedAt": iso(order["updated_at"]),
