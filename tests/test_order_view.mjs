@@ -3,7 +3,13 @@ import fs from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
 
-const app = { innerHTML: '' };
+let html = '';
+let htmlWrites = 0;
+const app = {
+  get innerHTML() { return html; },
+  set innerHTML(value) { html = value; htmlWrites += 1; },
+  get writes() { return htmlWrites; },
+};
 const elements = new Map([['app', app]]);
 const context = vm.createContext({
   URLSearchParams,
@@ -45,4 +51,18 @@ test('renders device-authoritative step names and overall progress', () => {
   assert.match(app.innerHTML, /整杯进度/);
   assert.match(app.innerHTML, /添加热水/);
   assert.match(app.innerHTML, /预计还需 18 秒/);
+});
+
+test('keeps the payment DOM and QR node stable across status polls', () => {
+  const order = {
+    orderNo: 'QA-PAY-001', status: 'AWAITING_PAYMENT', totalAmountMinor: 1000, currency: 'CNY',
+    product: { name: '浓缩咖啡' }, payment: { paymentId: 'payment-1', qrCode: 'alipay://sandbox' },
+  };
+  const before = app.writes;
+  context.renderOrder(order);
+  const afterFirst = app.writes;
+  context.renderOrder(order);
+  assert.equal(afterFirst, before + 1);
+  assert.equal(app.writes, afterFirst);
+  assert.match(app.innerHTML, /二维码每 20 秒校验/);
 });
