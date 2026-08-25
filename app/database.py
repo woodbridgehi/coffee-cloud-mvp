@@ -256,6 +256,177 @@ MIGRATIONS: tuple[tuple[int, str, str], ...] = (
         alter table production_job add column if not exists remaining_seconds double precision;
         alter table production_job add column if not exists last_device_revision bigint not null default 0;
     """),
+    (4, "payment-and-device-platform", """
+        alter table sales_order alter column payment_mode set default 'ONLINE';
+        alter table sales_order alter column payment_status set default 'NOT_STARTED';
+
+        create table if not exists payment (
+            id uuid primary key,
+            order_id uuid not null references sales_order(id),
+            provider text not null,
+            merchant_payment_no text not null,
+            provider_trade_no text,
+            idempotency_key text not null,
+            request_digest char(64) not null,
+            status text not null,
+            revision bigint not null default 0,
+            amount_minor integer not null check(amount_minor > 0),
+            currency char(3) not null,
+            subject text not null,
+            qr_code text,
+            provider_response jsonb,
+            next_reconcile_at timestamptz,
+            created_at timestamptz not null default now(),
+            updated_at timestamptz not null default now(),
+            paid_at timestamptz,
+            closed_at timestamptz,
+            unique(order_id,idempotency_key),
+            unique(provider,merchant_payment_no)
+        );
+        create unique index if not exists uq_payment_provider_trade
+            on payment(provider,provider_trade_no) where provider_trade_no is not null;
+        create index if not exists ix_payment_status_updated on payment(status,updated_at);
+        create index if not exists ix_payment_reconcile on payment(status,next_reconcile_at);
+
+        create table if not exists payment_event (
+            id bigserial primary key,
+            payment_id uuid not null references payment(id),
+            event_id text not null,
+            event_type text not null,
+            actor text not null,
+            payload_json jsonb not null default '{}'::jsonb,
+            created_at timestamptz not null default now(),
+            unique(payment_id,event_id)
+        );
+
+        create table if not exists payment_callback_inbox (
+            id bigserial primary key,
+            provider text not null,
+            provider_event_id text not null,
+            payment_id uuid references payment(id),
+            payload_digest char(64) not null,
+            status text not null,
+            payload_json jsonb not null,
+            received_at timestamptz not null default now(),
+            processed_at timestamptz,
+            error_message text,
+            unique(provider,provider_event_id)
+        );
+
+        create table if not exists refund (
+            id uuid primary key,
+            payment_id uuid not null references payment(id),
+            provider text not null,
+            merchant_refund_no text not null,
+            provider_refund_no text,
+            idempotency_key text not null,
+            request_digest char(64) not null,
+            status text not null,
+            revision bigint not null default 0,
+            amount_minor integer not null check(amount_minor > 0),
+            reason text not null,
+            provider_response jsonb,
+            attempt_count integer not null default 0,
+            next_attempt_at timestamptz,
+            created_at timestamptz not null default now(),
+            updated_at timestamptz not null default now(),
+            completed_at timestamptz,
+            unique(payment_id,idempotency_key),
+            unique(provider,merchant_refund_no)
+        );
+        create index if not exists ix_refund_reconcile on refund(status,next_attempt_at);
+
+        create table if not exists business_outbox (
+            id uuid primary key,
+            event_type text not null,
+            aggregate_type text not null,
+            aggregate_id text not null,
+            payload_json jsonb not null,
+            idempotency_key text not null unique,
+            status text not null default 'PENDING',
+            attempt_count integer not null default 0,
+            next_attempt_at timestamptz not null default now(),
+            locked_by text,
+            locked_until timestamptz,
+            last_error text,
+            created_at timestamptz not null default now(),
+            processed_at timestamptz
+        );
+        create index if not exists ix_business_outbox_pending
+            on business_outbox(status,next_attempt_at) where status in ('PENDING','RETRY');
+
+        create table if not exists mqtt_inbox (
+            id bigserial primary key,
+            device_id text not null,
+            topic text not null,
+            message_id text not null,
+            message_type text not null,
+            boot_id text,
+            sequence bigint,
+            revision bigint,
+            payload_digest char(64) not null,
+            payload_json jsonb not null,
+            status text not null default 'RECEIVED',
+            disposition text,
+            received_at timestamptz not null default now(),
+            processed_at timestamptz,
+            error_message text,
+            unique(device_id,message_id)
+        );
+        create unique index if not exists uq_mqtt_inbox_boot_sequence
+            on mqtt_inbox(device_id,boot_id,sequence)
+            where boot_id is not null and sequence is not null;
+
+        create table if not exists command_outbox (
+            id uuid primary key,
+            command_id bigint not null unique references terminal_command(id),
+            terminal_id bigint not null references terminal(id),
+            topic text not null,
+            envelope_json jsonb not null,
+            status text not null default 'PENDING',
+            attempt_count integer not null default 0,
+            next_attempt_at timestamptz not null default now(),
+            locked_by text,
+            locked_until timestamptz,
+            published_at timestamptz,
+            last_error text,
+            created_at timestamptz not null default now()
+        );
+        create index if not exists ix_command_outbox_pending
+            on command_outbox(status,next_attempt_at) where status in ('PENDING','RETRY','PUBLISHING');
+
+        create table if not exists mqtt_credential (
+            id uuid primary key,
+            terminal_id bigint not null references terminal(id),
+            username text not null,
+            secret_hash char(64) not null,
+            version integer not null,
+            status text not null default 'PENDING_PROVISION',
+            created_at timestamptz not null default now(),
+            expires_at timestamptz,
+            revoked_at timestamptz,
+            last_used_at timestamptz,
+            broker_synced_at timestamptz,
+            unique(terminal_id,version)
+        );
+        create unique index if not exists uq_mqtt_credential_active_username
+            on mqtt_credential(username) where status='ACTIVE';
+
+        create table if not exists security_event (
+            id bigserial primary key,
+            event_type text not null,
+            device_id text,
+            source text not null,
+            detail_json jsonb not null default '{}'::jsonb,
+            created_at timestamptz not null default now()
+        );
+        create index if not exists ix_security_event_created on security_event(created_at desc);
+
+        alter table production_job add column if not exists hold_reason text;
+        alter table production_job add column if not exists manual_review_required boolean not null default false;
+        alter table terminal_command add column if not exists published_at timestamptz;
+        alter table terminal_command add column if not exists hold_reason text;
+    """),
 )
 
 

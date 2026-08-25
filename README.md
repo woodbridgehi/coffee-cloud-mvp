@@ -1,8 +1,8 @@
 # Coffee Cloud MVP
 
-面向自动贩卖咖啡终端的早期运营后台。当前 `0.3.0` 已打通真实公网扫码下单、设备菜单与余量、单设备制作队列、终端命令、制作进度、共享物料同步和运营监控；架构保持为 FastAPI + PostgreSQL 的模块化单体，适合初创阶段小规模试运营。
+面向自动贩卖咖啡终端的早期运营后台。当前 `0.4.0` 增加 Payment Domain、Transactional Outbox、MQTT Inbox/Command Outbox、多设备 MQTT Gateway、MQTT 凭证生命周期和不确定设备结果 `HOLD` 处置；架构保持为 FastAPI + PostgreSQL 模块化单体与独立 Gateway/Worker。
 
-当前订单采用 `TEST_FREE`（测试免支付）。页面会明确提示不收款，不会把尚未接入的第三方支付伪装成成功支付。支付、退款、会员和正式库存财务账本留到支付渠道确定后接入。
+公网支付由 `PUBLIC_PAYMENT_MODE` 控制。现网在没有支付宝沙箱密钥前必须保持 `TEST_FREE`；设置为 `ONLINE` 后，服务端会拒绝任何绕过支付的测试订单。支付宝沙箱与正式环境共用 `AlipayProvider`，只通过 gateway、appId 和密钥文件切换。
 
 ## 1. 已实现的运营闭环
 
@@ -11,7 +11,9 @@
   → 云端形成设备实时菜单与可售杯数
   → 终端显示该设备专属 HTTPS 二维码
   → 手机扫码选择饮品并创建幂等订单
-  → 云端按设备串行派发 MAKE_DRINK
+  → ONLINE: Payment PENDING → 支付平台回调/主动查询 → PAID
+  → 支付事务写 Business Outbox，Worker 幂等创建制作任务
+  → Command Outbox 经多设备 MQTT Gateway 发布 MAKE_DRINK
   → 终端整杯预占、按步骤扣减共享物料
   → 终端可靠上报进度、成功或失败
   → 手机订单页轮询显示实时状态
@@ -22,7 +24,9 @@
 
 - 二维码为真实公网地址：`{PUBLIC_BASE_URL}/order?device_id={deviceId}`，每台设备动态生成，不使用写死的 002 链接。
 - 终端离线、生命周期未激活、配方下架或物料不足时禁止下单。
-- 创建订单必须携带 `Idempotency-Key`；同键同载荷返回原订单，同键异载荷返回 `409`。
+- 创建订单、支付和退款必须携带 `Idempotency-Key`；同键同载荷返回原结果，同键异载荷返回 `409`。
+- `ONLINE` 模式下未支付订单没有 `production_job` 或设备命令；支付回调不会直接发布 MQTT。
+- 支付回调 Inbox、Business Outbox、MQTT Inbox 和 Command Outbox 均由 PostgreSQL 唯一键保证至少一次处理下的业务幂等。
 - 状态页使用独立的不可猜测订单访问令牌，通过请求头传输；令牌不写入 URL 查询参数或服务日志。
 - 每台设备同时只派发一个制作任务；其余订单保持 `QUEUED`。
 - 设备 ACK 是物料预占成功的事实，设备事件是制作状态和实际扣料的事实。
@@ -50,13 +54,13 @@ GET  /api/v1/public/orders/{orderId}
 POST /api/v1/public/orders/{orderId}/cancel
 ```
 
-创建测试订单：
+创建订单（请求中的 `paymentMode` 必须与菜单返回值一致）：
 
 ```bash
 curl -X POST https://coffee-api.woodbridge.top/api/v1/public/devices/coffee-bot-002/orders \
   -H 'Content-Type: application/json' \
   -H "Idempotency-Key: $(uuidgen)" \
-  -d '{"recipeId":"espresso-v1","recipeVersion":"1.0.0","quantity":1,"paymentMode":"TEST_FREE"}'
+  -d '{"recipeId":"espresso-v1","recipeVersion":"1.0.0","quantity":1,"paymentMode":"ONLINE"}'
 ```
 
 响应中的 `accessToken` 只在客户状态页使用。查询时放在 `X-Order-Access-Token`，不要写进日志或分享给其他人。
@@ -72,7 +76,20 @@ GET  /api/v1/devices/{deviceId}/commands
 POST /api/v1/tasks/{taskId}/ack
 POST /api/v1/devices/{deviceId}/events
 GET  /api/v1/devices/{deviceId}/display-config
+POST /api/v1/devices/{deviceId}/mqtt-credentials/rotate
 ```
+
+### 支付接口
+
+```text
+POST /api/v1/orders/{orderId}/payments
+GET  /api/v1/payments/{paymentId}
+GET  /api/v1/payments/{paymentId}/qr
+POST /api/v1/payments/callback/alipay
+POST /api/v1/payments/{paymentId}/refund   # 管理员权限
+```
+
+支付成功事务只更新 Payment/Order 并写 `business_outbox`。后台 Worker 恢复后才创建唯一制作任务；因此服务在回调后崩溃也不会漏单或重复制作。明确 `task.failed/task.rejected` 会创建幂等退款；已发布命令失联则进入 `UNKNOWN/HOLD`，不会在物理结果不确定时自动退款。
 
 ### 运营接口
 
@@ -93,8 +110,17 @@ POST /api/v1/admin/devices/{deviceId}/commands
 订单：
 
 ```text
-QUEUED → DISPATCHED → ACCEPTED → MAKING → READY
+CREATED → AWAITING_PAYMENT → PAID → QUEUED → DISPATCHED → ACCEPTED → MAKING → READY
    └──────────────→ CANCELLED / EXPIRED / FAILED
+                                      FAILED → REFUNDED
+```
+
+支付与退款：
+
+```text
+CREATED → PENDING → PAID → REFUNDING → PARTIALLY_REFUNDED / REFUNDED
+                  └──────────────────→ CLOSED / FAILED
+REQUESTED → PROCESSING → SUCCEEDED / FAILED / UNKNOWN → PROCESSING
 ```
 
 制作任务：
@@ -119,6 +145,11 @@ QUEUED → DISPATCHED → ACCEPTED → EXECUTING → SUCCEEDED
 - `PUBLIC_ORDER_QUEUE_LIMIT`：单设备进行中/排队订单上限，默认 20。
 - `ORDER_ACCESS_SECRET`：独立随机密钥，用于派生订单状态访问令牌；生产必须配置且不应与管理员 Token 共用。
 - `OFFLINE_THRESHOLD_SECONDS`：超过该心跳租约后禁止下单。
+- `PUBLIC_PAYMENT_MODE`：`TEST_FREE` 或 `ONLINE`；是服务端强制规则，不只是 UI 开关。
+- `PAYMENT_DEFAULT_PROVIDER`：`mock`（仅测试）或 `alipay`。
+- `ALIPAY_GATEWAY/ALIPAY_APP_ID/ALIPAY_APP_PRIVATE_KEY_FILE/ALIPAY_PUBLIC_KEY_FILE`：支付宝环境与 RSA2 密钥配置；密钥文件不得提交。
+- `INTERNAL_GATEWAY_TOKEN`：API 与 MQTT Gateway 之间的独立随机凭证。
+- `EMQX_MANAGEMENT_URL/EMQX_DASHBOARD_USERNAME/EMQX_DASHBOARD_PASSWORD`：用于激活、轮换、吊销时同步每设备 MQTT user/ACL；只能指向 VPS 本机管理口。
 
 现网第一次升级到 `0.3.0` 时应在 VPS `.env` 增加独立密钥：
 
@@ -146,7 +177,7 @@ docker compose ps
 curl http://127.0.0.1:8788/health
 ```
 
-数据库迁移由应用启动时按 `schema_migration` 顺序执行。迁移 2 新增订单与制作表；迁移 3 为制作任务增加当前步骤进度、整杯总进度配套时间字段及设备 revision 水位。
+数据库迁移由应用启动时按 `schema_migration` 顺序执行。迁移 4 新增 Payment/Refund/Callback Inbox、Business Outbox、MQTT Inbox、Command Outbox、MQTT Credential、Security Event 与 HOLD 字段。升级前必须备份；不要手工把迁移 4 标记为已执行。
 
 ## 7. 设备激活和启动
 
@@ -165,15 +196,15 @@ curl http://127.0.0.1:8788/health
 
 ## 8. 当前边界与近期优先级
 
-当前必须保持：订单幂等、单设备串行派单、设备 ACK/事件裁决、终端共享物料预占与扣减、数据库备份、秘密文件隔离。
+当前必须保持：支付前不派单、支付/退款幂等、单设备串行派单、设备 ACK/事件裁决、终端共享物料预占与扣减、数据库备份、秘密文件隔离。
 
 近期应做：
 
-1. 选择支付服务商后增加支付/退款状态机与 webhook Inbox；支付成功前不得派发制作任务。
-2. 增加运营员账号/RBAC，替换共享管理员 Token。
-3. 增加制作执行超时、人工处置和告警通知。
-4. 增加云端库存交易投影与补料工单，而不只保存设备快照。
-5. 增加公网接口速率限制、WAF 规则和订单滥用监控。
+1. 配置支付宝沙箱密钥并完成真实扫码、回调、主动查询和退款验收，再把现网 `PUBLIC_PAYMENT_MODE` 切到 `ONLINE`。
+2. 增加运营员账号/RBAC、人工 HOLD 处置页和完整审计，替换共享管理员 Token。
+3. 增加云端库存交易投影与补料工单，而不只保存设备快照。
+4. 增加公网接口速率限制、WAF 规则和订单滥用监控。
+5. 完成 100/500/1000 设备连接、重连风暴与 Outbox 延迟压测。
 
 当前不急于引入：微服务、Kafka、Kubernetes、独立时序数据库。现阶段 PostgreSQL 模块化单体更容易保证订单—制作一致性和快速迭代。
 
@@ -181,7 +212,7 @@ curl http://127.0.0.1:8788/health
 
 ## 9. MQTT 5.0 接入网关
 
-`coffee-mqtt-gateway` 是独立进程，不承载扫码 Web/API，也不复制订单状态机。它订阅 EMQX 上行主题，把消息交给现有设备 API 的幂等 inbox/合法状态迁移；同时轮询现有 command 表并以 QoS 1 发布下行。网关对 QoS 1 上行启用 manual ACK，仅在设备 API 成功或明确判定为永久错误后确认，进程崩溃时由持久 MQTT session 重投。
+`coffee-mqtt-gateway` 是无单设备配置的独立进程，不承载扫码 Web/API，也不复制订单状态机。一个实例订阅所有设备上行 Topic，把消息交给持久 `mqtt_inbox` 和既有领域状态机；下行从 `command_outbox` 领取带租约的命令，Broker PUBACK 后再标记 `PUBLISHED`。QoS 1 上行启用 manual ACK，进程崩溃时由持久 MQTT session 重投。
 
 ```bash
 docker compose build coffee-mqtt-gateway
@@ -189,6 +220,6 @@ docker compose up -d coffee-mqtt-gateway
 docker logs -f coffee-mqtt-gateway
 ```
 
-网关 MQTT 凭证保存在未跟踪的 `.secrets/coffee-cloud-gateway.mqtt.env`。当前 MVP 网关只代理 `.env` 中 `DEVICE_ID` 对应的设备（现为 002）；扩展多设备前应改为云端设备认证服务/动态凭证查询，不能为一万台设备复制一万个网关容器。
+网关 MQTT 凭证保存在未跟踪的 `.secrets/coffee-cloud-gateway.mqtt.env`。网关配置不再读取 `DEVICE_ID/DEVICE_TOKEN`；设备 Topic 与 payload 的 `deviceId` 必须一致，Broker 以每设备 username/password 和 ACL 约束 Topic。Paho 订阅端不能直接取得发布者 principal，因此当前 principal→Topic 绑定依赖 EMQX 认证/ACL；生产 mTLS 版本需把证书主体写入可验证接入上下文。
 
 EMQX 部署源、证书续期 hook 和 ACL 初始化脚本位于 `deploy/emqx/`。公网只允许 `mqtt-api.woodbridge.top:8883`；Dashboard 仅绑定 VPS `127.0.0.1:18083`。

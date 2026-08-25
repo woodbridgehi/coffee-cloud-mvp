@@ -1,41 +1,117 @@
 from __future__ import annotations
 
 import logging
+import json
+import io
 import secrets
 import threading
+import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Annotated
 from urllib.parse import quote
+from urllib.parse import parse_qsl
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Security, status
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from psycopg.errors import UniqueViolation
 from psycopg.types.json import Jsonb
+import qrcode
 
 from .database import Database
 from .command_state import (
-    ACKED, CREATED, DELIVERING, EXECUTING, EXPIRED, TERMINAL_STATES,
+    ACKED, CREATED, DELIVERING, EXECUTING, EXPIRED, PUBLISHED, TERMINAL_STATES,
     decide_transition, event_state, result_state,
 )
 from .protocol import (
     ActivationCodeRequest, ActivationRequest, AdminDeviceCreateRequest, CommandCreateRequest, CommandResult,
-    CredentialRotationRequest, DeviceEvent, Heartbeat, PublicOrderCreateRequest, Snapshot, TaskAck,
+    CredentialRotationRequest, DeviceEvent, Heartbeat, PaymentCreateRequest, PublicOrderCreateRequest,
+    RefundCreateRequest, Snapshot, TaskAck,
     canonical_digest, utc_now,
 )
 from .order_logic import ACTIVE_ORDER_STATUSES, TERMINAL_ORDER_STATUSES, device_progress, order_state_for_event, public_menu
 from .security import derive_order_access_token, hash_token, tokens_equal
 from .settings import Settings, get_settings
+from .payment_providers import AlipayProvider, MockPaymentProvider, PaymentProvider, PaymentRequest, RefundRequest
+from .payment_service import apply_paid_callback, callback_event_id, enqueue_outbox, transition_payment, transition_refund
+from .emqx_provisioner import EmqxProvisioner
 
 
-SERVICE_VERSION = "0.3.0"
+SERVICE_VERSION = "0.4.0"
 logger = logging.getLogger("coffee-cloud-mvp")
 settings = get_settings()
 database = Database(settings.database_url)
+mock_payment_provider = MockPaymentProvider()
+
+
+def payment_provider(name: str) -> PaymentProvider:
+    normalized = name.lower()
+    if normalized == "mock":
+        return mock_payment_provider
+    if normalized != "alipay":
+        raise HTTPException(status_code=422, detail="unsupported payment provider")
+    if not all((settings.alipay_app_id, settings.alipay_app_private_key_file, settings.alipay_public_key_file)):
+        raise HTTPException(status_code=503, detail="Alipay provider is not configured")
+    try:
+        private_key = Path(settings.alipay_app_private_key_file).read_text(encoding="utf-8")
+        public_key = Path(settings.alipay_public_key_file).read_text(encoding="utf-8")
+        return AlipayProvider(
+            app_id=settings.alipay_app_id or "", app_private_key=private_key,
+            alipay_public_key=public_key, gateway=settings.alipay_gateway,
+        )
+    except OSError as exc:
+        logger.error("payment key file unavailable: %s", exc)
+        raise HTTPException(status_code=503, detail="Alipay key material is unavailable") from exc
+
+
+def emqx_provisioner() -> EmqxProvisioner | None:
+    if not all((settings.emqx_management_url, settings.emqx_dashboard_username, settings.emqx_dashboard_password)):
+        return None
+    return EmqxProvisioner(
+        settings.emqx_management_url or "", settings.emqx_dashboard_username or "",
+        settings.emqx_dashboard_password or "",
+    )
+
+
+def issue_mqtt_credential(terminal: dict[str, Any]) -> dict[str, Any]:
+    password = secrets.token_urlsafe(36)
+    credential_id = uuid.uuid4()
+    with database.connect() as connection:
+        version = connection.execute(
+            "select coalesce(max(version),0)+1 as version from mqtt_credential where terminal_id=%s",
+            (terminal["id"],),
+        ).fetchone()["version"]
+        connection.execute(
+            """insert into mqtt_credential(id,terminal_id,username,secret_hash,version,status)
+                 values(%s,%s,%s,%s,%s,'PENDING_PROVISION')""",
+            (credential_id, terminal["id"], terminal["device_id"], hash_token(password), version),
+        )
+    status_value = "PENDING_PROVISION"
+    provisioner = emqx_provisioner()
+    if provisioner:
+        try:
+            provisioner.provision_device(terminal["device_id"], password)
+            with database.connect() as connection:
+                connection.execute(
+                    "update mqtt_credential set status='REVOKED',revoked_at=now() where terminal_id=%s and status='ACTIVE' and id<>%s",
+                    (terminal["id"], credential_id),
+                )
+                connection.execute(
+                    "update mqtt_credential set status='ACTIVE',broker_synced_at=now() where id=%s", (credential_id,)
+                )
+            status_value = "ACTIVE"
+        except Exception:
+            logger.exception("MQTT credential broker provisioning failed device=%s", terminal["device_id"])
+    return {
+        "credentialId": str(credential_id), "version": version, "status": status_value,
+        "username": terminal["device_id"], "password": password,
+        "host": "mqtt-api.woodbridge.top", "port": 8883, "tls": True,
+        "warning": "MQTT password is returned once and must not be logged",
+    }
 
 
 def iso(value: datetime | None) -> str | None:
@@ -48,6 +124,10 @@ def order_url(device_id: str) -> str:
 
 
 def provision_device() -> None:
+    if not settings.bootstrap_device_enabled:
+        return
+    if not settings.device_token:
+        raise RuntimeError("DEVICE_TOKEN is required when BOOTSTRAP_DEVICE_ENABLED=true")
     token_hash = hash_token(settings.device_token)
     with database.connect() as connection:
         row = connection.execute(
@@ -107,7 +187,7 @@ class OfflineMonitor:
                 (cutoff,),
             )
             expired_commands = connection.execute(
-                """select * from terminal_command where status in ('CREATED','DELIVERING')
+                """select * from terminal_command where status='CREATED'
                      and expires_at is not null and expires_at <= now() for update skip locked"""
             ).fetchall()
             for command in expired_commands:
@@ -125,6 +205,36 @@ class OfflineMonitor:
 offline_monitor = OfflineMonitor()
 
 
+class DomainWorker:
+    def __init__(self) -> None:
+        self.stop_event = threading.Event()
+        self.thread = threading.Thread(target=self._run, name="domain-worker", daemon=True)
+
+    def start(self) -> None:
+        self.thread.start()
+
+    def stop(self) -> None:
+        self.stop_event.set()
+        self.thread.join(timeout=3)
+
+    def _run(self) -> None:
+        last_watchdog = 0.0
+        while not self.stop_event.wait(settings.outbox_scan_seconds):
+            try:
+                process_business_outbox_batch()
+                reconcile_payment_once()
+                process_refund_batch()
+                now = time.monotonic()
+                if now - last_watchdog >= min(10, settings.offline_scan_seconds):
+                    watchdog_scan_once()
+                    last_watchdog = now
+            except Exception:
+                logger.exception("domain worker iteration failed")
+
+
+domain_worker = DomainWorker()
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     database.initialize()
@@ -133,9 +243,11 @@ async def lifespan(_: FastAPI):
     reconcile_stored_order_events()
     offline_monitor.scan_once()
     offline_monitor.start()
+    domain_worker.start()
     try:
         yield
     finally:
+        domain_worker.stop()
         offline_monitor.stop()
 
 
@@ -156,6 +268,11 @@ def require_admin(credentials: Annotated[HTTPAuthorizationCredentials | None, Se
     token = credentials.credentials if credentials and credentials.scheme.lower() == "bearer" else None
     if token is None or not tokens_equal(token, settings.admin_token):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid admin credential")
+
+
+def require_gateway(x_gateway_token: Annotated[str | None, Header(alias="X-Gateway-Token")] = None) -> None:
+    if x_gateway_token is None or not tokens_equal(x_gateway_token, settings.internal_gateway_token):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid gateway credential")
 
 
 def authenticate_device(device_id: str, header_device: str | None, token: str | None) -> dict[str, Any]:
@@ -195,6 +312,7 @@ def require_device(
 
 DeviceIdentity = Annotated[dict[str, Any], Depends(require_device)]
 AdminAuth = Annotated[None, Depends(require_admin)]
+GatewayAuth = Annotated[None, Depends(require_gateway)]
 
 
 @app.get("/health")
@@ -339,7 +457,34 @@ def activate_device(payload: ActivationRequest) -> dict[str, Any]:
             (now, credential["id"], activation["id"]),
         )
         connection.execute("update terminal set lifecycle_status='ACTIVE', updated_at=%s where id=%s", (now, terminal["id"]))
-    return {"deviceId": terminal["device_id"], **credential_payload(credential)}
+    mqtt_credential = issue_mqtt_credential(terminal)
+    return {"deviceId": terminal["device_id"], **credential_payload(credential), "mqttCredential": mqtt_credential}
+
+
+@app.post("/api/v1/devices/{device_id}/mqtt-credentials/rotate", tags=["device-identity"])
+def rotate_mqtt_credential(device_id: str, identity: DeviceIdentity) -> dict[str, Any]:
+    credential = issue_mqtt_credential(identity)
+    return {"deviceId": identity["device_id"], "mqttCredential": credential}
+
+
+@app.post("/api/v1/admin/devices/{identifier}/mqtt-credentials/revoke", tags=["device-identity"])
+def revoke_mqtt_credential(identifier: str, _: AdminAuth) -> dict[str, Any]:
+    with database.connect() as connection:
+        terminal = find_terminal(connection, identifier, for_update=True)
+        changed = connection.execute(
+            """update mqtt_credential set status='REVOKED',revoked_at=coalesce(revoked_at,now())
+                 where terminal_id=%s and status<>'REVOKED' returning id""", (terminal["id"],)
+        ).fetchall()
+    provisioner = emqx_provisioner()
+    broker_status = "NOT_CONFIGURED"
+    if provisioner:
+        try:
+            provisioner.revoke_device(terminal["device_id"])
+            broker_status = "REVOKED"
+        except Exception as exc:
+            logger.exception("MQTT credential broker revoke failed device=%s", terminal["device_id"])
+            broker_status = f"RETRY_REQUIRED:{type(exc).__name__}"
+    return {"deviceId": terminal["device_id"], "revokedCredentials": len(changed), "brokerStatus": broker_status}
 
 
 @app.post("/api/v1/devices/{device_id}/credentials/rotate", tags=["device-identity"])
@@ -532,7 +677,7 @@ def commands(device_id: str, identity: DeviceIdentity, after: str = "", limit: i
                 continue
             if row["status"] == CREATED:
                 row, _ = transition_command(connection, row, DELIVERING, "cloud", reason="device polled command")
-            if row["status"] == DELIVERING:
+            if row["status"] in {DELIVERING, PUBLISHED}:
                 deliverable.append(row["payload_json"])
     return {"commands": deliverable, "nextCursor": str(cursor)}
 
@@ -557,7 +702,7 @@ def transition_command(
     revision = command["revision"] + 1
     now = utc_now()
     completed_at = now if target in TERMINAL_STATES else command.get("completed_at")
-    delivered_at = now if target == DELIVERING and not command.get("delivered_at") else command.get("delivered_at")
+    delivered_at = now if target in {DELIVERING, PUBLISHED} and not command.get("delivered_at") else command.get("delivered_at")
     acked_at = now if target == ACKED and not command.get("acked_at") else command.get("acked_at")
     executing_at = now if target == EXECUTING and not command.get("executing_at") else command.get("executing_at")
     updated = connection.execute(
@@ -693,14 +838,18 @@ def task_ack(
     token = credentials.credentials if credentials and credentials.scheme.lower() == "bearer" else None
     identity = authenticate_device(x_device_id or "", x_device_id, token)
     body = payload.model_dump(mode="json", exclude_none=True)
+    return apply_task_ack(identity, task_id, body)
+
+
+def apply_task_ack(identity: dict[str, Any], task_id: str, body: dict[str, Any]) -> dict[str, Any]:
     with database.connect() as connection:
         command = connection.execute(
             "select * from terminal_command where terminal_id=%s and message_id=%s for update",
-            (identity["id"], payload.messageId),
+            (identity["id"], body.get("messageId")),
         ).fetchone()
         if command is None or command["payload_json"].get("taskId") != task_id:
             raise HTTPException(status_code=404, detail="task command not found")
-        target = ACKED if payload.accepted else "REJECTED"
+        target = ACKED if body.get("accepted") else "REJECTED"
         if target == ACKED and command["status"] in {ACKED, EXECUTING, *TERMINAL_STATES}:
             return {
                 "ok": True, "duplicate": True, "stale": command["status"] != ACKED,
@@ -708,7 +857,7 @@ def task_ack(
                 "commandStatus": command["status"], "revision": command["revision"],
             }
         updated, duplicate = transition_command(
-            connection, command, target, "device-ack", reason=payload.reason, payload=body,
+            connection, command, target, "device-ack", reason=body.get("reason") or body.get("reasonCode"), payload=body,
         )
         reconcile_order_ack(connection, identity["id"], task_id, body)
     return {
@@ -735,6 +884,176 @@ def command_result(device_id: str, message_id: str, payload: CommandResult, iden
     return {"ok": True, "duplicate": duplicate, "status": updated["status"], "revision": updated["revision"]}
 
 
+@app.post("/api/v1/internal/mqtt/messages", tags=["device-platform"], include_in_schema=False)
+async def ingest_mqtt_message(request: Request, _: GatewayAuth) -> dict[str, Any]:
+    body = await request.json()
+    topic = str(body.get("topic") or "")
+    envelope = body.get("envelope")
+    parts = topic.split("/")
+    if len(parts) != 4 or parts[:2] != ["v1", "devices"] or parts[3] not in {"up", "state", "presence"}:
+        raise HTTPException(status_code=422, detail="invalid MQTT uplink topic")
+    topic_device = parts[2]
+    if not isinstance(envelope, dict):
+        raise HTTPException(status_code=422, detail="MQTT payload must be a JSON object")
+    envelope_device = envelope.get("deviceId")
+    payload = envelope.get("payload") if parts[3] == "up" else envelope
+    payload_device = payload.get("deviceId") if isinstance(payload, dict) else None
+    if envelope_device not in {None, topic_device} or payload_device != topic_device:
+        logger.warning("MQTT identity mismatch topic=%s envelope=%s payload=%s", topic_device, envelope_device, payload_device)
+        with database.connect() as connection:
+            connection.execute(
+                "insert into security_event(event_type,device_id,source,detail_json) values('MQTT_IDENTITY_MISMATCH',%s,'mqtt-gateway',%s)",
+                (topic_device, Jsonb({"topic": topic, "envelopeDeviceId": envelope_device, "payloadDeviceId": payload_device})),
+            )
+        raise HTTPException(status_code=403, detail="MQTT device identity mismatch")
+    message_type = str(envelope.get("type") or parts[3])
+    message_id = str(envelope.get("messageId") or payload.get("eventId") or payload.get("messageId") or f"{parts[3]}:{canonical_digest(payload)}")
+    digest = canonical_digest(envelope)
+    boot_id = payload.get("bootId") if isinstance(payload, dict) else None
+    sequence = payload.get("sequence") if isinstance(payload, dict) else None
+    nested = payload.get("payload") if isinstance(payload, dict) and isinstance(payload.get("payload"), dict) else {}
+    revision = nested.get("taskRevision") or payload.get("revision") if isinstance(payload, dict) else None
+    with database.connect() as connection:
+        terminal = connection.execute("select * from terminal where device_id=%s", (topic_device,)).fetchone()
+        if not terminal:
+            raise HTTPException(status_code=404, detail="device not registered")
+        existing = connection.execute(
+            "select * from mqtt_inbox where device_id=%s and message_id=%s for update", (topic_device, message_id)
+        ).fetchone()
+        if existing and existing["payload_digest"].strip() != digest:
+            raise HTTPException(status_code=409, detail="MQTT messageId payload conflict")
+        if existing and existing["status"] == "PROCESSED":
+            return {"ok": True, "duplicate": True, "disposition": existing["disposition"]}
+        if not existing:
+            inserted = connection.execute(
+                """insert into mqtt_inbox(device_id,topic,message_id,message_type,boot_id,sequence,revision,payload_digest,payload_json)
+                     values(%s,%s,%s,%s,%s,%s,%s,%s,%s) on conflict do nothing returning id""",
+                (topic_device, topic, message_id, message_type, boot_id, sequence, revision, digest, Jsonb(envelope)),
+            ).fetchone()
+            if not inserted:
+                return {"ok": True, "duplicate": True, "disposition": "DUPLICATE_SEQUENCE"}
+
+    identity = terminal
+    try:
+        if parts[3] == "presence":
+            with database.connect() as connection:
+                connection.execute(
+                    """update terminal set connection_status=%s,last_seen_at=now(),
+                         last_connected_at=case when %s='online' then coalesce(last_connected_at,now()) else last_connected_at end,
+                         updated_at=now() where id=%s""",
+                    ("online" if payload.get("online") else "offline", "online" if payload.get("online") else "offline", terminal["id"]),
+                )
+            result = {"ok": True}
+        elif parts[3] == "state":
+            with database.connect() as connection:
+                connection.execute(
+                    "update terminal set reported_status=%s,last_seen_at=now(),updated_at=now() where id=%s",
+                    (Jsonb(payload), terminal["id"]),
+                )
+            result = {"ok": True}
+        elif message_type == "heartbeat":
+            result = heartbeat(topic_device, Heartbeat.model_validate(payload), identity)
+        elif message_type == "event":
+            result = events(topic_device, DeviceEvent.model_validate(payload), identity)
+        elif message_type == "command_result":
+            if payload.get("commandType") == "MAKE_DRINK":
+                result = apply_task_ack(identity, str(payload.get("taskId") or ""), payload)
+            else:
+                result = command_result(
+                    topic_device, str(payload.get("messageId") or ""),
+                    CommandResult.model_validate(payload), identity,
+                )
+        else:
+            raise HTTPException(status_code=422, detail="unsupported MQTT envelope type")
+    except Exception as exc:
+        with database.connect() as connection:
+            connection.execute(
+                "update mqtt_inbox set status='RETRY',error_message=%s where device_id=%s and message_id=%s",
+                (str(exc)[:1000], topic_device, message_id),
+            )
+        raise
+    with database.connect() as connection:
+        connection.execute(
+            """update mqtt_inbox set status='PROCESSED',disposition='APPLIED',processed_at=now(),error_message=null
+                 where device_id=%s and message_id=%s""",
+            (topic_device, message_id),
+        )
+    return {"ok": True, "duplicate": False, "result": result}
+
+
+@app.get("/api/v1/internal/device-commands/claim", tags=["device-platform"], include_in_schema=False)
+def claim_device_commands(
+    _: GatewayAuth,
+    gateway_id: str = Query(min_length=1, max_length=160),
+    limit: int = Query(default=100, ge=1, le=500),
+) -> dict[str, Any]:
+    with database.connect() as connection:
+        rows = connection.execute(
+            """select o.* from command_outbox o
+                 where ((o.status in ('PENDING','RETRY') and o.next_attempt_at<=now())
+                    or (o.status='PUBLISHING' and o.locked_until<now()))
+                 order by o.created_at for update skip locked limit %s""",
+            (limit,),
+        ).fetchall()
+        claimed = []
+        for row in rows:
+            updated = connection.execute(
+                """update command_outbox set status='PUBLISHING',attempt_count=attempt_count+1,
+                     locked_by=%s,locked_until=now()+(%s::text||' seconds')::interval where id=%s returning *""",
+                (gateway_id, settings.command_publish_lease_seconds, row["id"]),
+            ).fetchone()
+            claimed.append({
+                "outboxId": str(updated["id"]), "topic": updated["topic"],
+                "envelope": updated["envelope_json"], "attempt": updated["attempt_count"],
+            })
+    return {"commands": claimed}
+
+
+@app.post("/api/v1/internal/device-commands/{outbox_id}/published", tags=["device-platform"], include_in_schema=False)
+async def mark_device_command_published(outbox_id: uuid.UUID, request: Request, _: GatewayAuth) -> dict[str, Any]:
+    body = await request.json()
+    gateway_id = str(body.get("gatewayId") or "")
+    with database.connect() as connection:
+        outbox = connection.execute("select * from command_outbox where id=%s for update", (outbox_id,)).fetchone()
+        if not outbox:
+            raise HTTPException(status_code=404, detail="command outbox item not found")
+        if outbox["status"] == "PUBLISHED":
+            return {"ok": True, "duplicate": True}
+        if outbox["status"] != "PUBLISHING" or outbox["locked_by"] != gateway_id:
+            raise HTTPException(status_code=409, detail="command publish lease mismatch")
+        connection.execute(
+            """update command_outbox set status='PUBLISHED',published_at=now(),locked_by=null,locked_until=null,
+                 last_error=null where id=%s""", (outbox_id,)
+        )
+        command = connection.execute("select * from terminal_command where id=%s for update", (outbox["command_id"],)).fetchone()
+        if command["status"] in {CREATED, DELIVERING}:
+            command, _ = transition_command(connection, command, PUBLISHED, "mqtt-gateway", reason="broker PUBACK")
+        connection.execute("update terminal_command set published_at=coalesce(published_at,now()) where id=%s", (command["id"],))
+    return {"ok": True, "duplicate": False}
+
+
+@app.post("/api/v1/internal/device-commands/{outbox_id}/retry", tags=["device-platform"], include_in_schema=False)
+async def retry_device_command(outbox_id: uuid.UUID, request: Request, _: GatewayAuth) -> dict[str, Any]:
+    body = await request.json()
+    gateway_id = str(body.get("gatewayId") or "")
+    error = str(body.get("error") or "publish failed")[:1000]
+    with database.connect() as connection:
+        row = connection.execute("select * from command_outbox where id=%s for update", (outbox_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="command outbox item not found")
+        if row["status"] == "PUBLISHED":
+            return {"ok": True, "duplicate": True}
+        if row["locked_by"] != gateway_id:
+            raise HTTPException(status_code=409, detail="command publish lease mismatch")
+        connection.execute(
+            """update command_outbox set status='RETRY',next_attempt_at=now()+
+                 (least(60,power(2,least(attempt_count,6)))::text||' seconds')::interval,
+                 last_error=%s,locked_by=null,locked_until=null where id=%s""",
+            (error, outbox_id),
+        )
+    return {"ok": True, "duplicate": False}
+
+
 def create_command(identity: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     digest = canonical_digest(payload)
     with database.connect() as connection:
@@ -751,6 +1070,7 @@ def create_command(identity: dict[str, Any], payload: dict[str, Any]) -> dict[st
                  values(%s,0,null,'CREATED','debug-api','legacy debug command',%s)""",
             (command["id"], Jsonb(payload)),
         )
+        enqueue_command_outbox(connection, command, identity)
     return payload
 
 
@@ -834,6 +1154,7 @@ def admin_create_command(
                  values(%s,0,null,'CREATED','admin-api','command created',%s)""",
             (row["id"], Jsonb(command)),
         )
+        enqueue_command_outbox(connection, row, terminal)
     return {"duplicate": False, **command_payload(row)}
 
 
@@ -899,7 +1220,7 @@ def transition_order(
 ) -> dict[str, Any]:
     if order["status"] == target:
         return order
-    if order["status"] in TERMINAL_ORDER_STATUSES:
+    if order["status"] in TERMINAL_ORDER_STATUSES and not (order["status"] == "FAILED" and target == "REFUNDED"):
         return order
     revision = connection.execute(
         "select coalesce(max(revision),-1)+1 as revision from order_transition where order_id=%s",
@@ -996,6 +1317,8 @@ def reconcile_order_event(
     if isinstance(device_revision, int) and device_revision < int(row.get("last_device_revision") or 0):
         return {"orderId": str(row["sales_order_id"]), "status": "STALE", "duplicate": True}
     if event_type in {"task.progress", "step.started", "step.completed"}:
+        if row["status"] in {"SUCCEEDED", "FAILED", "REJECTED", "CANCELLED", "EXPIRED", "HOLD"}:
+            return {"orderId": str(row["sales_order_id"]), "status": "STALE_TERMINAL", "duplicate": True}
         progress, step_progress = device_progress(
             event_payload, float(row["progress"] or 0), float(row.get("step_progress") or 0)
         )
@@ -1042,9 +1365,39 @@ def reconcile_order_event(
             (failure_code, body.get("message") or "制作失败", order["id"]),
         )
     order = transition_order(connection, order, order_status, "device-event", reason=event_type, payload=body)
+    if order_status == "FAILED" and event_type in {"task.failed", "task.rejected"}:
+        create_automatic_refund_record(connection, order, row, event_type)
     if order_status in TERMINAL_ORDER_STATUSES:
         dispatch_next_order(connection, terminal_id)
     return {"orderId": str(order["id"]), "status": order["status"]}
+
+
+def create_automatic_refund_record(
+    connection: Any, order: dict[str, Any], job: dict[str, Any], reason: str,
+) -> dict[str, Any] | None:
+    payment = connection.execute(
+        "select * from payment where order_id=%s and status in ('PAID','PARTIALLY_REFUNDED') order by paid_at desc limit 1 for update",
+        (order["id"],),
+    ).fetchone()
+    if not payment:
+        return None
+    key = f"production:{job['id']}:automatic-refund"
+    existing = connection.execute(
+        "select * from refund where payment_id=%s and idempotency_key=%s", (payment["id"], key)
+    ).fetchone()
+    if existing:
+        return existing
+    request_body = {"amountMinor": payment["amount_minor"], "reason": reason}
+    refund = connection.execute(
+        """insert into refund(id,payment_id,provider,merchant_refund_no,idempotency_key,
+               request_digest,status,amount_minor,reason,next_attempt_at)
+             values(%s,%s,%s,%s,%s,%s,'REQUESTED',%s,%s,now()) returning *""",
+        (uuid.uuid4(), payment["id"], payment["provider"], f"R{uuid.uuid4().hex[:24].upper()}",
+         key, canonical_digest(request_body), payment["amount_minor"], f"production failure: {reason}"),
+    ).fetchone()
+    transition_payment(connection, payment, "REFUNDING", actor="production-service", payload={"refundId": str(refund["id"])})
+    connection.execute("update sales_order set payment_status='REFUNDING',updated_at=now() where id=%s", (order["id"],))
+    return refund
 
 
 def reconcile_stored_order_events() -> None:
@@ -1058,6 +1411,19 @@ def reconcile_stored_order_events() -> None:
             reconcile_order_event(connection, row["terminal_id"], row["payload_json"], row["event_type"])
 
 
+def enqueue_command_outbox(connection: Any, command: dict[str, Any], terminal: dict[str, Any]) -> None:
+    envelope = {
+        "schema": "coffee.mqtt-envelope.v1", "messageId": command["message_id"],
+        "deviceId": terminal["device_id"], "type": "command", "sentAt": iso(utc_now()),
+        "payload": command["payload_json"],
+    }
+    connection.execute(
+        """insert into command_outbox(id,command_id,terminal_id,topic,envelope_json)
+             values(%s,%s,%s,%s,%s) on conflict(command_id) do nothing""",
+        (uuid.uuid4(), command["id"], terminal["id"], f"v1/devices/{terminal['device_id']}/down", Jsonb(envelope)),
+    )
+
+
 def dispatch_next_order(connection: Any, terminal_id: int) -> dict[str, Any] | None:
     terminal = connection.execute("select * from terminal where id=%s for update", (terminal_id,)).fetchone()
     cutoff = utc_now() - timedelta(seconds=settings.offline_threshold_seconds)
@@ -1065,7 +1431,7 @@ def dispatch_next_order(connection: Any, terminal_id: int) -> dict[str, Any] | N
         return None
     active = connection.execute(
         """select 1 from production_job where terminal_id=%s
-             and status in ('DISPATCHED','ACCEPTED','EXECUTING') limit 1""",
+             and status in ('DISPATCHED','ACCEPTED','EXECUTING','HOLD','UNKNOWN') limit 1""",
         (terminal_id,),
     ).fetchone()
     if active:
@@ -1102,6 +1468,7 @@ def dispatch_next_order(connection: Any, terminal_id: int) -> dict[str, Any] | N
              values(%s,0,null,'CREATED','order-service','dispatch queued order',%s)""",
         (command_row["id"], Jsonb(command)),
     )
+    enqueue_command_outbox(connection, command_row, terminal)
     connection.execute(
         "update production_job set command_id=%s,status='DISPATCHED',revision=revision+1,updated_at=now() where id=%s",
         (command_row["id"], job["id"]),
@@ -1111,8 +1478,189 @@ def dispatch_next_order(connection: Any, terminal_id: int) -> dict[str, Any] | N
     return command
 
 
+def process_business_outbox_batch(limit: int = 20) -> int:
+    processed = 0
+    worker_id = f"domain-{uuid.uuid4()}"
+    for _ in range(limit):
+        event_id: uuid.UUID | None = None
+        try:
+            with database.connect() as connection:
+                event = connection.execute(
+                    """select * from business_outbox
+                         where status in ('PENDING','RETRY') and next_attempt_at<=now()
+                         order by created_at for update skip locked limit 1"""
+                ).fetchone()
+                if not event:
+                    break
+                event_id = event["id"]
+                connection.execute(
+                    "update business_outbox set status='PROCESSING',locked_by=%s,locked_until=now()+interval '30 seconds' where id=%s",
+                    (worker_id, event["id"]),
+                )
+                if event["event_type"] == "payment.paid":
+                    order_id = uuid.UUID(str(event["payload_json"]["orderId"]))
+                    order = connection.execute("select * from sales_order where id=%s for update", (order_id,)).fetchone()
+                    if order and order["payment_status"] == "PAID":
+                        job = connection.execute("select * from production_job where order_id=%s", (order_id,)).fetchone()
+                        if not job:
+                            connection.execute(
+                                """insert into production_job(id,task_id,order_id,terminal_id,status,planned_duration_seconds)
+                                     values(%s,%s,%s,%s,'QUEUED',%s)""",
+                                (uuid.uuid4(), f"task-{uuid.uuid4()}", order_id, order["terminal_id"],
+                                 (order["product_snapshot"] or {}).get("estimatedDurationSeconds")),
+                            )
+                        if order["status"] == "PAID":
+                            order = transition_order(connection, order, "QUEUED", "outbox-worker", reason="paid order queued")
+                        dispatch_next_order(connection, order["terminal_id"])
+                connection.execute(
+                    "update business_outbox set status='PROCESSED',processed_at=now(),locked_by=null,locked_until=null where id=%s",
+                    (event["id"],),
+                )
+                processed += 1
+        except Exception as exc:
+            logger.exception("business outbox event failed id=%s", event_id)
+            if event_id is not None:
+                with database.connect() as connection:
+                    connection.execute(
+                        """update business_outbox set status='RETRY',attempt_count=attempt_count+1,
+                             next_attempt_at=now()+(least(300,power(2,least(attempt_count+1,8)))::text||' seconds')::interval,
+                             last_error=%s,locked_by=null,locked_until=null where id=%s""",
+                        (str(exc)[:1000], event_id),
+                    )
+    return processed
+
+
+def reconcile_payment_once() -> int:
+    with database.connect() as connection:
+        payment = connection.execute(
+            """select * from payment where status in ('CREATED','PENDING')
+                 and (next_reconcile_at is null or next_reconcile_at<=now())
+                 order by created_at for update skip locked limit 1"""
+        ).fetchone()
+        if not payment:
+            return 0
+        connection.execute(
+            "update payment set next_reconcile_at=now()+(%s::text||' seconds')::interval where id=%s",
+            (settings.payment_reconcile_seconds, payment["id"]),
+        )
+    try:
+        result = payment_provider(payment["provider"]).query_payment(payment["merchant_payment_no"])
+    except Exception as exc:
+        logger.info("payment reconciliation deferred payment=%s: %s", payment["id"], exc)
+        return 0
+    with database.connect() as connection:
+        current = connection.execute("select * from payment where id=%s for update", (payment["id"],)).fetchone()
+        if current["status"] not in {"CREATED", "PENDING"}:
+            return 1
+        if result.status == "PAID":
+            apply_paid_callback(
+                connection, provider=current["provider"],
+                event_id=f"reconcile-paid:{current['merchant_payment_no']}",
+                values={
+                    "merchant_payment_no": current["merchant_payment_no"],
+                    "amount_minor": str(current["amount_minor"]),
+                    "provider_trade_no": result.provider_trade_no or "",
+                },
+            )
+        elif result.status in {"CLOSED", "FAILED"}:
+            target = "CLOSED" if result.status == "CLOSED" else "FAILED"
+            transition_payment(connection, current, target, actor="payment-reconciliation", payload=result.raw)
+            connection.execute(
+                "update sales_order set payment_status=%s,status=case when status in ('CREATED','AWAITING_PAYMENT') then 'CANCELLED' else status end,updated_at=now() where id=%s",
+                (target, current["order_id"]),
+            )
+    return 1
+
+
+def process_refund_batch() -> int:
+    with database.connect() as connection:
+        refund = connection.execute(
+            """select * from refund where status in ('REQUESTED','UNKNOWN','PROCESSING')
+                 and (next_attempt_at is null or next_attempt_at<=now())
+                 order by created_at for update skip locked limit 1"""
+        ).fetchone()
+        if not refund:
+            return 0
+        payment = connection.execute("select * from payment where id=%s", (refund["payment_id"],)).fetchone()
+        if refund["status"] != "PROCESSING":
+            refund, _ = transition_refund(connection, refund, "PROCESSING")
+            connection.execute("update refund set next_attempt_at=now()+interval '30 seconds' where id=%s", (refund["id"],))
+        connection.execute(
+            "update refund set attempt_count=attempt_count+1,next_attempt_at=now()+interval '30 seconds' where id=%s",
+            (refund["id"],),
+        )
+    try:
+        provider = payment_provider(payment["provider"])
+        refund_request = RefundRequest(
+            merchant_payment_no=payment["merchant_payment_no"], merchant_refund_no=refund["merchant_refund_no"],
+            amount_minor=refund["amount_minor"], reason=refund["reason"], provider_trade_no=payment["provider_trade_no"],
+        )
+        result = provider.query_refund(refund_request) if int(refund["attempt_count"] or 0) > 0 else provider.refund(refund_request)
+        if result.status == "NOT_FOUND":
+            result = provider.refund(refund_request)
+        target = "SUCCEEDED" if result.status == "REFUNDED" else "PROCESSING"
+        provider_payload = result.raw
+    except Exception as exc:
+        logger.warning("refund reconciliation outcome unknown refund=%s: %s", refund["id"], exc)
+        target = "UNKNOWN"
+        provider_payload = {"error": f"{type(exc).__name__}: {exc}"}
+    with database.connect() as connection:
+        current = connection.execute("select * from refund where id=%s for update", (refund["id"],)).fetchone()
+        current, _ = transition_refund(connection, current, target, payload=provider_payload)
+        if target == "SUCCEEDED":
+            current_payment = connection.execute("select * from payment where id=%s for update", (current["payment_id"],)).fetchone()
+            refunded = connection.execute(
+                "select coalesce(sum(amount_minor),0) as total from refund where payment_id=%s and status='SUCCEEDED'",
+                (current_payment["id"],),
+            ).fetchone()["total"]
+            payment_target = "REFUNDED" if refunded >= current_payment["amount_minor"] else "PARTIALLY_REFUNDED"
+            transition_payment(connection, current_payment, payment_target, actor="refund-reconciliation", payload=provider_payload)
+            order = connection.execute("select * from sales_order where id=%s for update", (current_payment["order_id"],)).fetchone()
+            connection.execute("update sales_order set payment_status=%s,updated_at=now() where id=%s", (payment_target, order["id"]))
+            if payment_target == "REFUNDED" and order["status"] == "FAILED":
+                transition_order(connection, order, "REFUNDED", "refund-reconciliation", reason="full refund completed")
+        else:
+            connection.execute(
+                "update refund set next_attempt_at=now()+interval '30 seconds' where id=%s", (current["id"],)
+            )
+    return 1
+
+
+def watchdog_scan_once() -> None:
+    with database.connect() as connection:
+        rows = connection.execute(
+            """select c.*,j.id as job_id,j.order_id,j.status as job_status,j.planned_duration_seconds,
+                      j.started_at as job_started_at
+                 from terminal_command c join production_job j on j.command_id=c.id
+                where (c.status in ('DELIVERING','PUBLISHED') and coalesce(c.published_at,c.delivered_at) is not null
+                       and coalesce(c.published_at,c.delivered_at) < now()-(%s::text||' seconds')::interval)
+                   or (c.status='ACKED' and c.acked_at < now()-(%s::text||' seconds')::interval)
+                   or (c.status='EXECUTING' and j.started_at is not null
+                       and j.started_at + ((coalesce(j.planned_duration_seconds,300)+%s)::text||' seconds')::interval < now())
+                for update skip locked""",
+            (settings.command_ack_timeout_seconds, settings.command_start_timeout_seconds,
+             settings.production_timeout_grace_seconds),
+        ).fetchall()
+        for row in rows:
+            command, _ = transition_command(
+                connection, row, "UNKNOWN", "watchdog",
+                reason="device outcome requires reconciliation", strict=False,
+            )
+            connection.execute(
+                """update production_job set status='HOLD',hold_reason='DEVICE_OUTCOME_UNKNOWN',
+                     manual_review_required=true,revision=revision+1,updated_at=now() where id=%s""",
+                (row["job_id"],),
+            )
+            order = connection.execute("select * from sales_order where id=%s for update", (row["order_id"],)).fetchone()
+            if order and order["status"] not in TERMINAL_ORDER_STATUSES:
+                transition_order(connection, order, "HOLD", "watchdog", reason="device outcome unknown")
+
+
 def public_order_payload(connection: Any, order: dict[str, Any]) -> dict[str, Any]:
     job = connection.execute("select * from production_job where order_id=%s", (order["id"],)).fetchone()
+    payment = connection.execute(
+        "select * from payment where order_id=%s order by created_at desc limit 1", (order["id"],)
+    ).fetchone()
     transitions = connection.execute(
         "select * from order_transition where order_id=%s order by revision", (order["id"],)
     ).fetchall()
@@ -1131,6 +1679,7 @@ def public_order_payload(connection: Any, order: dict[str, Any]) -> dict[str, An
         "status": order["status"],
         "paymentMode": order["payment_mode"],
         "paymentStatus": order["payment_status"],
+        "payment": payment_payload(payment) if payment else None,
         "totalAmountMinor": order["total_amount_minor"],
         "currency": order["currency"],
         "product": order["product_snapshot"],
@@ -1160,7 +1709,10 @@ def get_public_menu(identifier: str) -> dict[str, Any]:
         terminal = find_terminal(connection, identifier)
         capabilities = snapshot_payload(connection, terminal["id"], "capabilities")
         inventory = snapshot_payload(connection, terminal["id"], "inventory")
-    return {**public_menu(terminal, capabilities, inventory, settings.offline_threshold_seconds), "serverTime": iso(utc_now())}
+    return {**public_menu(
+        terminal, capabilities, inventory, settings.offline_threshold_seconds,
+        settings.default_product_price_minor, settings.payment_currency, settings.public_payment_mode,
+    ), "serverTime": iso(utc_now())}
 
 
 @app.post("/api/v1/public/devices/{identifier}/orders", tags=["public-orders"], status_code=201)
@@ -1171,6 +1723,8 @@ def create_public_order(
 ) -> dict[str, Any]:
     if not idempotency_key or len(idempotency_key) > 160:
         raise HTTPException(status_code=400, detail="Idempotency-Key is required and must be <= 160 characters")
+    if payload.paymentMode != settings.public_payment_mode:
+        raise HTTPException(status_code=409, detail="payment mode changed; refresh the menu")
     request_body = payload.model_dump(mode="json")
     digest = canonical_digest(request_body)
     with database.connect() as connection:
@@ -1186,7 +1740,10 @@ def create_public_order(
             return {**public_order_payload(connection, existing), "accessToken": access_token, "duplicate": True}
         capabilities = snapshot_payload(connection, terminal["id"], "capabilities")
         inventory = snapshot_payload(connection, terminal["id"], "inventory")
-        menu = public_menu(terminal, capabilities, inventory, settings.offline_threshold_seconds)
+        menu = public_menu(
+            terminal, capabilities, inventory, settings.offline_threshold_seconds,
+            settings.default_product_price_minor, settings.payment_currency, settings.public_payment_mode,
+        )
         product = next((item for item in menu["products"] if item["recipeId"] == payload.recipeId), None)
         if not product or product["recipeVersion"] != payload.recipeVersion:
             raise HTTPException(status_code=409, detail="recipe is missing or version changed; refresh the menu")
@@ -1202,25 +1759,32 @@ def create_public_order(
         task_id = f"task-{uuid.uuid4()}"
         order_no = f"C{utc_now().strftime('%m%d')}-{secrets.token_hex(3).upper()}"
         product_snapshot = {**product, "quantity": 1}
+        order_status = "QUEUED" if payload.paymentMode == "TEST_FREE" else "CREATED"
+        payment_status = "NOT_REQUIRED" if payload.paymentMode == "TEST_FREE" else "NOT_STARTED"
         order = connection.execute(
             """insert into sales_order(
                    id,order_no,terminal_id,access_token_hash,idempotency_key,request_digest,status,
+                   payment_mode,payment_status,currency,total_amount_minor,
                    recipe_id,recipe_version,sku_code,product_name,product_snapshot)
-                 values(%s,%s,%s,%s,%s,%s,'QUEUED',%s,%s,%s,%s,%s) returning *""",
+                 values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) returning *""",
             (order_id, order_no, terminal["id"], hash_token(access_token), idempotency_key, digest,
+             order_status, payload.paymentMode, payment_status, product["currency"], product["priceMinor"],
              product["recipeId"], product["recipeVersion"], product["skuCode"], product["name"], Jsonb(product_snapshot)),
         ).fetchone()
         connection.execute(
-            """insert into production_job(id,task_id,order_id,terminal_id,status,planned_duration_seconds)
-                 values(%s,%s,%s,%s,'QUEUED',%s)""",
-            (uuid.uuid4(), task_id, order_id, terminal["id"], product.get("estimatedDurationSeconds")),
-        )
-        connection.execute(
             """insert into order_transition(order_id,revision,from_status,to_status,actor,reason,payload_json)
-                 values(%s,0,null,'QUEUED','public-api','test-free order accepted',%s)""",
-            (order_id, Jsonb({"recipeId": payload.recipeId, "inventoryVersion": menu.get("inventoryVersion")})),
+                 values(%s,0,null,%s,'public-api',%s,%s)""",
+            (order_id, order_status,
+             "test-free order accepted" if payload.paymentMode == "TEST_FREE" else "order created awaiting payment",
+             Jsonb({"recipeId": payload.recipeId, "inventoryVersion": menu.get("inventoryVersion")})),
         )
-        dispatch_next_order(connection, terminal["id"])
+        if payload.paymentMode == "TEST_FREE":
+            connection.execute(
+                """insert into production_job(id,task_id,order_id,terminal_id,status,planned_duration_seconds)
+                     values(%s,%s,%s,%s,'QUEUED',%s)""",
+                (uuid.uuid4(), task_id, order_id, terminal["id"], product.get("estimatedDurationSeconds")),
+            )
+            dispatch_next_order(connection, terminal["id"])
         created = connection.execute(
             "select o.*,t.device_id,t.store_id from sales_order o join terminal t on t.id=o.terminal_id where o.id=%s",
             (order_id,),
@@ -1242,6 +1806,269 @@ def authenticate_order(connection: Any, order_id: uuid.UUID, token: str | None, 
     return order
 
 
+def payment_payload(payment: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "paymentId": str(payment["id"]), "orderId": str(payment["order_id"]),
+        "provider": payment["provider"], "merchantPaymentNo": payment["merchant_payment_no"],
+        "status": payment["status"], "revision": payment["revision"],
+        "amountMinor": payment["amount_minor"], "currency": payment["currency"],
+        "qrCode": payment["qr_code"], "createdAt": iso(payment["created_at"]),
+        "updatedAt": iso(payment["updated_at"]), "paidAt": iso(payment["paid_at"]),
+    }
+
+
+@app.post("/api/v1/orders/{order_id}/payments", tags=["payments"], status_code=201)
+def create_payment(
+    order_id: uuid.UUID,
+    payload: PaymentCreateRequest,
+    access_token: Annotated[str | None, Header(alias="X-Order-Access-Token")] = None,
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> dict[str, Any]:
+    if not idempotency_key or len(idempotency_key) > 160:
+        raise HTTPException(status_code=400, detail="Idempotency-Key is required and must be <= 160 characters")
+    provider_name = (payload.provider or settings.payment_default_provider).lower()
+    if provider_name == "mock" and not settings.allow_mock_payment:
+        raise HTTPException(status_code=503, detail="mock payment provider is disabled")
+    digest = canonical_digest(payload.model_dump(mode="json"))
+    with database.connect() as connection:
+        order = authenticate_order(connection, order_id, access_token, for_update=True)
+        if order["payment_mode"] == "TEST_FREE":
+            raise HTTPException(status_code=409, detail="test-free order does not require payment")
+        existing = connection.execute(
+            "select * from payment where order_id=%s and idempotency_key=%s for update",
+            (order_id, idempotency_key),
+        ).fetchone()
+        if existing:
+            if existing["request_digest"].strip() != digest:
+                raise HTTPException(status_code=409, detail="Idempotency-Key payload conflict")
+            if existing["status"] != "CREATED":
+                return {**payment_payload(existing), "duplicate": True}
+            payment = existing
+        else:
+            if order["payment_status"] in {"PAID", "REFUNDING", "REFUNDED"}:
+                raise HTTPException(status_code=409, detail="order payment is already complete")
+            payment_id = uuid.uuid4()
+            merchant_no = f"C{utc_now().strftime('%Y%m%d%H%M%S')}{secrets.token_hex(5).upper()}"
+            payment = connection.execute(
+                """insert into payment(id,order_id,provider,merchant_payment_no,idempotency_key,
+                       request_digest,status,amount_minor,currency,subject)
+                     values(%s,%s,%s,%s,%s,%s,'CREATED',%s,%s,%s) returning *""",
+                (payment_id, order_id, provider_name, merchant_no, idempotency_key, digest,
+                 order["total_amount_minor"], order["currency"], order["product_name"]),
+            ).fetchone()
+            connection.execute(
+                """insert into payment_event(payment_id,event_id,event_type,actor,payload_json)
+                     values(%s,'created','payment.created','customer',%s)""",
+                (payment_id, Jsonb(payload.model_dump(mode="json"))),
+            )
+            if order["status"] == "CREATED":
+                transition_order(connection, order, "AWAITING_PAYMENT", "payment-service", reason="payment created")
+            connection.execute(
+                "update sales_order set payment_status='PENDING',updated_at=now() where id=%s", (order_id,)
+            )
+
+    provider = payment_provider(provider_name)
+    request_value = PaymentRequest(
+        merchant_payment_no=payment["merchant_payment_no"], amount_minor=payment["amount_minor"],
+        currency=payment["currency"], subject=payment["subject"],
+        notify_url=f"{settings.public_base_url.rstrip('/')}/api/v1/payments/callback/{provider_name}",
+        metadata={"orderId": str(order_id)},
+    )
+    try:
+        if payment["status"] == "CREATED":
+            try:
+                result = provider.query_payment(payment["merchant_payment_no"])
+                if result.status == "FAILED" and provider_name == "mock":
+                    result = provider.create_payment(request_value)
+            except Exception:
+                result = provider.create_payment(request_value)
+        else:
+            result = provider.query_payment(payment["merchant_payment_no"])
+    except Exception as exc:
+        logger.warning("payment create/query failed payment=%s provider=%s: %s", payment["id"], provider_name, exc)
+        raise HTTPException(status_code=502, detail="payment provider temporarily unavailable") from exc
+
+    with database.connect() as connection:
+        current = connection.execute("select * from payment where id=%s for update", (payment["id"],)).fetchone()
+        connection.execute(
+            "update payment set qr_code=coalesce(%s,qr_code),provider_trade_no=coalesce(%s,provider_trade_no),provider_response=%s,updated_at=now() where id=%s",
+            (result.qr_code, result.provider_trade_no, Jsonb(result.raw), current["id"]),
+        )
+        current = connection.execute("select * from payment where id=%s", (current["id"],)).fetchone()
+        if result.status == "PAID":
+            values = {"merchant_payment_no": current["merchant_payment_no"], "amount_minor": str(current["amount_minor"]), "provider_trade_no": result.provider_trade_no or ""}
+            current, _ = apply_paid_callback(
+                connection, provider=provider_name,
+                event_id=f"query-paid:{current['merchant_payment_no']}", values=values,
+            )
+        elif current["status"] == "CREATED":
+            current, _ = transition_payment(connection, current, "PENDING", actor="payment-provider", payload=result.raw)
+            connection.execute(
+                "update payment set next_reconcile_at=now()+(%s::text||' seconds')::interval where id=%s",
+                (settings.payment_reconcile_seconds, current["id"]),
+            )
+    return {**payment_payload(current), "duplicate": existing is not None}
+
+
+def payment_with_order_auth(connection: Any, payment_id: uuid.UUID, token: str | None) -> dict[str, Any]:
+    payment = connection.execute("select * from payment where id=%s", (payment_id,)).fetchone()
+    if not payment:
+        raise HTTPException(status_code=404, detail="payment not found")
+    authenticate_order(connection, payment["order_id"], token)
+    return payment
+
+
+@app.get("/api/v1/payments/{payment_id}", tags=["payments"])
+def get_payment(
+    payment_id: uuid.UUID,
+    access_token: Annotated[str | None, Header(alias="X-Order-Access-Token")] = None,
+) -> dict[str, Any]:
+    with database.connect() as connection:
+        return payment_payload(payment_with_order_auth(connection, payment_id, access_token))
+
+
+@app.get("/api/v1/payments/{payment_id}/qr", tags=["payments"], response_class=Response)
+def get_payment_qr(
+    payment_id: uuid.UUID,
+    access_token: Annotated[str | None, Header(alias="X-Order-Access-Token")] = None,
+) -> Response:
+    with database.connect() as connection:
+        payment = payment_with_order_auth(connection, payment_id, access_token)
+    if not payment["qr_code"]:
+        raise HTTPException(status_code=409, detail="payment QR code is not ready")
+    image = qrcode.make(payment["qr_code"])
+    output = io.BytesIO()
+    image.save(output, format="PNG")
+    return Response(output.getvalue(), media_type="image/png", headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/v1/payments/callback/alipay", tags=["payments"], response_class=PlainTextResponse)
+async def alipay_callback(request: Request) -> str:
+    values = dict(parse_qsl((await request.body()).decode("utf-8"), keep_blank_values=True))
+    try:
+        parsed = payment_provider("alipay").verify_and_parse_callback(values)
+        if parsed.get("app_id") and parsed.get("app_id") != settings.alipay_app_id:
+            raise ValueError("Alipay callback app_id mismatch")
+        if parsed.get("trade_status") not in {"TRADE_SUCCESS", "TRADE_FINISHED"}:
+            return "success"
+        with database.connect() as connection:
+            apply_paid_callback(
+                connection, provider="alipay", event_id=callback_event_id("alipay", parsed), values=parsed,
+            )
+        return "success"
+    except (ValueError, HTTPException) as exc:
+        logger.warning("Alipay callback rejected: %s", exc)
+        return "failure"
+
+
+@app.post("/api/v1/payments/callback/mock", tags=["payments"], include_in_schema=False)
+async def mock_payment_callback(request: Request, _: AdminAuth) -> dict[str, Any]:
+    if settings.payment_default_provider != "mock" or not settings.allow_mock_payment:
+        raise HTTPException(status_code=404, detail="mock payment callback is disabled")
+    values = await request.json()
+    merchant_no = str(values.get("merchant_payment_no") or "")
+    with database.connect() as connection:
+        payment = connection.execute(
+            "select * from payment where provider='mock' and merchant_payment_no=%s", (merchant_no,)
+        ).fetchone()
+        if not payment:
+            raise HTTPException(status_code=404, detail="payment not found")
+    result = mock_payment_provider.set_paid(merchant_no, str(values.get("provider_trade_no") or "") or None)
+    callback_values = {
+        "merchant_payment_no": merchant_no, "amount_minor": str(payment["amount_minor"]),
+        "provider_trade_no": result.provider_trade_no or "",
+    }
+    with database.connect() as connection:
+        updated, duplicate = apply_paid_callback(
+            connection, provider="mock",
+            event_id=str(values.get("event_id") or f"mock-paid:{merchant_no}"), values=callback_values,
+        )
+    return {**payment_payload(updated), "duplicate": duplicate}
+
+
+@app.post("/api/v1/payments/{payment_id}/refund", tags=["payments"], status_code=202)
+def create_refund(
+    payment_id: uuid.UUID,
+    payload: RefundCreateRequest,
+    _: AdminAuth,
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> dict[str, Any]:
+    if not idempotency_key or len(idempotency_key) > 160:
+        raise HTTPException(status_code=400, detail="Idempotency-Key is required and must be <= 160 characters")
+    digest = canonical_digest(payload.model_dump(mode="json"))
+    with database.connect() as connection:
+        payment = connection.execute("select * from payment where id=%s for update", (payment_id,)).fetchone()
+        if not payment:
+            raise HTTPException(status_code=404, detail="payment not found")
+        if payment["status"] not in {"PAID", "REFUNDING", "PARTIALLY_REFUNDED"}:
+            raise HTTPException(status_code=409, detail="payment is not refundable")
+        existing = connection.execute(
+            "select * from refund where payment_id=%s and idempotency_key=%s for update",
+            (payment_id, idempotency_key),
+        ).fetchone()
+        if existing:
+            if existing["request_digest"].strip() != digest:
+                raise HTTPException(status_code=409, detail="Idempotency-Key payload conflict")
+            if existing["status"] in {"PROCESSING", "SUCCEEDED"}:
+                return {"refundId": str(existing["id"]), "status": existing["status"], "duplicate": True}
+            refund = existing
+        else:
+            amount = payload.amountMinor or payment["amount_minor"]
+            refunded = connection.execute(
+                "select coalesce(sum(amount_minor),0) as total from refund where payment_id=%s and status='SUCCEEDED'",
+                (payment_id,),
+            ).fetchone()["total"]
+            if amount + refunded > payment["amount_minor"]:
+                raise HTTPException(status_code=409, detail="refund amount exceeds unrefunded payment amount")
+            refund = connection.execute(
+                """insert into refund(id,payment_id,provider,merchant_refund_no,idempotency_key,
+                       request_digest,status,amount_minor,reason)
+                     values(%s,%s,%s,%s,%s,%s,'REQUESTED',%s,%s) returning *""",
+                (uuid.uuid4(), payment_id, payment["provider"], f"R{uuid.uuid4().hex[:24].upper()}",
+                 idempotency_key, digest, amount, payload.reason),
+            ).fetchone()
+            transition_payment(connection, payment, "REFUNDING", actor="refund-service", payload={"refundId": str(refund["id"])})
+            refund, _ = transition_refund(connection, refund, "PROCESSING")
+            connection.execute("update refund set next_attempt_at=now()+interval '30 seconds' where id=%s", (refund["id"],))
+
+    provider = payment_provider(payment["provider"])
+    try:
+        result = provider.refund(RefundRequest(
+            merchant_payment_no=payment["merchant_payment_no"], merchant_refund_no=refund["merchant_refund_no"],
+            amount_minor=refund["amount_minor"], reason=refund["reason"], provider_trade_no=payment["provider_trade_no"],
+        ))
+        target = "SUCCEEDED" if result.status == "REFUNDED" else "PROCESSING"
+    except Exception as exc:
+        logger.warning("refund outcome unknown refund=%s: %s", refund["id"], exc)
+        result = None
+        target = "UNKNOWN"
+    with database.connect() as connection:
+        current = connection.execute("select * from refund where id=%s for update", (refund["id"],)).fetchone()
+        current, _ = transition_refund(connection, current, target, payload=result.raw if result else {"error": "provider outcome unknown"})
+        if target == "UNKNOWN":
+            connection.execute(
+                "update refund set attempt_count=attempt_count+1,next_attempt_at=now()+interval '30 seconds' where id=%s", (current["id"],)
+            )
+        elif target == "PROCESSING":
+            connection.execute(
+                "update refund set attempt_count=greatest(attempt_count,1),next_attempt_at=now()+interval '30 seconds' where id=%s",
+                (current["id"],),
+            )
+        elif target == "SUCCEEDED":
+            current_payment = connection.execute("select * from payment where id=%s for update", (payment_id,)).fetchone()
+            refunded = connection.execute(
+                "select coalesce(sum(amount_minor),0) as total from refund where payment_id=%s and status='SUCCEEDED'", (payment_id,)
+            ).fetchone()["total"]
+            payment_target = "REFUNDED" if refunded >= current_payment["amount_minor"] else "PARTIALLY_REFUNDED"
+            transition_payment(connection, current_payment, payment_target, actor="refund-provider", payload=result.raw if result else {})
+            if payment_target == "REFUNDED":
+                order = connection.execute("select * from sales_order where id=%s for update", (current_payment["order_id"],)).fetchone()
+                connection.execute("update sales_order set payment_status='REFUNDED',updated_at=now() where id=%s", (order["id"],))
+                if order["status"] == "FAILED":
+                    transition_order(connection, order, "REFUNDED", "refund-provider", reason="full refund completed")
+    return {"refundId": str(current["id"]), "paymentId": str(payment_id), "status": current["status"], "duplicate": existing is not None}
+
+
 @app.get("/api/v1/public/orders/{order_id}", tags=["public-orders"])
 def get_public_order(
     order_id: uuid.UUID,
@@ -1257,12 +2084,33 @@ def cancel_public_order(
     order_id: uuid.UUID,
     access_token: Annotated[str | None, Header(alias="X-Order-Access-Token")] = None,
 ) -> dict[str, Any]:
+    payment_to_close: dict[str, Any] | None = None
     with database.connect() as connection:
         order = authenticate_order(connection, order_id, access_token, for_update=True)
-        if order["status"] != "QUEUED":
-            raise HTTPException(status_code=409, detail="only queued orders can be cancelled safely")
+        if order["status"] not in {"CREATED", "AWAITING_PAYMENT", "QUEUED"}:
+            raise HTTPException(status_code=409, detail="only unpaid or queued orders can be cancelled safely")
+        if order["status"] in {"CREATED", "AWAITING_PAYMENT"}:
+            payment_to_close = connection.execute(
+                "select * from payment where order_id=%s and status in ('CREATED','PENDING') order by created_at desc limit 1 for update",
+                (order_id,),
+            ).fetchone()
         order = transition_order(connection, order, "CANCELLED", "customer", reason="cancelled before dispatch")
-        connection.execute("update production_job set status='CANCELLED',revision=revision+1,updated_at=now(),completed_at=now() where order_id=%s", (order_id,))
+        connection.execute(
+            "update production_job set status='CANCELLED',revision=revision+1,updated_at=now(),completed_at=now() where order_id=%s",
+            (order_id,),
+        )
+    if payment_to_close:
+        try:
+            result = payment_provider(payment_to_close["provider"]).close_payment(payment_to_close["merchant_payment_no"])
+            with database.connect() as connection:
+                current = connection.execute("select * from payment where id=%s for update", (payment_to_close["id"],)).fetchone()
+                if current["status"] in {"CREATED", "PENDING"}:
+                    transition_payment(connection, current, "CLOSED", actor="customer-cancel", payload=result.raw)
+                    connection.execute("update sales_order set payment_status='CLOSED',updated_at=now() where id=%s", (order_id,))
+        except Exception as exc:
+            logger.warning("payment close deferred after order cancellation payment=%s: %s", payment_to_close["id"], exc)
+    with database.connect() as connection:
+        order = authenticate_order(connection, order_id, access_token)
         return public_order_payload(connection, order)
 
 

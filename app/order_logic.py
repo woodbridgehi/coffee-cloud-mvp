@@ -5,7 +5,7 @@ from typing import Any
 
 
 ACTIVE_ORDER_STATUSES = frozenset({"QUEUED", "DISPATCHED", "ACCEPTED", "MAKING"})
-TERMINAL_ORDER_STATUSES = frozenset({"READY", "FAILED", "CANCELLED", "EXPIRED"})
+TERMINAL_ORDER_STATUSES = frozenset({"READY", "FAILED", "CANCELLED", "EXPIRED", "REFUNDED"})
 
 
 def device_progress(
@@ -38,6 +38,9 @@ def public_menu(
     capabilities: dict[str, Any] | None,
     inventory: dict[str, Any] | None,
     threshold_seconds: int,
+    default_price_minor: int = 0,
+    currency: str = "CNY",
+    payment_mode: str = "TEST_FREE",
     *,
     now: datetime | None = None,
 ) -> dict[str, Any]:
@@ -65,8 +68,8 @@ def public_menu(
             "estimatedDurationSeconds": raw.get("estimatedDurationSeconds"),
             "durationRangeSeconds": raw.get("durationRangeSeconds"),
             "unavailableReasons": sorted(set(reasons)),
-            "priceMinor": 0,
-            "currency": "TWD",
+            "priceMinor": int(raw.get("priceMinor") or default_price_minor),
+            "currency": currency,
         })
     products.sort(key=lambda item: (item["sortOrder"], item["name"] or ""))
     materials = (inventory or {}).get("materials", [])
@@ -80,7 +83,7 @@ def public_menu(
         "online": online,
         "deviceStatus": (terminal.get("reported_status") or {}).get("deviceStatus", "UNKNOWN"),
         "salesEnabled": online and device_ready and any(item["available"] for item in products),
-        "paymentMode": "TEST_FREE",
+        "paymentMode": payment_mode,
         "products": products,
         "inventoryVersion": (inventory or {}).get("inventoryVersion"),
         "inventoryUpdatedAt": (inventory or {}).get("updatedAt"),

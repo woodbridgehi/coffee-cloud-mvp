@@ -10,7 +10,7 @@ from app.main import app, event_task_id  # noqa: E402
 
 def test_openapi_exposes_identity_and_formal_command_contracts() -> None:
     schema = app.openapi()
-    assert schema["info"]["version"] == "0.3.0"
+    assert schema["info"]["version"] == "0.4.0"
     paths = schema["paths"]
     assert "/api/v1/device-activations" in paths
     assert "/api/v1/devices/{device_id}/credentials/rotate" in paths
@@ -22,6 +22,10 @@ def test_openapi_exposes_identity_and_formal_command_contracts() -> None:
     assert "/api/v1/public/orders/{order_id}" in paths
     assert "/api/v1/admin/devices/{identifier}/inventory" in paths
     assert "/api/v1/admin/orders" in paths
+    assert "/api/v1/orders/{order_id}/payments" in paths
+    assert "/api/v1/payments/{payment_id}" in paths
+    assert "/api/v1/payments/callback/alipay" in paths
+    assert "/api/v1/payments/{payment_id}/refund" in paths
     schemes = schema["components"]["securitySchemes"]
     assert schemes["deviceBearer"]["scheme"] == "bearer"
     assert schemes["adminBearer"]["scheme"] == "bearer"
@@ -33,6 +37,10 @@ def test_rotation_and_formal_command_require_idempotency_header() -> None:
     command_parameters = schema["paths"]["/api/v1/admin/devices/{identifier}/commands"]["post"]["parameters"]
     assert any(item["name"] == "Idempotency-Key" for item in rotation_parameters)
     assert any(item["name"] == "Idempotency-Key" for item in command_parameters)
+    payment_parameters = schema["paths"]["/api/v1/orders/{order_id}/payments"]["post"]["parameters"]
+    refund_parameters = schema["paths"]["/api/v1/payments/{payment_id}/refund"]["post"]["parameters"]
+    assert any(item["name"] == "Idempotency-Key" for item in payment_parameters)
+    assert any(item["name"] == "Idempotency-Key" for item in refund_parameters)
 
 
 def test_real_terminal_event_task_id_is_read_from_nested_payload() -> None:

@@ -117,4 +117,13 @@ class PublicOrderCreateRequest(BaseModel):
     recipeId: str = Field(min_length=1, max_length=160)
     recipeVersion: str = Field(min_length=1, max_length=64)
     quantity: Literal[1] = 1
-    paymentMode: Literal["TEST_FREE"] = "TEST_FREE"
+    paymentMode: Literal["ONLINE", "TEST_FREE"] = "ONLINE"
+
+
+class PaymentCreateRequest(BaseModel):
+    provider: Literal["alipay", "mock"] | None = None
+
+
+class RefundCreateRequest(BaseModel):
+    amountMinor: int | None = Field(default=None, ge=1)
+    reason: str = Field(default="production failed", min_length=1, max_length=256)
