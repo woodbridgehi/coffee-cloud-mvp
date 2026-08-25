@@ -64,5 +64,5 @@ test('keeps the payment DOM and QR node stable across status polls', () => {
   context.renderOrder(order);
   assert.equal(afterFirst, before + 1);
   assert.equal(app.writes, afterFirst);
-  assert.match(app.innerHTML, /二维码每 20 秒校验/);
+  assert.match(app.innerHTML, /二维码加载后保持不变/);
 });

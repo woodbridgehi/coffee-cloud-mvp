@@ -261,6 +261,16 @@ app = FastAPI(
 PUBLIC_DIR = Path(__file__).resolve().parent.parent / "public"
 app.mount("/assets", StaticFiles(directory=PUBLIC_DIR), name="public-assets")
 
+
+@app.middleware("http")
+async def disable_public_order_cache(request: Request, call_next: Any) -> Response:
+    response = await call_next(request)
+    if request.url.path in {"/order", "/order/status", "/assets/order.js"}:
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
 device_bearer = HTTPBearer(auto_error=False, scheme_name="deviceBearer")
 admin_bearer = HTTPBearer(auto_error=False, scheme_name="adminBearer")
 
