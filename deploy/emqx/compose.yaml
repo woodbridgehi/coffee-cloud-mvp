@@ -1,0 +1,45 @@
+services:
+  emqx:
+    image: emqx/emqx:5.9.3
+    container_name: coffee-emqx
+    hostname: coffee-emqx
+    restart: unless-stopped
+    init: true
+    env_file:
+      - .env
+    environment:
+      EMQX_NODE__NAME: emqx@127.0.0.1
+      EMQX_NODE__COOKIE: ${EMQX_NODE_COOKIE}
+      EMQX_DASHBOARD__DEFAULT_USERNAME: ${EMQX_DASHBOARD_USERNAME}
+      EMQX_DASHBOARD__DEFAULT_PASSWORD: ${EMQX_DASHBOARD_PASSWORD}
+    ports:
+      - "0.0.0.0:8883:8883"
+      - "127.0.0.1:18083:18083"
+    volumes:
+      - ./base.hocon:/opt/emqx/etc/base.hocon:ro
+      - ./certs:/opt/emqx/etc/certs:ro
+      - emqx-data:/opt/emqx/data
+      - emqx-log:/opt/emqx/log
+    healthcheck:
+      test: ["CMD", "/opt/emqx/bin/emqx", "ctl", "status"]
+      interval: 10s
+      timeout: 8s
+      retries: 12
+      start_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+volumes:
+  emqx-data:
+  emqx-log:

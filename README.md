@@ -178,3 +178,17 @@ curl http://127.0.0.1:8788/health
 当前不急于引入：微服务、Kafka、Kubernetes、独立时序数据库。现阶段 PostgreSQL 模块化单体更容易保证订单—制作一致性和快速迭代。
 
 完整架构决策和 VPS 手册见 `../plan-gpt/`。
+
+## 9. MQTT 5.0 接入网关
+
+`coffee-mqtt-gateway` 是独立进程，不承载扫码 Web/API，也不复制订单状态机。它订阅 EMQX 上行主题，把消息交给现有设备 API 的幂等 inbox/合法状态迁移；同时轮询现有 command 表并以 QoS 1 发布下行。网关对 QoS 1 上行启用 manual ACK，仅在设备 API 成功或明确判定为永久错误后确认，进程崩溃时由持久 MQTT session 重投。
+
+```bash
+docker compose build coffee-mqtt-gateway
+docker compose up -d coffee-mqtt-gateway
+docker logs -f coffee-mqtt-gateway
+```
+
+网关 MQTT 凭证保存在未跟踪的 `.secrets/coffee-cloud-gateway.mqtt.env`。当前 MVP 网关只代理 `.env` 中 `DEVICE_ID` 对应的设备（现为 002）；扩展多设备前应改为云端设备认证服务/动态凭证查询，不能为一万台设备复制一万个网关容器。
+
+EMQX 部署源、证书续期 hook 和 ACL 初始化脚本位于 `deploy/emqx/`。公网只允许 `mqtt-api.woodbridge.top:8883`；Dashboard 仅绑定 VPS `127.0.0.1:18083`。

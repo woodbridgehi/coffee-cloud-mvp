@@ -1,0 +1,62 @@
+node {
+  data_dir = "/opt/emqx/data"
+}
+
+listeners.tcp.default {
+  enable = false
+}
+
+listeners.ws.default {
+  enable = false
+}
+
+listeners.wss.default {
+  enable = false
+}
+
+listeners.ssl.default {
+  enable = true
+  bind = "0.0.0.0:8883"
+  max_connections = 20000
+  mountpoint = ""
+  ssl_options {
+    cacertfile = "/opt/emqx/etc/certs/chain.pem"
+    certfile = "/opt/emqx/etc/certs/fullchain.pem"
+    keyfile = "/opt/emqx/etc/certs/privkey.pem"
+    verify = verify_none
+    fail_if_no_peer_cert = false
+    versions = ["tlsv1.3", "tlsv1.2"]
+  }
+}
+
+dashboard.listeners.http {
+  bind = "0.0.0.0:18083"
+}
+
+authentication = [
+  {
+    mechanism = password_based
+    backend = built_in_database
+    user_id_type = username
+    password_hash_algorithm {
+      name = sha256
+      salt_position = suffix
+    }
+  }
+]
+
+authorization {
+  no_match = deny
+  deny_action = ignore
+  sources = [
+    {
+      type = built_in_database
+      enable = true
+    }
+  ]
+}
+
+log.console {
+  enable = true
+  level = warning
+}
