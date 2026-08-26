@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 import json
 import io
-import secrets
 import threading
 import time
 import uuid
@@ -15,10 +14,9 @@ from urllib.parse import quote
 from urllib.parse import parse_qsl
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Security, status
-from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
-from psycopg.errors import UniqueViolation
 from psycopg.types.json import Jsonb
 import qrcode
 
@@ -33,12 +31,23 @@ from .protocol import (
     RefundCreateRequest, Snapshot, TaskAck,
     canonical_digest, utc_now,
 )
-from .order_logic import ACTIVE_ORDER_STATUSES, TERMINAL_ORDER_STATUSES, device_progress, order_state_for_event, public_menu
+from .order_logic import TERMINAL_ORDER_STATUSES, device_progress, order_state_for_event
 from .security import derive_order_access_token, hash_token, tokens_equal
-from .settings import Settings, get_settings
+from .settings import get_settings
 from .payment_providers import AlipayProvider, MockPaymentProvider, PaymentProvider, PaymentRequest, RefundRequest
 from .payment_service import apply_paid_callback, callback_event_id, enqueue_outbox, transition_payment, transition_refund
 from .emqx_provisioner import EmqxProvisioner
+from .db import UnitOfWork
+from .services.admin_operations import AdminOperationsService
+from .services.device_messages import DeviceMessageService
+from .services.device_identity import DeviceIdentityService
+from .services.commands import CommandService
+from .services.mqtt_gateway import MqttGatewayService
+from .services.system import SystemService
+from .services.errors import ServiceError
+from .services.order_state import transition_order
+from .services.payments import PaymentApplicationService
+from .services.public_orders import PublicOrderService
 
 
 SERVICE_VERSION = "0.4.0"
@@ -76,43 +85,6 @@ def emqx_provisioner() -> EmqxProvisioner | None:
         settings.emqx_management_url or "", settings.emqx_dashboard_username or "",
         settings.emqx_dashboard_password or "",
     )
-
-
-def issue_mqtt_credential(terminal: dict[str, Any]) -> dict[str, Any]:
-    password = secrets.token_urlsafe(36)
-    credential_id = uuid.uuid4()
-    with database.connect() as connection:
-        version = connection.execute(
-            "select coalesce(max(version),0)+1 as version from mqtt_credential where terminal_id=%s",
-            (terminal["id"],),
-        ).fetchone()["version"]
-        connection.execute(
-            """insert into mqtt_credential(id,terminal_id,username,secret_hash,version,status)
-                 values(%s,%s,%s,%s,%s,'PENDING_PROVISION')""",
-            (credential_id, terminal["id"], terminal["device_id"], hash_token(password), version),
-        )
-    status_value = "PENDING_PROVISION"
-    provisioner = emqx_provisioner()
-    if provisioner:
-        try:
-            provisioner.provision_device(terminal["device_id"], password)
-            with database.connect() as connection:
-                connection.execute(
-                    "update mqtt_credential set status='REVOKED',revoked_at=now() where terminal_id=%s and status='ACTIVE' and id<>%s",
-                    (terminal["id"], credential_id),
-                )
-                connection.execute(
-                    "update mqtt_credential set status='ACTIVE',broker_synced_at=now() where id=%s", (credential_id,)
-                )
-            status_value = "ACTIVE"
-        except Exception:
-            logger.exception("MQTT credential broker provisioning failed device=%s", terminal["device_id"])
-    return {
-        "credentialId": str(credential_id), "version": version, "status": status_value,
-        "username": terminal["device_id"], "password": password,
-        "host": "mqtt-api.woodbridge.top", "port": 8883, "tls": True,
-        "warning": "MQTT password is returned once and must not be logged",
-    }
 
 
 def iso(value: datetime | None) -> str | None:
@@ -262,6 +234,11 @@ PUBLIC_DIR = Path(__file__).resolve().parent.parent / "public"
 app.mount("/assets", StaticFiles(directory=PUBLIC_DIR), name="public-assets")
 
 
+@app.exception_handler(ServiceError)
+async def service_error_handler(_: Request, exc: ServiceError) -> JSONResponse:
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+
 @app.middleware("http")
 async def disable_public_order_cache(request: Request, call_next: Any) -> Response:
     response = await call_next(request)
@@ -287,29 +264,7 @@ def require_gateway(x_gateway_token: Annotated[str | None, Header(alias="X-Gatew
 
 
 def authenticate_device(device_id: str, header_device: str | None, token: str | None) -> dict[str, Any]:
-    if header_device != device_id:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="device identity mismatch")
-    if token is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing device credential")
-    with database.connect() as connection:
-        row = connection.execute(
-            """
-            select t.*, c.id as credential_db_id, c.credential_id, c.version as credential_version,
-                   c.status as credential_status
-              from terminal t
-              join terminal_credential c on c.terminal_id=t.id
-             where t.device_id=%s and c.token_hash=%s
-               and (c.status='ACTIVE' or (c.status='GRACE' and c.grace_expires_at > now()))
-               and (c.not_before is null or c.not_before <= now())
-               and (c.expires_at is null or c.expires_at > now())
-            """,
-            (device_id, hash_token(token)),
-        ).fetchone()
-        if row is not None:
-            connection.execute("update terminal_credential set last_used_at=now() where id=%s", (row["credential_db_id"],))
-    if row is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid device credential")
-    return row
+    return device_identity_service.authenticate(device_id, header_device, token)
 
 
 def require_device(
@@ -328,12 +283,7 @@ GatewayAuth = Annotated[None, Depends(require_gateway)]
 
 @app.get("/health")
 def health() -> dict[str, Any]:
-    try:
-        database.ping()
-    except Exception:
-        logger.exception("health dependency check failed")
-        raise HTTPException(status_code=503, detail="database unavailable")
-    return {"status": "ok", "version": SERVICE_VERSION, "database": "ok", "time": iso(utc_now())}
+    return system_service.health()
 
 
 @app.get("/")
@@ -347,155 +297,29 @@ def public_order_page() -> Path:
     return PUBLIC_DIR / "order.html"
 
 
-def find_terminal(connection: Any, identifier: str, *, for_update: bool = False) -> dict[str, Any]:
-    suffix = " for update" if for_update else ""
-    row = connection.execute(
-        f"select * from terminal where device_id=%s or serial_number=%s{suffix}",
-        (identifier, identifier),
-    ).fetchone()
-    if row is None:
-        raise HTTPException(status_code=404, detail="device not found")
-    return row
-
-
-def credential_payload(row: dict[str, Any], *, duplicate: bool = False) -> dict[str, Any]:
-    return {
-        "credentialId": str(row["credential_id"]),
-        "version": row["version"],
-        "status": row["status"],
-        "notBefore": iso(row.get("not_before")),
-        "expiresAt": iso(row.get("expires_at")),
-        "graceExpiresAt": iso(row.get("grace_expires_at")),
-        "duplicate": duplicate,
-    }
-
-
 @app.post("/api/v1/admin/devices/{identifier}/activation-codes", tags=["device-identity"])
 def create_activation_code(
     identifier: str,
     payload: ActivationCodeRequest,
     _: AdminAuth,
 ) -> dict[str, Any]:
-    ttl = payload.ttlSeconds or settings.activation_ttl_seconds
-    activation_code = secrets.token_urlsafe(24)
-    activation_id = uuid.uuid4()
-    expires_at = utc_now() + timedelta(seconds=ttl)
-    with database.connect() as connection:
-        terminal = find_terminal(connection, identifier, for_update=True)
-        connection.execute(
-            "update terminal_activation set status='CANCELLED' where terminal_id=%s and status='PENDING'",
-            (terminal["id"],),
-        )
-        connection.execute(
-            """insert into terminal_activation(
-                   activation_id, terminal_id, code_hash, max_attempts, expires_at)
-                 values(%s,%s,%s,%s,%s)""",
-            (activation_id, terminal["id"], hash_token(activation_code), settings.activation_max_attempts, expires_at),
-        )
-    return {
-        "activationId": str(activation_id),
-        "deviceId": terminal["device_id"],
-        "activationCode": activation_code,
-        "expiresAt": iso(expires_at),
-        "warning": "activationCode is returned once and must not be logged",
-    }
+    return device_identity_service.create_activation_code(identifier, payload.ttlSeconds)
 
 
 @app.post("/api/v1/device-activations", tags=["device-identity"])
 def activate_device(payload: ActivationRequest) -> dict[str, Any]:
-    code_hash = hash_token(payload.activationCode)
-    new_token_hash = hash_token(payload.deviceToken)
-    now = utc_now()
-    with database.connect() as connection:
-        terminal = find_terminal(connection, payload.deviceId, for_update=True)
-        activation = connection.execute(
-            """select * from terminal_activation
-                 where terminal_id=%s and code_hash=%s
-                 order by id desc limit 1 for update""",
-            (terminal["id"], code_hash),
-        ).fetchone()
-        if activation is None:
-            pending = connection.execute(
-                """select * from terminal_activation
-                     where terminal_id=%s and status='PENDING'
-                     order by id desc limit 1 for update""",
-                (terminal["id"],),
-            ).fetchone()
-            if pending:
-                attempts = pending["attempt_count"] + 1
-                next_status = "LOCKED" if attempts >= pending["max_attempts"] else "PENDING"
-                connection.execute(
-                    "update terminal_activation set attempt_count=%s,status=%s where id=%s",
-                    (attempts, next_status, pending["id"]),
-                )
-            raise HTTPException(status_code=401, detail="invalid or expired activation code")
-        if activation["status"] == "CONSUMED":
-            credential = connection.execute(
-                "select * from terminal_credential where id=%s",
-                (activation["consumed_credential_id"],),
-            ).fetchone()
-            if credential and tokens_equal(credential["token_hash"].strip(), new_token_hash):
-                return {"deviceId": terminal["device_id"], **credential_payload(credential, duplicate=True)}
-            raise HTTPException(status_code=409, detail="activation code already consumed")
-        if activation["status"] != "PENDING" or activation["expires_at"] <= now:
-            if activation["status"] == "PENDING":
-                connection.execute("update terminal_activation set status='EXPIRED' where id=%s", (activation["id"],))
-            raise HTTPException(status_code=401, detail="invalid or expired activation code")
-        collision = connection.execute("select id from terminal_credential where token_hash=%s", (new_token_hash,)).fetchone()
-        if collision:
-            raise HTTPException(status_code=409, detail="credential token already registered")
-        version = connection.execute(
-            "select coalesce(max(version),0)+1 as version from terminal_credential where terminal_id=%s",
-            (terminal["id"],),
-        ).fetchone()["version"]
-        grace_expires_at = now + timedelta(seconds=settings.credential_grace_seconds)
-        connection.execute(
-            """update terminal_credential
-                  set status='GRACE', grace_expires_at=%s
-                where terminal_id=%s and status='ACTIVE'""",
-            (grace_expires_at, terminal["id"]),
-        )
-        credential = connection.execute(
-            """insert into terminal_credential(
-                   terminal_id,token_hash,credential_id,version,not_before,status)
-                 values(%s,%s,%s,%s,%s,'ACTIVE') returning *""",
-            (terminal["id"], new_token_hash, uuid.uuid4(), version, now),
-        ).fetchone()
-        connection.execute(
-            """update terminal_activation
-                  set status='CONSUMED',consumed_at=%s,consumed_credential_id=%s
-                where id=%s""",
-            (now, credential["id"], activation["id"]),
-        )
-        connection.execute("update terminal set lifecycle_status='ACTIVE', updated_at=%s where id=%s", (now, terminal["id"]))
-    mqtt_credential = issue_mqtt_credential(terminal)
-    return {"deviceId": terminal["device_id"], **credential_payload(credential), "mqttCredential": mqtt_credential}
+    return device_identity_service.activate(payload.deviceId, payload.activationCode, payload.deviceToken)
 
 
 @app.post("/api/v1/devices/{device_id}/mqtt-credentials/rotate", tags=["device-identity"])
 def rotate_mqtt_credential(device_id: str, identity: DeviceIdentity) -> dict[str, Any]:
-    credential = issue_mqtt_credential(identity)
+    credential = device_identity_service.issue_mqtt_credential(identity)
     return {"deviceId": identity["device_id"], "mqttCredential": credential}
 
 
 @app.post("/api/v1/admin/devices/{identifier}/mqtt-credentials/revoke", tags=["device-identity"])
 def revoke_mqtt_credential(identifier: str, _: AdminAuth) -> dict[str, Any]:
-    with database.connect() as connection:
-        terminal = find_terminal(connection, identifier, for_update=True)
-        changed = connection.execute(
-            """update mqtt_credential set status='REVOKED',revoked_at=coalesce(revoked_at,now())
-                 where terminal_id=%s and status<>'REVOKED' returning id""", (terminal["id"],)
-        ).fetchall()
-    provisioner = emqx_provisioner()
-    broker_status = "NOT_CONFIGURED"
-    if provisioner:
-        try:
-            provisioner.revoke_device(terminal["device_id"])
-            broker_status = "REVOKED"
-        except Exception as exc:
-            logger.exception("MQTT credential broker revoke failed device=%s", terminal["device_id"])
-            broker_status = f"RETRY_REQUIRED:{type(exc).__name__}"
-    return {"deviceId": terminal["device_id"], "revokedCredentials": len(changed), "brokerStatus": broker_status}
+    return device_identity_service.revoke_mqtt(identifier)
 
 
 @app.post("/api/v1/devices/{device_id}/credentials/rotate", tags=["device-identity"])
@@ -505,192 +329,34 @@ def rotate_credential(
     identity: DeviceIdentity,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> dict[str, Any]:
-    if not idempotency_key or len(idempotency_key) > 160:
-        raise HTTPException(status_code=400, detail="Idempotency-Key is required and must be <= 160 characters")
-    new_token_hash = hash_token(payload.newToken)
-    request_digest = canonical_digest(payload.model_dump(mode="json"))
-    now = utc_now()
-    grace_expires_at = now + timedelta(seconds=settings.credential_grace_seconds)
-    with database.connect() as connection:
-        existing = connection.execute(
-            "select * from credential_rotation_request where terminal_id=%s and idempotency_key=%s for update",
-            (identity["id"], idempotency_key),
-        ).fetchone()
-        if existing:
-            if existing["request_digest"].strip() != request_digest:
-                raise HTTPException(status_code=409, detail="Idempotency-Key payload conflict")
-            return {**existing["response_json"], "duplicate": True}
-        old_credential = connection.execute(
-            "select * from terminal_credential where id=%s for update",
-            (identity["credential_db_id"],),
-        ).fetchone()
-        if old_credential is None:
-            raise HTTPException(status_code=401, detail="credential no longer exists")
-        if tokens_equal(old_credential["token_hash"].strip(), new_token_hash):
-            raise HTTPException(status_code=400, detail="new credential must differ from current credential")
-        if connection.execute("select 1 from terminal_credential where token_hash=%s", (new_token_hash,)).fetchone():
-            raise HTTPException(status_code=409, detail="credential token already registered")
-        version = connection.execute(
-            "select coalesce(max(version),0)+1 as version from terminal_credential where terminal_id=%s",
-            (identity["id"],),
-        ).fetchone()["version"]
-        connection.execute(
-            "update terminal_credential set status='GRACE',grace_expires_at=%s where id=%s",
-            (grace_expires_at, old_credential["id"]),
-        )
-        credential = connection.execute(
-            """insert into terminal_credential(
-                   terminal_id,token_hash,credential_id,version,not_before,status,rotated_from_id)
-                 values(%s,%s,%s,%s,%s,'ACTIVE',%s) returning *""",
-            (identity["id"], new_token_hash, uuid.uuid4(), version, now, old_credential["id"]),
-        ).fetchone()
-        response = {
-            "deviceId": device_id,
-            **credential_payload(credential),
-            "previousCredentialGraceExpiresAt": iso(grace_expires_at),
-        }
-        connection.execute(
-            """insert into credential_rotation_request(
-                   terminal_id,idempotency_key,request_digest,old_credential_id,new_credential_id,response_json)
-                 values(%s,%s,%s,%s,%s,%s)""",
-            (identity["id"], idempotency_key, request_digest, old_credential["id"], credential["id"], Jsonb(response)),
-        )
-    return response
+    return device_identity_service.rotate_http(
+        identity, device_id, payload.newToken, idempotency_key, payload.model_dump(mode="json")
+    )
 
 
 @app.get("/api/v1/admin/devices/{identifier}/credentials", tags=["device-identity"])
 def list_credentials(identifier: str, _: AdminAuth) -> dict[str, Any]:
-    with database.connect() as connection:
-        terminal = find_terminal(connection, identifier)
-        rows = connection.execute(
-            "select * from terminal_credential where terminal_id=%s order by version desc",
-            (terminal["id"],),
-        ).fetchall()
-    return {"deviceId": terminal["device_id"], "credentials": [credential_payload(row) for row in rows]}
+    return device_identity_service.list_http(identifier)
 
 
 @app.post("/api/v1/admin/devices/{identifier}/credentials/{credential_id}/revoke", tags=["device-identity"])
 def revoke_credential(identifier: str, credential_id: uuid.UUID, _: AdminAuth) -> dict[str, Any]:
-    with database.connect() as connection:
-        terminal = find_terminal(connection, identifier)
-        before = connection.execute(
-            "select * from terminal_credential where terminal_id=%s and credential_id=%s",
-            (terminal["id"], credential_id),
-        ).fetchone()
-        if before is None:
-            raise HTTPException(status_code=404, detail="credential not found")
-        duplicate = before["status"] == "REVOKED"
-        credential = connection.execute(
-            """update terminal_credential set status='REVOKED',revoked_at=now(),grace_expires_at=null
-                 where terminal_id=%s and credential_id=%s and status <> 'REVOKED' returning *""",
-            (terminal["id"], credential_id),
-        ).fetchone()
-        if credential is None:
-            credential = before
-    return {"deviceId": terminal["device_id"], **credential_payload(credential, duplicate=duplicate)}
+    return device_identity_service.revoke_http(identifier, credential_id)
 
 
 @app.post("/api/v1/devices/{device_id}/heartbeat")
 def heartbeat(device_id: str, payload: Heartbeat, identity: DeviceIdentity) -> dict[str, Any]:
-    if payload.deviceId != device_id:
-        raise HTTPException(status_code=400, detail="payload deviceId mismatch")
-    body = payload.model_dump(mode="json", exclude_none=True)
-    digest = canonical_digest(body)
-    message_id = payload.messageId or f"legacy:{digest}"
-    received_at = utc_now()
-    disposition = "ACCEPTED"
-    with database.connect() as connection:
-        existing = connection.execute(
-            "select payload_digest, disposition from heartbeat_inbox where terminal_id=%s and message_id=%s",
-            (identity["id"], message_id),
-        ).fetchone()
-        if existing:
-            if existing["payload_digest"].strip() != digest:
-                raise HTTPException(status_code=409, detail="messageId payload conflict")
-            connection.execute(
-                "update terminal set connection_status='online', last_seen_at=%s, last_heartbeat_at=%s, updated_at=%s where id=%s",
-                (received_at, received_at, received_at, identity["id"]),
-            )
-            dispatch_next_order(connection, identity["id"])
-            return {"ok": True, "duplicate": True, "disposition": existing["disposition"], "receivedAt": iso(received_at), "qrUrl": order_url(identity["device_id"])}
-
-        current_boot = identity.get("active_boot_id")
-        last_sequence = identity.get("last_sequence")
-        out_of_order = bool(payload.bootId and current_boot == payload.bootId and payload.sequence is not None and last_sequence is not None and payload.sequence <= last_sequence)
-        if out_of_order:
-            disposition = "OUT_OF_ORDER"
-        try:
-            connection.execute(
-                """
-                insert into heartbeat_inbox(terminal_id, message_id, payload_digest, boot_id, sequence, occurred_at, received_at, disposition, payload_json)
-                values (%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                """,
-                (identity["id"], message_id, digest, payload.bootId, payload.sequence, payload.sentAt, received_at, disposition, Jsonb(body)),
-            )
-        except UniqueViolation as exc:
-            raise HTTPException(status_code=409, detail="bootId/sequence conflict") from exc
-
-        connected_at = identity.get("last_connected_at") or received_at
-        if identity.get("connection_status") != "online" or current_boot != payload.bootId:
-            connected_at = received_at
-        if out_of_order:
-            connection.execute(
-                """
-                update terminal set connection_status='online', last_seen_at=%s,
-                  last_heartbeat_at=%s, last_connected_at=%s, updated_at=%s where id=%s
-                """,
-                (received_at, received_at, connected_at, received_at, identity["id"]),
-            )
-        else:
-            reported_status = {
-                "deviceStatus": payload.deviceStatus,
-                "currentTaskId": body.get("currentTaskId"),
-                "currentTaskState": body.get("currentTaskState"),
-                "currentTaskRevision": body.get("currentTaskRevision"),
-                "deliveries": body.get("deliveries"),
-                "sentAt": body.get("sentAt"),
-            }
-            connection.execute(
-                """
-                update terminal set connection_status='online', last_seen_at=%s,
-                  last_heartbeat_at=%s, last_connected_at=%s, active_boot_id=%s,
-                  last_sequence=%s, instance_id=coalesce(%s, instance_id),
-                  store_id=coalesce(%s, store_id), software_version=%s,
-                  capability_version=%s, inventory_version=%s,
-                  reported_status=%s, updated_at=%s where id=%s
-                """,
-                (received_at, received_at, connected_at, payload.bootId, payload.sequence,
-                 payload.instanceId, payload.storeId, payload.appVersion,
-                 body.get("capabilityVersion"), body.get("inventoryVersion"),
-                 Jsonb(reported_status), received_at, identity["id"]),
-            )
-        dispatch_next_order(connection, identity["id"])
-    return {"ok": True, "duplicate": False, "disposition": disposition, "receivedAt": iso(received_at), "qrUrl": order_url(identity["device_id"])}
+    return device_message_service.heartbeat(device_id, payload, identity)
 
 
 @app.get("/api/v1/devices/{device_id}/commands")
-def commands(device_id: str, identity: DeviceIdentity, after: str = "", limit: int = Query(default=10, ge=1, le=100)) -> dict[str, Any]:
-    try:
-        cursor = int(after) if after else 0
-    except ValueError:
-        cursor = 0
-    with database.connect() as connection:
-        rows = connection.execute(
-            "select * from terminal_command where terminal_id=%s and id>%s order by id limit %s for update",
-            (identity["id"], cursor, limit),
-        ).fetchall()
-        deliverable: list[dict[str, Any]] = []
-        for row in rows:
-            cursor = row["id"]
-            if row["expires_at"] and row["expires_at"] <= utc_now() and row["status"] not in TERMINAL_STATES:
-                updated, _ = transition_command(connection, row, EXPIRED, "cloud", reason="command expired before delivery")
-                expire_order_for_command(connection, updated)
-                continue
-            if row["status"] == CREATED:
-                row, _ = transition_command(connection, row, DELIVERING, "cloud", reason="device polled command")
-            if row["status"] in {DELIVERING, PUBLISHED}:
-                deliverable.append(row["payload_json"])
-    return {"commands": deliverable, "nextCursor": str(cursor)}
+def commands(
+    device_id: str,
+    identity: DeviceIdentity,
+    after: str = "",
+    limit: int = Query(default=10, ge=1, le=100),
+) -> dict[str, Any]:
+    return device_message_service.commands(identity, after, limit)
 
 
 def transition_command(
@@ -737,55 +403,25 @@ def transition_command(
     return updated, False
 
 
-def save_snapshot(identity: dict[str, Any], snapshot_type: str, payload: dict[str, Any], version: str | None) -> dict[str, Any]:
-    if payload.get("deviceId") != identity["device_id"]:
-        raise HTTPException(status_code=400, detail="payload deviceId mismatch")
-    with database.connect() as connection:
-        connection.execute(
-            """
-            insert into terminal_snapshot(terminal_id,snapshot_type,version,payload_json)
-            values(%s,%s,%s,%s)
-            on conflict(terminal_id,snapshot_type) do update set
-              version=excluded.version,payload_json=excluded.payload_json,received_at=now()
-            """,
-            (identity["id"], snapshot_type, version, Jsonb(payload)),
-        )
-    return {"ok": True, "receivedAt": iso(utc_now())}
-
-
 @app.put("/api/v1/devices/{device_id}/capabilities")
 def capabilities(device_id: str, payload: Snapshot, identity: DeviceIdentity) -> dict[str, Any]:
     body = payload.model_dump(mode="json")
-    return save_snapshot(identity, "capabilities", body, str(body.get("capabilityVersion") or ""))
+    return device_message_service.snapshot(
+        identity, "capabilities", body, str(body.get("capabilityVersion") or "")
+    )
 
 
 @app.put("/api/v1/devices/{device_id}/inventory")
 def inventory(device_id: str, payload: Snapshot, identity: DeviceIdentity) -> dict[str, Any]:
     body = payload.model_dump(mode="json")
-    return save_snapshot(identity, "inventory", body, str(body.get("version") or body.get("inventoryVersion") or ""))
+    return device_message_service.snapshot(
+        identity, "inventory", body, str(body.get("version") or body.get("inventoryVersion") or "")
+    )
 
 
 @app.post("/api/v1/devices/{device_id}/events")
 def events(device_id: str, payload: DeviceEvent, identity: DeviceIdentity) -> dict[str, Any]:
-    if payload.deviceId != device_id:
-        raise HTTPException(status_code=400, detail="payload deviceId mismatch")
-    body = payload.model_dump(mode="json")
-    digest = canonical_digest(body)
-    with database.connect() as connection:
-        existing = connection.execute("select payload_digest from terminal_event where terminal_id=%s and event_id=%s", (identity["id"], payload.eventId)).fetchone()
-        if existing:
-            if existing["payload_digest"].strip() != digest:
-                raise HTTPException(status_code=409, detail="eventId payload conflict")
-            command_transition = reconcile_command_event(connection, identity["id"], body, payload.type)
-            return {"ok": True, "duplicate": True, "commandTransition": command_transition, "orderTransition": {"duplicate": True}}
-        connection.execute(
-            """insert into terminal_event(terminal_id,event_id,boot_id,sequence,event_type,occurred_at,payload_digest,payload_json)
-               values(%s,%s,%s,%s,%s,%s,%s,%s)""",
-            (identity["id"], payload.eventId, payload.bootId, payload.sequence, payload.type, payload.occurredAt, digest, Jsonb(body)),
-        )
-        command_transition = reconcile_command_event(connection, identity["id"], body, payload.type)
-        order_transition = reconcile_order_event(connection, identity["id"], body, payload.type)
-    return {"ok": True, "duplicate": False, "commandTransition": command_transition, "orderTransition": order_transition}
+    return device_message_service.event(device_id, payload, identity)
 
 
 def event_task_id(body: dict[str, Any]) -> str | None:
@@ -853,143 +489,19 @@ def task_ack(
 
 
 def apply_task_ack(identity: dict[str, Any], task_id: str, body: dict[str, Any]) -> dict[str, Any]:
-    with database.connect() as connection:
-        command = connection.execute(
-            "select * from terminal_command where terminal_id=%s and message_id=%s for update",
-            (identity["id"], body.get("messageId")),
-        ).fetchone()
-        if command is None or command["payload_json"].get("taskId") != task_id:
-            raise HTTPException(status_code=404, detail="task command not found")
-        target = ACKED if body.get("accepted") else "REJECTED"
-        if target == ACKED and command["status"] in {ACKED, EXECUTING, *TERMINAL_STATES}:
-            return {
-                "ok": True, "duplicate": True, "stale": command["status"] != ACKED,
-                "taskId": task_id, "deviceId": identity["device_id"],
-                "commandStatus": command["status"], "revision": command["revision"],
-            }
-        updated, duplicate = transition_command(
-            connection, command, target, "device-ack", reason=body.get("reason") or body.get("reasonCode"), payload=body,
-        )
-        reconcile_order_ack(connection, identity["id"], task_id, body)
-    return {
-        "ok": True, "duplicate": duplicate, "stale": False,
-        "taskId": task_id, "deviceId": identity["device_id"],
-        "commandStatus": updated["status"], "revision": updated["revision"],
-    }
+    return device_message_service.task_ack(identity, task_id, body)
 
 
 @app.post("/api/v1/devices/{device_id}/commands/{message_id}/result")
-def command_result(device_id: str, message_id: str, payload: CommandResult, identity: DeviceIdentity) -> dict[str, Any]:
-    body = payload.model_dump(mode="json")
-    target = result_state(payload.status)
-    with database.connect() as connection:
-        command = connection.execute(
-            "select * from terminal_command where terminal_id=%s and message_id=%s for update",
-            (identity["id"], message_id),
-        ).fetchone()
-        if command is None:
-            raise HTTPException(status_code=404, detail="command not found")
-        updated, duplicate = transition_command(
-            connection, command, target, "device-result", reason=payload.status, payload=body,
-        )
-    return {"ok": True, "duplicate": duplicate, "status": updated["status"], "revision": updated["revision"]}
+def command_result(
+    device_id: str, message_id: str, payload: CommandResult, identity: DeviceIdentity
+) -> dict[str, Any]:
+    return device_message_service.command_result(identity, message_id, payload)
 
 
 @app.post("/api/v1/internal/mqtt/messages", tags=["device-platform"], include_in_schema=False)
 async def ingest_mqtt_message(request: Request, _: GatewayAuth) -> dict[str, Any]:
-    body = await request.json()
-    topic = str(body.get("topic") or "")
-    envelope = body.get("envelope")
-    parts = topic.split("/")
-    if len(parts) != 4 or parts[:2] != ["v1", "devices"] or parts[3] not in {"up", "state", "presence"}:
-        raise HTTPException(status_code=422, detail="invalid MQTT uplink topic")
-    topic_device = parts[2]
-    if not isinstance(envelope, dict):
-        raise HTTPException(status_code=422, detail="MQTT payload must be a JSON object")
-    envelope_device = envelope.get("deviceId")
-    payload = envelope.get("payload") if parts[3] == "up" else envelope
-    payload_device = payload.get("deviceId") if isinstance(payload, dict) else None
-    if envelope_device not in {None, topic_device} or payload_device != topic_device:
-        logger.warning("MQTT identity mismatch topic=%s envelope=%s payload=%s", topic_device, envelope_device, payload_device)
-        with database.connect() as connection:
-            connection.execute(
-                "insert into security_event(event_type,device_id,source,detail_json) values('MQTT_IDENTITY_MISMATCH',%s,'mqtt-gateway',%s)",
-                (topic_device, Jsonb({"topic": topic, "envelopeDeviceId": envelope_device, "payloadDeviceId": payload_device})),
-            )
-        raise HTTPException(status_code=403, detail="MQTT device identity mismatch")
-    message_type = str(envelope.get("type") or parts[3])
-    message_id = str(envelope.get("messageId") or payload.get("eventId") or payload.get("messageId") or f"{parts[3]}:{canonical_digest(payload)}")
-    digest = canonical_digest(envelope)
-    boot_id = payload.get("bootId") if isinstance(payload, dict) else None
-    sequence = payload.get("sequence") if isinstance(payload, dict) else None
-    nested = payload.get("payload") if isinstance(payload, dict) and isinstance(payload.get("payload"), dict) else {}
-    revision = nested.get("taskRevision") or payload.get("revision") if isinstance(payload, dict) else None
-    with database.connect() as connection:
-        terminal = connection.execute("select * from terminal where device_id=%s", (topic_device,)).fetchone()
-        if not terminal:
-            raise HTTPException(status_code=404, detail="device not registered")
-        existing = connection.execute(
-            "select * from mqtt_inbox where device_id=%s and message_id=%s for update", (topic_device, message_id)
-        ).fetchone()
-        if existing and existing["payload_digest"].strip() != digest:
-            raise HTTPException(status_code=409, detail="MQTT messageId payload conflict")
-        if existing and existing["status"] == "PROCESSED":
-            return {"ok": True, "duplicate": True, "disposition": existing["disposition"]}
-        if not existing:
-            inserted = connection.execute(
-                """insert into mqtt_inbox(device_id,topic,message_id,message_type,boot_id,sequence,revision,payload_digest,payload_json)
-                     values(%s,%s,%s,%s,%s,%s,%s,%s,%s) on conflict do nothing returning id""",
-                (topic_device, topic, message_id, message_type, boot_id, sequence, revision, digest, Jsonb(envelope)),
-            ).fetchone()
-            if not inserted:
-                return {"ok": True, "duplicate": True, "disposition": "DUPLICATE_SEQUENCE"}
-
-    identity = terminal
-    try:
-        if parts[3] == "presence":
-            with database.connect() as connection:
-                connection.execute(
-                    """update terminal set connection_status=%s,last_seen_at=now(),
-                         last_connected_at=case when %s='online' then coalesce(last_connected_at,now()) else last_connected_at end,
-                         updated_at=now() where id=%s""",
-                    ("online" if payload.get("online") else "offline", "online" if payload.get("online") else "offline", terminal["id"]),
-                )
-            result = {"ok": True}
-        elif parts[3] == "state":
-            with database.connect() as connection:
-                connection.execute(
-                    "update terminal set reported_status=%s,last_seen_at=now(),updated_at=now() where id=%s",
-                    (Jsonb(payload), terminal["id"]),
-                )
-            result = {"ok": True}
-        elif message_type == "heartbeat":
-            result = heartbeat(topic_device, Heartbeat.model_validate(payload), identity)
-        elif message_type == "event":
-            result = events(topic_device, DeviceEvent.model_validate(payload), identity)
-        elif message_type == "command_result":
-            if payload.get("commandType") == "MAKE_DRINK":
-                result = apply_task_ack(identity, str(payload.get("taskId") or ""), payload)
-            else:
-                result = command_result(
-                    topic_device, str(payload.get("messageId") or ""),
-                    CommandResult.model_validate(payload), identity,
-                )
-        else:
-            raise HTTPException(status_code=422, detail="unsupported MQTT envelope type")
-    except Exception as exc:
-        with database.connect() as connection:
-            connection.execute(
-                "update mqtt_inbox set status='RETRY',error_message=%s where device_id=%s and message_id=%s",
-                (str(exc)[:1000], topic_device, message_id),
-            )
-        raise
-    with database.connect() as connection:
-        connection.execute(
-            """update mqtt_inbox set status='PROCESSED',disposition='APPLIED',processed_at=now(),error_message=null
-                 where device_id=%s and message_id=%s""",
-            (topic_device, message_id),
-        )
-    return {"ok": True, "duplicate": False, "result": result}
+    return mqtt_gateway_service.ingest(await request.json())
 
 
 @app.get("/api/v1/internal/device-commands/claim", tags=["device-platform"], include_in_schema=False)
@@ -998,119 +510,21 @@ def claim_device_commands(
     gateway_id: str = Query(min_length=1, max_length=160),
     limit: int = Query(default=100, ge=1, le=500),
 ) -> dict[str, Any]:
-    with database.connect() as connection:
-        rows = connection.execute(
-            """select o.* from command_outbox o
-                 where ((o.status in ('PENDING','RETRY') and o.next_attempt_at<=now())
-                    or (o.status='PUBLISHING' and o.locked_until<now()))
-                 order by o.created_at for update skip locked limit %s""",
-            (limit,),
-        ).fetchall()
-        claimed = []
-        for row in rows:
-            updated = connection.execute(
-                """update command_outbox set status='PUBLISHING',attempt_count=attempt_count+1,
-                     locked_by=%s,locked_until=now()+(%s::text||' seconds')::interval where id=%s returning *""",
-                (gateway_id, settings.command_publish_lease_seconds, row["id"]),
-            ).fetchone()
-            claimed.append({
-                "outboxId": str(updated["id"]), "topic": updated["topic"],
-                "envelope": updated["envelope_json"], "attempt": updated["attempt_count"],
-            })
-    return {"commands": claimed}
+    return command_service.claim(gateway_id, limit)
 
 
 @app.post("/api/v1/internal/device-commands/{outbox_id}/published", tags=["device-platform"], include_in_schema=False)
 async def mark_device_command_published(outbox_id: uuid.UUID, request: Request, _: GatewayAuth) -> dict[str, Any]:
     body = await request.json()
-    gateway_id = str(body.get("gatewayId") or "")
-    with database.connect() as connection:
-        outbox = connection.execute("select * from command_outbox where id=%s for update", (outbox_id,)).fetchone()
-        if not outbox:
-            raise HTTPException(status_code=404, detail="command outbox item not found")
-        if outbox["status"] == "PUBLISHED":
-            return {"ok": True, "duplicate": True}
-        if outbox["status"] != "PUBLISHING" or outbox["locked_by"] != gateway_id:
-            raise HTTPException(status_code=409, detail="command publish lease mismatch")
-        connection.execute(
-            """update command_outbox set status='PUBLISHED',published_at=now(),locked_by=null,locked_until=null,
-                 last_error=null where id=%s""", (outbox_id,)
-        )
-        command = connection.execute("select * from terminal_command where id=%s for update", (outbox["command_id"],)).fetchone()
-        if command["status"] in {CREATED, DELIVERING}:
-            command, _ = transition_command(connection, command, PUBLISHED, "mqtt-gateway", reason="broker PUBACK")
-        connection.execute("update terminal_command set published_at=coalesce(published_at,now()) where id=%s", (command["id"],))
-    return {"ok": True, "duplicate": False}
+    return command_service.published(outbox_id, str(body.get("gatewayId") or ""))
 
 
 @app.post("/api/v1/internal/device-commands/{outbox_id}/retry", tags=["device-platform"], include_in_schema=False)
 async def retry_device_command(outbox_id: uuid.UUID, request: Request, _: GatewayAuth) -> dict[str, Any]:
     body = await request.json()
-    gateway_id = str(body.get("gatewayId") or "")
-    error = str(body.get("error") or "publish failed")[:1000]
-    with database.connect() as connection:
-        row = connection.execute("select * from command_outbox where id=%s for update", (outbox_id,)).fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="command outbox item not found")
-        if row["status"] == "PUBLISHED":
-            return {"ok": True, "duplicate": True}
-        if row["locked_by"] != gateway_id:
-            raise HTTPException(status_code=409, detail="command publish lease mismatch")
-        connection.execute(
-            """update command_outbox set status='RETRY',next_attempt_at=now()+
-                 (least(60,power(2,least(attempt_count,6)))::text||' seconds')::interval,
-                 last_error=%s,locked_by=null,locked_until=null where id=%s""",
-            (error, outbox_id),
-        )
-    return {"ok": True, "duplicate": False}
-
-
-def create_command(identity: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
-    digest = canonical_digest(payload)
-    with database.connect() as connection:
-        row = connection.execute(
-            """insert into terminal_command(
-                   terminal_id,message_id,command_type,payload_json,payload_digest,expires_at)
-                 values(%s,%s,%s,%s,%s,%s) returning *""",
-            (identity["id"], payload["messageId"], payload["type"], Jsonb(payload), digest, payload.get("expiresAt")),
-        )
-        command = row.fetchone()
-        connection.execute(
-            """insert into terminal_command_transition(
-                   command_id,revision,from_status,to_status,actor,reason,payload_json)
-                 values(%s,0,null,'CREATED','debug-api','legacy debug command',%s)""",
-            (command["id"], Jsonb(payload)),
-        )
-        enqueue_command_outbox(connection, command, identity)
-    return payload
-
-
-def command_payload(row: dict[str, Any], transitions: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    result = {
-        "messageId": row["message_id"],
-        "deviceId": row.get("device_id"),
-        "type": row["command_type"],
-        "status": row["status"],
-        "revision": row["revision"],
-        "command": row["payload_json"],
-        "result": row["result_json"],
-        "createdAt": iso(row["created_at"]),
-        "deliveredAt": iso(row["delivered_at"]),
-        "ackedAt": iso(row["acked_at"]),
-        "executingAt": iso(row["executing_at"]),
-        "completedAt": iso(row["completed_at"]),
-        "expiresAt": iso(row["expires_at"]),
-    }
-    if transitions is not None:
-        result["transitions"] = [
-            {
-                "revision": item["revision"], "from": item["from_status"], "to": item["to_status"],
-                "actor": item["actor"], "reason": item["reason"],
-                "createdAt": iso(item["created_at"]), "payload": item["payload_json"],
-            }
-            for item in transitions
-        ]
-    return result
+    return command_service.retry(
+        outbox_id, str(body.get("gatewayId") or ""), str(body.get("error") or "publish failed")
+    )
 
 
 @app.post("/api/v1/admin/devices/{identifier}/commands", tags=["admin-commands"], status_code=201)
@@ -1120,96 +534,29 @@ def admin_create_command(
     _: AdminAuth,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> dict[str, Any]:
-    if not idempotency_key or len(idempotency_key) > 160:
-        raise HTTPException(status_code=400, detail="Idempotency-Key is required and must be <= 160 characters")
-    if payload.type == "MAKE_DRINK" and not all((payload.taskId, payload.orderId, payload.recipeId)):
-        raise HTTPException(status_code=422, detail="MAKE_DRINK requires taskId, orderId and recipeId")
-    expires_at = payload.expiresAt or (utc_now() + timedelta(minutes=5))
-    if expires_at <= utc_now():
-        raise HTTPException(status_code=422, detail="expiresAt must be in the future")
-    request_body = payload.model_dump(mode="json", exclude_none=True)
-    request_digest = canonical_digest(request_body)
-    with database.connect() as connection:
-        terminal = find_terminal(connection, identifier, for_update=True)
-        existing = connection.execute(
-            "select * from terminal_command where terminal_id=%s and idempotency_key=%s for update",
-            (terminal["id"], idempotency_key),
-        ).fetchone()
-        if existing:
-            if (existing["payload_digest"] or "").strip() != request_digest:
-                raise HTTPException(status_code=409, detail="Idempotency-Key payload conflict")
-            return {"duplicate": True, **command_payload(existing)}
-        message_id = f"cmd-{uuid.uuid4()}"
-        command = {
-            **payload.payload,
-            "messageId": message_id,
-            "type": payload.type,
-            "expiresAt": iso(expires_at),
-        }
-        for key, value in {
-            "taskId": payload.taskId, "orderId": payload.orderId,
-            "recipeId": payload.recipeId, "recipeVersion": payload.recipeVersion,
-            "action": payload.action,
-        }.items():
-            if value is not None:
-                command[key] = value
-        row = connection.execute(
-            """insert into terminal_command(
-                   terminal_id,message_id,command_type,payload_json,idempotency_key,payload_digest,expires_at)
-                 values(%s,%s,%s,%s,%s,%s,%s) returning *""",
-            (terminal["id"], message_id, payload.type, Jsonb(command), idempotency_key, request_digest, expires_at),
-        ).fetchone()
-        connection.execute(
-            """insert into terminal_command_transition(
-                   command_id,revision,from_status,to_status,actor,reason,payload_json)
-                 values(%s,0,null,'CREATED','admin-api','command created',%s)""",
-            (row["id"], Jsonb(command)),
-        )
-        enqueue_command_outbox(connection, row, terminal)
-    return {"duplicate": False, **command_payload(row)}
+    return command_service.create_admin(identifier, payload, idempotency_key)
 
 
 @app.get("/api/v1/admin/devices/{identifier}/commands/{message_id}", tags=["admin-commands"])
 def admin_get_command(identifier: str, message_id: str, _: AdminAuth) -> dict[str, Any]:
-    with database.connect() as connection:
-        terminal = find_terminal(connection, identifier)
-        row = connection.execute(
-            "select * from terminal_command where terminal_id=%s and message_id=%s",
-            (terminal["id"], message_id),
-        ).fetchone()
-        if row is None:
-            raise HTTPException(status_code=404, detail="command not found")
-        transitions = connection.execute(
-            "select * from terminal_command_transition where command_id=%s order by revision",
-            (row["id"],),
-        ).fetchall()
-    return command_payload(row, transitions)
+    return command_service.get_admin(identifier, message_id)
 
 
 @app.post("/api/v1/devices/{device_id}/debug/orders")
 async def debug_order(device_id: str, request: Request, identity: DeviceIdentity) -> dict[str, Any]:
     body = await request.json()
-    command = {
-        "messageId": f"cmd-{uuid.uuid4()}", "type": "MAKE_DRINK",
-        "taskId": f"task-{uuid.uuid4()}", "orderId": f"debug-{uuid.uuid4()}",
-        "recipeId": body.get("recipeId"), "expiresAt": iso(utc_now() + timedelta(minutes=5)),
-    }
-    create_command(identity, command)
-    return {"ok": True, "command": command}
+    return command_service.create_debug_order(identity, body.get("recipeId"))
 
 
 @app.post("/api/v1/devices/{device_id}/debug/commands")
 async def debug_command(device_id: str, request: Request, identity: DeviceIdentity) -> dict[str, Any]:
     body = await request.json()
-    command = {"messageId": f"cmd-{uuid.uuid4()}", "type": "DEBUG_COMMAND", "action": body.get("action")}
-    create_command(identity, command)
-    return {"ok": True, "command": command}
+    return command_service.create_debug_command(identity, body.get("action"))
 
 
 @app.patch("/api/v1/devices/{device_id}/debug/overrides")
 async def debug_overrides(device_id: str, request: Request, identity: DeviceIdentity) -> dict[str, Any]:
-    body = await request.json()
-    return {"ok": True, "deviceId": identity["device_id"], "overrides": body}
+    return command_service.debug_overrides(identity, await request.json())
 
 
 def snapshot_payload(connection: Any, terminal_id: int, snapshot_type: str) -> dict[str, Any] | None:
@@ -1218,40 +565,6 @@ def snapshot_payload(connection: Any, terminal_id: int, snapshot_type: str) -> d
         (terminal_id, snapshot_type),
     ).fetchone()
     return row["payload_json"] if row else None
-
-
-def transition_order(
-    connection: Any,
-    order: dict[str, Any],
-    target: str,
-    actor: str,
-    *,
-    reason: str | None = None,
-    payload: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    if order["status"] == target:
-        return order
-    if order["status"] in TERMINAL_ORDER_STATUSES and not (order["status"] == "FAILED" and target == "REFUNDED"):
-        return order
-    revision = connection.execute(
-        "select coalesce(max(revision),-1)+1 as revision from order_transition where order_id=%s",
-        (order["id"],),
-    ).fetchone()["revision"]
-    now_at = utc_now()
-    started_at = now_at if target == "MAKING" and not order.get("started_at") else order.get("started_at")
-    completed_at = now_at if target in {"READY", "FAILED", "EXPIRED"} else order.get("completed_at")
-    cancelled_at = now_at if target == "CANCELLED" else order.get("cancelled_at")
-    updated = connection.execute(
-        """update sales_order set status=%s,updated_at=%s,started_at=%s,completed_at=%s,cancelled_at=%s
-             where id=%s returning *""",
-        (target, now_at, started_at, completed_at, cancelled_at, order["id"]),
-    ).fetchone()
-    connection.execute(
-        """insert into order_transition(order_id,revision,from_status,to_status,actor,reason,payload_json)
-             values(%s,%s,%s,%s,%s,%s,%s)""",
-        (order["id"], revision, order["status"], target, actor, reason, Jsonb(payload) if payload else None),
-    )
-    return updated
 
 
 def expire_order_for_command(connection: Any, command: dict[str, Any]) -> None:
@@ -1667,63 +980,55 @@ def watchdog_scan_once() -> None:
                 transition_order(connection, order, "HOLD", "watchdog", reason="device outcome unknown")
 
 
-def public_order_payload(connection: Any, order: dict[str, Any]) -> dict[str, Any]:
-    job = connection.execute("select * from production_job where order_id=%s", (order["id"],)).fetchone()
-    payment = connection.execute(
-        "select * from payment where order_id=%s order by created_at desc limit 1", (order["id"],)
-    ).fetchone()
-    transitions = connection.execute(
-        "select * from order_transition where order_id=%s order by revision", (order["id"],)
-    ).fetchall()
-    queue_position = 0
-    if order["status"] == "QUEUED":
-        queue_position = connection.execute(
-            """select count(*) as count from sales_order
-                 where terminal_id=%s and status='QUEUED' and created_at <= %s""",
-            (order["terminal_id"], order["created_at"]),
-        ).fetchone()["count"]
-    return {
-        "orderId": str(order["id"]),
-        "orderNo": order["order_no"],
-        "deviceId": order.get("device_id"),
-        "storeId": order.get("store_id"),
-        "status": order["status"],
-        "paymentMode": order["payment_mode"],
-        "paymentStatus": order["payment_status"],
-        "payment": payment_payload(payment) if payment else None,
-        "totalAmountMinor": order["total_amount_minor"],
-        "currency": order["currency"],
-        "product": order["product_snapshot"],
-        "queuePosition": int(queue_position),
-        "failure": {"code": order["failure_code"], "message": order["failure_message"]} if order["failure_code"] else None,
-        "production": {
-            "taskId": job["task_id"], "status": job["status"],
-            "progress": job["progress"], "overallProgress": job["progress"], "stepProgress": job["step_progress"],
-            "currentStepId": job["current_step_id"], "currentStepName": job["current_step_name"],
-            "plannedDurationSeconds": job["planned_duration_seconds"],
-            "elapsedSeconds": job["elapsed_seconds"], "remainingSeconds": job["remaining_seconds"],
-            "stepPlan": job["step_durations"], "stepDurations": job["step_durations"],
-            "acceptedAt": iso(job["accepted_at"]), "startedAt": iso(job["started_at"]), "completedAt": iso(job["completed_at"]),
-        } if job else None,
-        "createdAt": iso(order["created_at"]), "updatedAt": iso(order["updated_at"]),
-        "startedAt": iso(order["started_at"]), "completedAt": iso(order["completed_at"]),
-        "timeline": [
-            {"revision": item["revision"], "from": item["from_status"], "to": item["to_status"],
-             "reason": item["reason"], "createdAt": iso(item["created_at"])} for item in transitions
-        ],
-    }
+unit_of_work = UnitOfWork(database)
+system_service = SystemService(unit_of_work, SERVICE_VERSION, logger)
+device_identity_service = DeviceIdentityService(
+    unit_of_work, settings=settings, provisioner_factory=emqx_provisioner, logger=logger
+)
+public_order_service = PublicOrderService(
+    unit_of_work, settings,
+    dispatch_next_order=dispatch_next_order,
+    payment_provider=payment_provider,
+)
+payment_application_service = PaymentApplicationService(
+    unit_of_work, settings,
+    provider_factory=payment_provider,
+    mock_provider=mock_payment_provider,
+)
+admin_operations_service = AdminOperationsService(
+    unit_of_work,
+    offline_threshold_seconds=settings.offline_threshold_seconds,
+    refresh_offline_status=offline_monitor.scan_once,
+)
+device_message_service = DeviceMessageService(
+    unit_of_work,
+    dispatch_next_order=dispatch_next_order,
+    transition_command=transition_command,
+    expire_order_for_command=expire_order_for_command,
+    reconcile_command_event=reconcile_command_event,
+    reconcile_order_event=reconcile_order_event,
+    reconcile_order_ack=reconcile_order_ack,
+    order_url=order_url,
+)
+command_service = CommandService(
+    unit_of_work,
+    lease_seconds=settings.command_publish_lease_seconds,
+    enqueue_outbox=enqueue_command_outbox,
+    transition_command=transition_command,
+)
+mqtt_gateway_service = MqttGatewayService(
+    unit_of_work,
+    logger=logger,
+    heartbeat=device_message_service.heartbeat,
+    event=device_message_service.event,
+    task_ack=device_message_service.task_ack,
+    command_result=device_message_service.command_result,
+)
 
 
 @app.get("/api/v1/public/devices/{identifier}/menu", tags=["public-orders"])
 def get_public_menu(identifier: str) -> dict[str, Any]:
-    with database.connect() as connection:
-        terminal = find_terminal(connection, identifier)
-        capabilities = snapshot_payload(connection, terminal["id"], "capabilities")
-        inventory = snapshot_payload(connection, terminal["id"], "inventory")
-    return {**public_menu(
-        terminal, capabilities, inventory, settings.offline_threshold_seconds,
-        settings.default_product_price_minor, settings.payment_currency, settings.public_payment_mode,
-    ), "serverTime": iso(utc_now())}
+    return public_order_service.menu(identifier)
 
 
 @app.post("/api/v1/public/devices/{identifier}/orders", tags=["public-orders"], status_code=201)
@@ -1732,100 +1037,7 @@ def create_public_order(
     payload: PublicOrderCreateRequest,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> dict[str, Any]:
-    if not idempotency_key or len(idempotency_key) > 160:
-        raise HTTPException(status_code=400, detail="Idempotency-Key is required and must be <= 160 characters")
-    if payload.paymentMode != settings.public_payment_mode:
-        raise HTTPException(status_code=409, detail="payment mode changed; refresh the menu")
-    request_body = payload.model_dump(mode="json")
-    digest = canonical_digest(request_body)
-    with database.connect() as connection:
-        terminal = find_terminal(connection, identifier, for_update=True)
-        access_token = derive_order_access_token(settings.order_access_secret or settings.admin_token, terminal["device_id"], idempotency_key)
-        existing = connection.execute(
-            "select o.*,t.device_id,t.store_id from sales_order o join terminal t on t.id=o.terminal_id where o.terminal_id=%s and o.idempotency_key=%s for update",
-            (terminal["id"], idempotency_key),
-        ).fetchone()
-        if existing:
-            if existing["request_digest"].strip() != digest:
-                raise HTTPException(status_code=409, detail="Idempotency-Key payload conflict")
-            return {**public_order_payload(connection, existing), "accessToken": access_token, "duplicate": True}
-        capabilities = snapshot_payload(connection, terminal["id"], "capabilities")
-        inventory = snapshot_payload(connection, terminal["id"], "inventory")
-        menu = public_menu(
-            terminal, capabilities, inventory, settings.offline_threshold_seconds,
-            settings.default_product_price_minor, settings.payment_currency, settings.public_payment_mode,
-        )
-        product = next((item for item in menu["products"] if item["recipeId"] == payload.recipeId), None)
-        if not product or product["recipeVersion"] != payload.recipeVersion:
-            raise HTTPException(status_code=409, detail="recipe is missing or version changed; refresh the menu")
-        if not product["available"]:
-            raise HTTPException(status_code=409, detail={"code": "PRODUCT_UNAVAILABLE", "reasons": product["unavailableReasons"]})
-        active_count = connection.execute(
-            "select count(*) as count from sales_order where terminal_id=%s and status in ('QUEUED','DISPATCHED','ACCEPTED','MAKING')",
-            (terminal["id"],),
-        ).fetchone()["count"]
-        if active_count >= settings.public_order_queue_limit:
-            raise HTTPException(status_code=429, detail="device order queue is full")
-        order_id = uuid.uuid4()
-        task_id = f"task-{uuid.uuid4()}"
-        order_no = f"C{utc_now().strftime('%m%d')}-{secrets.token_hex(3).upper()}"
-        product_snapshot = {**product, "quantity": 1}
-        order_status = "QUEUED" if payload.paymentMode == "TEST_FREE" else "CREATED"
-        payment_status = "NOT_REQUIRED" if payload.paymentMode == "TEST_FREE" else "NOT_STARTED"
-        order = connection.execute(
-            """insert into sales_order(
-                   id,order_no,terminal_id,access_token_hash,idempotency_key,request_digest,status,
-                   payment_mode,payment_status,currency,total_amount_minor,
-                   recipe_id,recipe_version,sku_code,product_name,product_snapshot)
-                 values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) returning *""",
-            (order_id, order_no, terminal["id"], hash_token(access_token), idempotency_key, digest,
-             order_status, payload.paymentMode, payment_status, product["currency"], product["priceMinor"],
-             product["recipeId"], product["recipeVersion"], product["skuCode"], product["name"], Jsonb(product_snapshot)),
-        ).fetchone()
-        connection.execute(
-            """insert into order_transition(order_id,revision,from_status,to_status,actor,reason,payload_json)
-                 values(%s,0,null,%s,'public-api',%s,%s)""",
-            (order_id, order_status,
-             "test-free order accepted" if payload.paymentMode == "TEST_FREE" else "order created awaiting payment",
-             Jsonb({"recipeId": payload.recipeId, "inventoryVersion": menu.get("inventoryVersion")})),
-        )
-        if payload.paymentMode == "TEST_FREE":
-            connection.execute(
-                """insert into production_job(id,task_id,order_id,terminal_id,status,planned_duration_seconds)
-                     values(%s,%s,%s,%s,'QUEUED',%s)""",
-                (uuid.uuid4(), task_id, order_id, terminal["id"], product.get("estimatedDurationSeconds")),
-            )
-            dispatch_next_order(connection, terminal["id"])
-        created = connection.execute(
-            "select o.*,t.device_id,t.store_id from sales_order o join terminal t on t.id=o.terminal_id where o.id=%s",
-            (order_id,),
-        ).fetchone()
-        response = public_order_payload(connection, created)
-    return {**response, "accessToken": access_token}
-
-
-def authenticate_order(connection: Any, order_id: uuid.UUID, token: str | None, *, for_update: bool = False) -> dict[str, Any]:
-    if not token:
-        raise HTTPException(status_code=401, detail="missing order access token")
-    suffix = " for update" if for_update else ""
-    order = connection.execute(
-        f"select o.*,t.device_id,t.store_id from sales_order o join terminal t on t.id=o.terminal_id where o.id=%s{suffix}",
-        (order_id,),
-    ).fetchone()
-    if order is None or not tokens_equal(order["access_token_hash"].strip(), hash_token(token)):
-        raise HTTPException(status_code=404, detail="order not found")
-    return order
-
-
-def payment_payload(payment: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "paymentId": str(payment["id"]), "orderId": str(payment["order_id"]),
-        "provider": payment["provider"], "merchantPaymentNo": payment["merchant_payment_no"],
-        "status": payment["status"], "revision": payment["revision"],
-        "amountMinor": payment["amount_minor"], "currency": payment["currency"],
-        "qrCode": payment["qr_code"], "createdAt": iso(payment["created_at"]),
-        "updatedAt": iso(payment["updated_at"]), "paidAt": iso(payment["paid_at"]),
-    }
+    return public_order_service.create(identifier, payload, idempotency_key)
 
 
 @app.post("/api/v1/orders/{order_id}/payments", tags=["payments"], status_code=201)
@@ -1835,98 +1047,7 @@ def create_payment(
     access_token: Annotated[str | None, Header(alias="X-Order-Access-Token")] = None,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> dict[str, Any]:
-    if not idempotency_key or len(idempotency_key) > 160:
-        raise HTTPException(status_code=400, detail="Idempotency-Key is required and must be <= 160 characters")
-    provider_name = (payload.provider or settings.payment_default_provider).lower()
-    if provider_name == "mock" and not settings.allow_mock_payment:
-        raise HTTPException(status_code=503, detail="mock payment provider is disabled")
-    digest = canonical_digest(payload.model_dump(mode="json"))
-    with database.connect() as connection:
-        order = authenticate_order(connection, order_id, access_token, for_update=True)
-        if order["payment_mode"] == "TEST_FREE":
-            raise HTTPException(status_code=409, detail="test-free order does not require payment")
-        existing = connection.execute(
-            "select * from payment where order_id=%s and idempotency_key=%s for update",
-            (order_id, idempotency_key),
-        ).fetchone()
-        if existing:
-            if existing["request_digest"].strip() != digest:
-                raise HTTPException(status_code=409, detail="Idempotency-Key payload conflict")
-            if existing["status"] != "CREATED":
-                return {**payment_payload(existing), "duplicate": True}
-            payment = existing
-        else:
-            if order["payment_status"] in {"PAID", "REFUNDING", "REFUNDED"}:
-                raise HTTPException(status_code=409, detail="order payment is already complete")
-            payment_id = uuid.uuid4()
-            merchant_no = f"C{utc_now().strftime('%Y%m%d%H%M%S')}{secrets.token_hex(5).upper()}"
-            payment = connection.execute(
-                """insert into payment(id,order_id,provider,merchant_payment_no,idempotency_key,
-                       request_digest,status,amount_minor,currency,subject)
-                     values(%s,%s,%s,%s,%s,%s,'CREATED',%s,%s,%s) returning *""",
-                (payment_id, order_id, provider_name, merchant_no, idempotency_key, digest,
-                 order["total_amount_minor"], order["currency"], order["product_name"]),
-            ).fetchone()
-            connection.execute(
-                """insert into payment_event(payment_id,event_id,event_type,actor,payload_json)
-                     values(%s,'created','payment.created','customer',%s)""",
-                (payment_id, Jsonb(payload.model_dump(mode="json"))),
-            )
-            if order["status"] == "CREATED":
-                transition_order(connection, order, "AWAITING_PAYMENT", "payment-service", reason="payment created")
-            connection.execute(
-                "update sales_order set payment_status='PENDING',updated_at=now() where id=%s", (order_id,)
-            )
-
-    provider = payment_provider(provider_name)
-    request_value = PaymentRequest(
-        merchant_payment_no=payment["merchant_payment_no"], amount_minor=payment["amount_minor"],
-        currency=payment["currency"], subject=payment["subject"],
-        notify_url=f"{settings.public_base_url.rstrip('/')}/api/v1/payments/callback/{provider_name}",
-        metadata={"orderId": str(order_id)},
-    )
-    try:
-        if payment["status"] == "CREATED":
-            try:
-                result = provider.query_payment(payment["merchant_payment_no"])
-                if result.status == "NOT_FOUND" or (result.status == "FAILED" and provider_name == "mock"):
-                    result = provider.create_payment(request_value)
-            except Exception:
-                result = provider.create_payment(request_value)
-        else:
-            result = provider.query_payment(payment["merchant_payment_no"])
-    except Exception as exc:
-        logger.warning("payment create/query failed payment=%s provider=%s: %s", payment["id"], provider_name, exc)
-        raise HTTPException(status_code=502, detail="payment provider temporarily unavailable") from exc
-
-    with database.connect() as connection:
-        current = connection.execute("select * from payment where id=%s for update", (payment["id"],)).fetchone()
-        connection.execute(
-            "update payment set qr_code=coalesce(%s,qr_code),provider_trade_no=coalesce(%s,provider_trade_no),provider_response=%s,updated_at=now() where id=%s",
-            (result.qr_code, result.provider_trade_no, Jsonb(result.raw), current["id"]),
-        )
-        current = connection.execute("select * from payment where id=%s", (current["id"],)).fetchone()
-        if result.status == "PAID":
-            values = {"merchant_payment_no": current["merchant_payment_no"], "amount_minor": str(current["amount_minor"]), "provider_trade_no": result.provider_trade_no or ""}
-            current, _ = apply_paid_callback(
-                connection, provider=provider_name,
-                event_id=f"query-paid:{current['merchant_payment_no']}", values=values,
-            )
-        elif current["status"] == "CREATED":
-            current, _ = transition_payment(connection, current, "PENDING", actor="payment-provider", payload=result.raw)
-            connection.execute(
-                "update payment set next_reconcile_at=now()+(%s::text||' seconds')::interval where id=%s",
-                (settings.payment_reconcile_seconds, current["id"]),
-            )
-    return {**payment_payload(current), "duplicate": existing is not None}
-
-
-def payment_with_order_auth(connection: Any, payment_id: uuid.UUID, token: str | None) -> dict[str, Any]:
-    payment = connection.execute("select * from payment where id=%s", (payment_id,)).fetchone()
-    if not payment:
-        raise HTTPException(status_code=404, detail="payment not found")
-    authenticate_order(connection, payment["order_id"], token)
-    return payment
+    return payment_application_service.create(order_id, payload, access_token, idempotency_key)
 
 
 @app.get("/api/v1/payments/{payment_id}", tags=["payments"])
@@ -1934,8 +1055,7 @@ def get_payment(
     payment_id: uuid.UUID,
     access_token: Annotated[str | None, Header(alias="X-Order-Access-Token")] = None,
 ) -> dict[str, Any]:
-    with database.connect() as connection:
-        return payment_payload(payment_with_order_auth(connection, payment_id, access_token))
+    return payment_application_service.get(payment_id, access_token)
 
 
 @app.get("/api/v1/payments/{payment_id}/qr", tags=["payments"], response_class=Response)
@@ -1943,11 +1063,7 @@ def get_payment_qr(
     payment_id: uuid.UUID,
     access_token: Annotated[str | None, Header(alias="X-Order-Access-Token")] = None,
 ) -> Response:
-    with database.connect() as connection:
-        payment = payment_with_order_auth(connection, payment_id, access_token)
-    if not payment["qr_code"]:
-        raise HTTPException(status_code=409, detail="payment QR code is not ready")
-    image = qrcode.make(payment["qr_code"])
+    image = qrcode.make(payment_application_service.qr_value(payment_id, access_token))
     output = io.BytesIO()
     image.save(output, format="PNG")
     return Response(output.getvalue(), media_type="image/png", headers={"Cache-Control": "no-store"})
@@ -1956,45 +1072,12 @@ def get_payment_qr(
 @app.post("/api/v1/payments/callback/alipay", tags=["payments"], response_class=PlainTextResponse)
 async def alipay_callback(request: Request) -> str:
     values = dict(parse_qsl((await request.body()).decode("utf-8"), keep_blank_values=True))
-    try:
-        parsed = payment_provider("alipay").verify_and_parse_callback(values)
-        if parsed.get("app_id") and parsed.get("app_id") != settings.alipay_app_id:
-            raise ValueError("Alipay callback app_id mismatch")
-        if parsed.get("trade_status") not in {"TRADE_SUCCESS", "TRADE_FINISHED"}:
-            return "success"
-        with database.connect() as connection:
-            apply_paid_callback(
-                connection, provider="alipay", event_id=callback_event_id("alipay", parsed), values=parsed,
-            )
-        return "success"
-    except (ValueError, HTTPException) as exc:
-        logger.warning("Alipay callback rejected: %s", exc)
-        return "failure"
+    return payment_application_service.alipay_callback(values)
 
 
 @app.post("/api/v1/payments/callback/mock", tags=["payments"], include_in_schema=False)
 async def mock_payment_callback(request: Request, _: AdminAuth) -> dict[str, Any]:
-    if settings.payment_default_provider != "mock" or not settings.allow_mock_payment:
-        raise HTTPException(status_code=404, detail="mock payment callback is disabled")
-    values = await request.json()
-    merchant_no = str(values.get("merchant_payment_no") or "")
-    with database.connect() as connection:
-        payment = connection.execute(
-            "select * from payment where provider='mock' and merchant_payment_no=%s", (merchant_no,)
-        ).fetchone()
-        if not payment:
-            raise HTTPException(status_code=404, detail="payment not found")
-    result = mock_payment_provider.set_paid(merchant_no, str(values.get("provider_trade_no") or "") or None)
-    callback_values = {
-        "merchant_payment_no": merchant_no, "amount_minor": str(payment["amount_minor"]),
-        "provider_trade_no": result.provider_trade_no or "",
-    }
-    with database.connect() as connection:
-        updated, duplicate = apply_paid_callback(
-            connection, provider="mock",
-            event_id=str(values.get("event_id") or f"mock-paid:{merchant_no}"), values=callback_values,
-        )
-    return {**payment_payload(updated), "duplicate": duplicate}
+    return payment_application_service.mock_callback(await request.json())
 
 
 @app.post("/api/v1/payments/{payment_id}/refund", tags=["payments"], status_code=202)
@@ -2004,80 +1087,7 @@ def create_refund(
     _: AdminAuth,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> dict[str, Any]:
-    if not idempotency_key or len(idempotency_key) > 160:
-        raise HTTPException(status_code=400, detail="Idempotency-Key is required and must be <= 160 characters")
-    digest = canonical_digest(payload.model_dump(mode="json"))
-    with database.connect() as connection:
-        payment = connection.execute("select * from payment where id=%s for update", (payment_id,)).fetchone()
-        if not payment:
-            raise HTTPException(status_code=404, detail="payment not found")
-        if payment["status"] not in {"PAID", "REFUNDING", "PARTIALLY_REFUNDED"}:
-            raise HTTPException(status_code=409, detail="payment is not refundable")
-        existing = connection.execute(
-            "select * from refund where payment_id=%s and idempotency_key=%s for update",
-            (payment_id, idempotency_key),
-        ).fetchone()
-        if existing:
-            if existing["request_digest"].strip() != digest:
-                raise HTTPException(status_code=409, detail="Idempotency-Key payload conflict")
-            if existing["status"] in {"PROCESSING", "SUCCEEDED"}:
-                return {"refundId": str(existing["id"]), "status": existing["status"], "duplicate": True}
-            refund = existing
-        else:
-            amount = payload.amountMinor or payment["amount_minor"]
-            refunded = connection.execute(
-                "select coalesce(sum(amount_minor),0) as total from refund where payment_id=%s and status='SUCCEEDED'",
-                (payment_id,),
-            ).fetchone()["total"]
-            if amount + refunded > payment["amount_minor"]:
-                raise HTTPException(status_code=409, detail="refund amount exceeds unrefunded payment amount")
-            refund = connection.execute(
-                """insert into refund(id,payment_id,provider,merchant_refund_no,idempotency_key,
-                       request_digest,status,amount_minor,reason)
-                     values(%s,%s,%s,%s,%s,%s,'REQUESTED',%s,%s) returning *""",
-                (uuid.uuid4(), payment_id, payment["provider"], f"R{uuid.uuid4().hex[:24].upper()}",
-                 idempotency_key, digest, amount, payload.reason),
-            ).fetchone()
-            transition_payment(connection, payment, "REFUNDING", actor="refund-service", payload={"refundId": str(refund["id"])})
-            refund, _ = transition_refund(connection, refund, "PROCESSING")
-            connection.execute("update refund set next_attempt_at=now()+interval '30 seconds' where id=%s", (refund["id"],))
-
-    provider = payment_provider(payment["provider"])
-    try:
-        result = provider.refund(RefundRequest(
-            merchant_payment_no=payment["merchant_payment_no"], merchant_refund_no=refund["merchant_refund_no"],
-            amount_minor=refund["amount_minor"], reason=refund["reason"], provider_trade_no=payment["provider_trade_no"],
-        ))
-        target = "SUCCEEDED" if result.status == "REFUNDED" else "PROCESSING"
-    except Exception as exc:
-        logger.warning("refund outcome unknown refund=%s: %s", refund["id"], exc)
-        result = None
-        target = "UNKNOWN"
-    with database.connect() as connection:
-        current = connection.execute("select * from refund where id=%s for update", (refund["id"],)).fetchone()
-        current, _ = transition_refund(connection, current, target, payload=result.raw if result else {"error": "provider outcome unknown"})
-        if target == "UNKNOWN":
-            connection.execute(
-                "update refund set attempt_count=attempt_count+1,next_attempt_at=now()+interval '30 seconds' where id=%s", (current["id"],)
-            )
-        elif target == "PROCESSING":
-            connection.execute(
-                "update refund set attempt_count=greatest(attempt_count,1),next_attempt_at=now()+interval '30 seconds' where id=%s",
-                (current["id"],),
-            )
-        elif target == "SUCCEEDED":
-            current_payment = connection.execute("select * from payment where id=%s for update", (payment_id,)).fetchone()
-            refunded = connection.execute(
-                "select coalesce(sum(amount_minor),0) as total from refund where payment_id=%s and status='SUCCEEDED'", (payment_id,)
-            ).fetchone()["total"]
-            payment_target = "REFUNDED" if refunded >= current_payment["amount_minor"] else "PARTIALLY_REFUNDED"
-            transition_payment(connection, current_payment, payment_target, actor="refund-provider", payload=result.raw if result else {})
-            if payment_target == "REFUNDED":
-                order = connection.execute("select * from sales_order where id=%s for update", (current_payment["order_id"],)).fetchone()
-                connection.execute("update sales_order set payment_status='REFUNDED',updated_at=now() where id=%s", (order["id"],))
-                if order["status"] == "FAILED":
-                    transition_order(connection, order, "REFUNDED", "refund-provider", reason="full refund completed")
-    return {"refundId": str(current["id"]), "paymentId": str(payment_id), "status": current["status"], "duplicate": existing is not None}
+    return payment_application_service.refund(payment_id, payload, idempotency_key)
 
 
 @app.get("/api/v1/public/orders/{order_id}", tags=["public-orders"])
@@ -2085,9 +1095,7 @@ def get_public_order(
     order_id: uuid.UUID,
     access_token: Annotated[str | None, Header(alias="X-Order-Access-Token")] = None,
 ) -> dict[str, Any]:
-    with database.connect() as connection:
-        order = authenticate_order(connection, order_id, access_token)
-        return public_order_payload(connection, order)
+    return public_order_service.get(order_id, access_token)
 
 
 @app.post("/api/v1/public/orders/{order_id}/cancel", tags=["public-orders"])
@@ -2095,118 +1103,27 @@ def cancel_public_order(
     order_id: uuid.UUID,
     access_token: Annotated[str | None, Header(alias="X-Order-Access-Token")] = None,
 ) -> dict[str, Any]:
-    payment_to_close: dict[str, Any] | None = None
-    with database.connect() as connection:
-        order = authenticate_order(connection, order_id, access_token, for_update=True)
-        if order["status"] not in {"CREATED", "AWAITING_PAYMENT", "QUEUED"}:
-            raise HTTPException(status_code=409, detail="only unpaid or queued orders can be cancelled safely")
-        if order["status"] in {"CREATED", "AWAITING_PAYMENT"}:
-            payment_to_close = connection.execute(
-                "select * from payment where order_id=%s and status in ('CREATED','PENDING') order by created_at desc limit 1 for update",
-                (order_id,),
-            ).fetchone()
-        order = transition_order(connection, order, "CANCELLED", "customer", reason="cancelled before dispatch")
-        connection.execute(
-            "update production_job set status='CANCELLED',revision=revision+1,updated_at=now(),completed_at=now() where order_id=%s",
-            (order_id,),
-        )
-    if payment_to_close:
-        try:
-            result = payment_provider(payment_to_close["provider"]).close_payment(payment_to_close["merchant_payment_no"])
-            with database.connect() as connection:
-                current = connection.execute("select * from payment where id=%s for update", (payment_to_close["id"],)).fetchone()
-                if current["status"] in {"CREATED", "PENDING"}:
-                    transition_payment(connection, current, "CLOSED", actor="customer-cancel", payload=result.raw)
-                    connection.execute("update sales_order set payment_status='CLOSED',updated_at=now() where id=%s", (order_id,))
-        except Exception as exc:
-            logger.warning("payment close deferred after order cancellation payment=%s: %s", payment_to_close["id"], exc)
-    with database.connect() as connection:
-        order = authenticate_order(connection, order_id, access_token)
-        return public_order_payload(connection, order)
-
-
-def admin_device_payload(row: dict[str, Any]) -> dict[str, Any]:
-    cutoff = utc_now() - timedelta(seconds=settings.offline_threshold_seconds)
-    online = bool(row["last_heartbeat_at"] and row["last_heartbeat_at"] >= cutoff)
-    return {
-        "deviceId": row["device_id"], "serialNumber": row["serial_number"],
-        "instanceId": row["instance_id"], "storeId": row["store_id"],
-        "lifecycleStatus": row["lifecycle_status"],
-        "online": online, "connectionStatus": "online" if online else "offline",
-        "hasEverConnected": bool(row["last_connected_at"] or row["last_seen_at"]),
-        "registeredAt": iso(row["created_at"]),
-        "lastSeenAt": iso(row["last_seen_at"]), "lastHeartbeatAt": iso(row["last_heartbeat_at"]),
-        "lastConnectedAt": iso(row["last_connected_at"]), "softwareVersion": row["software_version"],
-        "activeBootId": row["active_boot_id"], "lastSequence": row["last_sequence"],
-        "reportedStatus": row["reported_status"], "lastErrorSummary": row["last_error_summary"],
-        "heartbeatCount": int(row.get("heartbeat_count", 0)),
-        "eventCount": int(row.get("event_count", 0)),
-        "commandCount": int(row.get("command_count", 0)),
-        "activeOrderCount": int(row.get("active_order_count", 0)),
-        "offlineThresholdSeconds": settings.offline_threshold_seconds,
-    }
+    return public_order_service.cancel(order_id, access_token)
 
 
 @app.post("/api/v1/admin/devices", tags=["device-identity"], status_code=201)
 def register_admin_device(payload: AdminDeviceCreateRequest, _: AdminAuth) -> dict[str, Any]:
-    with database.connect() as connection:
-        existing = connection.execute(
-            "select * from terminal where device_id=%s or serial_number=%s",
-            (payload.deviceId, payload.serialNumber),
-        ).fetchone()
-        if existing:
-            if existing["device_id"] == payload.deviceId and existing["serial_number"] == payload.serialNumber:
-                return {"duplicate": True, **admin_device_payload(existing)}
-            raise HTTPException(status_code=409, detail="deviceId or serialNumber already exists")
-        row = connection.execute(
-            """insert into terminal(device_id,serial_number,instance_id,store_id,lifecycle_status)
-                 values(%s,%s,%s,%s,'PENDING_ACTIVATION') returning *""",
-            (payload.deviceId, payload.serialNumber, payload.instanceId, payload.storeId),
-        ).fetchone()
-    return {"duplicate": False, **admin_device_payload(row)}
+    return admin_operations_service.register_device(payload)
 
 
 @app.get("/api/v1/admin/devices/{identifier}")
 def admin_device(identifier: str, _: AdminAuth) -> dict[str, Any]:
-    offline_monitor.scan_once()
-    with database.connect() as connection:
-        row = connection.execute("select * from terminal where device_id=%s or serial_number=%s", (identifier, identifier)).fetchone()
-        if row is None:
-            raise HTTPException(status_code=404, detail="device not found")
-        heartbeat_count = connection.execute("select count(*) as count from heartbeat_inbox where terminal_id=%s", (row["id"],)).fetchone()["count"]
-        event_count = connection.execute("select count(*) as count from terminal_event where terminal_id=%s", (row["id"],)).fetchone()["count"]
-        command_count = connection.execute("select count(*) as count from terminal_command where terminal_id=%s", (row["id"],)).fetchone()["count"]
-        active_order_count = connection.execute("select count(*) as count from sales_order where terminal_id=%s and status in ('QUEUED','DISPATCHED','ACCEPTED','MAKING')", (row["id"],)).fetchone()["count"]
-        snapshot_rows = connection.execute("select snapshot_type,version,received_at from terminal_snapshot where terminal_id=%s", (row["id"],)).fetchall()
-    return {**admin_device_payload({**row, "heartbeat_count": heartbeat_count, "event_count": event_count, "command_count": command_count, "active_order_count": active_order_count}), "snapshots": {item["snapshot_type"]: {"version": item["version"], "receivedAt": iso(item["received_at"])} for item in snapshot_rows}}
+    return admin_operations_service.device(identifier)
 
 
 @app.get("/api/v1/admin/devices")
 def admin_devices(_: AdminAuth) -> dict[str, Any]:
-    offline_monitor.scan_once()
-    with database.connect() as connection:
-        rows = connection.execute(
-            """select t.*,
-                    (select count(*) from heartbeat_inbox h where h.terminal_id=t.id) as heartbeat_count,
-                    (select count(*) from terminal_event e where e.terminal_id=t.id) as event_count,
-                    (select count(*) from terminal_command c where c.terminal_id=t.id) as command_count,
-                    (select count(*) from sales_order o where o.terminal_id=t.id and o.status in ('QUEUED','DISPATCHED','ACCEPTED','MAKING')) as active_order_count
-                 from terminal t order by t.created_at desc, t.serial_number"""
-        ).fetchall()
-    return {"devices": [admin_device_payload(row) for row in rows], "serverTime": iso(utc_now())}
+    return admin_operations_service.devices()
 
 
 @app.get("/api/v1/admin/devices/{identifier}/inventory", tags=["admin-operations"])
 def admin_device_inventory(identifier: str, _: AdminAuth) -> dict[str, Any]:
-    with database.connect() as connection:
-        terminal = find_terminal(connection, identifier)
-        row = connection.execute(
-            "select * from terminal_snapshot where terminal_id=%s and snapshot_type='inventory'",
-            (terminal["id"],),
-        ).fetchone()
-    if not row:
-        return {"deviceId": terminal["device_id"], "available": False, "materials": []}
-    return {"deviceId": terminal["device_id"], "available": True, "receivedAt": iso(row["received_at"]), **row["payload_json"]}
+    return admin_operations_service.inventory(identifier)
 
 
 @app.get("/api/v1/admin/orders", tags=["admin-operations"])
@@ -2216,33 +1133,9 @@ def admin_orders(
     order_status: str | None = Query(default=None, alias="status"),
     limit: int = Query(default=100, ge=1, le=500),
 ) -> dict[str, Any]:
-    clauses: list[str] = []
-    params: list[Any] = []
-    if device_id:
-        clauses.append("t.device_id=%s")
-        params.append(device_id)
-    if order_status:
-        clauses.append("o.status=%s")
-        params.append(order_status.upper())
-    where = " where " + " and ".join(clauses) if clauses else ""
-    params.append(limit)
-    with database.connect() as connection:
-        rows = connection.execute(
-            f"""select o.*,t.device_id,t.store_id,j.task_id,j.status as production_status,
-                       j.progress,j.current_step_name
-                  from sales_order o join terminal t on t.id=o.terminal_id
-                  left join production_job j on j.order_id=o.id
-                  {where} order by o.created_at desc limit %s""",
-            params,
-        ).fetchall()
-    return {"orders": [
-        {"orderId": str(row["id"]), "orderNo": row["order_no"], "deviceId": row["device_id"],
-         "storeId": row["store_id"], "status": row["status"], "productName": row["product_name"],
-         "paymentMode": row["payment_mode"], "productionStatus": row["production_status"],
-         "progress": row["progress"], "currentStepName": row["current_step_name"],
-         "failureCode": row["failure_code"], "createdAt": iso(row["created_at"]), "updatedAt": iso(row["updated_at"])}
-        for row in rows
-    ], "serverTime": iso(utc_now())}
+    return admin_operations_service.orders(
+        device_id=device_id, order_status=order_status, limit=limit
+    )
 
 
 ADMIN_HTML = """<!doctype html>

@@ -2,6 +2,8 @@
 
 面向自动贩卖咖啡终端的早期运营后台。当前 `0.4.0` 增加 Payment Domain、Transactional Outbox、MQTT Inbox/Command Outbox、多设备 MQTT Gateway、MQTT 凭证生命周期和不确定设备结果 `HOLD` 处置；架构保持为 FastAPI + PostgreSQL 模块化单体与独立 Gateway/Worker。
 
+HTTP 应用代码采用 `Route → Application Service → Repository → PostgreSQL` 分层：路由只处理协议适配，Service 负责业务规则和事务，Repository 集中 SQL。模块职责、事务边界和扩展规则见 [应用分层架构](docs/application-architecture.md)。
+
 公网支付由 `PUBLIC_PAYMENT_MODE` 控制。现网在没有支付宝沙箱密钥前必须保持 `TEST_FREE`；设置为 `ONLINE` 后，服务端会拒绝任何绕过支付的测试订单。支付宝沙箱与正式环境共用 `AlipayProvider`，只通过 gateway、appId 和密钥文件切换。
 
 ## 1. 已实现的运营闭环
