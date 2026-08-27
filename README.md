@@ -107,6 +107,35 @@ POST /api/v1/admin/devices/{deviceId}/commands
 
 所有管理接口使用 `Authorization: Bearer $ADMIN_TOKEN`。完整字段和错误响应以 `/docs` 与 `openapi/openapi.json` 为准。
 
+### 运营权限与审计
+
+`ADMIN_TOKEN` 现在作为应急超级管理员凭证保留。日常运营应在管理台创建独立运营员和可撤销 API Token，不应多人共享 `ADMIN_TOKEN`。
+
+角色权限：
+
+- `VIEWER`：查看总览、设备和订单。
+- `OPERATOR`：增加设备登记、生命周期管理和安全远程命令。
+- `MANAGER`：增加退款、权限只读和审计查看。
+- `OWNER`：增加运营员、角色和 API Token 管理。
+
+关键接口：
+
+```text
+GET    /api/v1/admin/session
+GET    /api/v1/admin/dashboard
+PATCH  /api/v1/admin/devices/{deviceId}/lifecycle
+GET    /api/v1/admin/devices/{deviceId}/capabilities
+GET    /api/v1/admin/operators
+POST   /api/v1/admin/operators
+PATCH  /api/v1/admin/operators/{operatorId}
+GET    /api/v1/admin/operators/{operatorId}/tokens
+POST   /api/v1/admin/operators/{operatorId}/tokens
+DELETE /api/v1/admin/operators/{operatorId}/tokens/{tokenId}
+GET    /api/v1/admin/audit-logs
+```
+
+新运营 Token 仅在创建响应中显示一次，数据库只保存 SHA-256 摘要。设备登记、激活码生成、生命周期变更、远程命令、凭证吊销、退款及权限变更都会写入 `audit_log`，审计记录不保存原始 Token。
+
 ## 4. 状态模型
 
 订单：

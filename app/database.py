@@ -427,6 +427,44 @@ MIGRATIONS: tuple[tuple[int, str, str], ...] = (
         alter table terminal_command add column if not exists published_at timestamptz;
         alter table terminal_command add column if not exists hold_reason text;
     """),
+    (5, "admin-rbac-audit-and-device-controls", """
+        create table if not exists admin_operator (
+            id uuid primary key,
+            display_name text not null,
+            role text not null check(role in ('VIEWER','OPERATOR','MANAGER','OWNER')),
+            status text not null default 'ACTIVE' check(status in ('ACTIVE','SUSPENDED')),
+            created_at timestamptz not null default now(),
+            updated_at timestamptz not null default now()
+        );
+
+        create table if not exists admin_api_token (
+            id uuid primary key,
+            operator_id uuid not null references admin_operator(id),
+            token_hash char(64) not null unique,
+            label text not null,
+            status text not null default 'ACTIVE' check(status in ('ACTIVE','REVOKED')),
+            expires_at timestamptz,
+            last_used_at timestamptz,
+            created_at timestamptz not null default now(),
+            revoked_at timestamptz
+        );
+        create index if not exists ix_admin_api_token_operator on admin_api_token(operator_id,created_at desc);
+
+        create table if not exists audit_log (
+            id bigserial primary key,
+            actor_type text not null,
+            actor_id text not null,
+            actor_name text not null,
+            action text not null,
+            resource_type text not null,
+            resource_id text,
+            request_id text,
+            detail_json jsonb not null default '{}'::jsonb,
+            created_at timestamptz not null default now()
+        );
+        create index if not exists ix_audit_log_created on audit_log(created_at desc);
+        create index if not exists ix_audit_log_resource on audit_log(resource_type,resource_id,created_at desc);
+    """),
 )
 
 

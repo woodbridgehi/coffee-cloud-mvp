@@ -127,3 +127,31 @@ class PaymentCreateRequest(BaseModel):
 class RefundCreateRequest(BaseModel):
     amountMinor: int | None = Field(default=None, ge=1)
     reason: str = Field(default="production failed", min_length=1, max_length=256)
+
+
+class AdminOperatorCreateRequest(BaseModel):
+    displayName: str = Field(min_length=1, max_length=120)
+    role: Literal["VIEWER", "OPERATOR", "MANAGER", "OWNER"]
+
+
+class AdminOperatorUpdateRequest(BaseModel):
+    displayName: str | None = Field(default=None, min_length=1, max_length=120)
+    role: Literal["VIEWER", "OPERATOR", "MANAGER", "OWNER"] | None = None
+    status: Literal["ACTIVE", "SUSPENDED"] | None = None
+
+
+class AdminTokenCreateRequest(BaseModel):
+    label: str = Field(min_length=1, max_length=120)
+    expiresAt: datetime | None = None
+
+    @field_validator("expiresAt")
+    @classmethod
+    def require_token_expiry_timezone(cls, value: datetime | None) -> datetime | None:
+        if value is not None and value.tzinfo is None:
+            raise ValueError("expiresAt must include a timezone")
+        return value
+
+
+class DeviceLifecycleUpdateRequest(BaseModel):
+    status: Literal["ACTIVE", "SUSPENDED", "MAINTENANCE"]
+    reason: str = Field(min_length=3, max_length=500)

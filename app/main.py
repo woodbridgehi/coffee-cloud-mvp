@@ -14,7 +14,7 @@ from urllib.parse import quote
 from urllib.parse import parse_qsl
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Security, status
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from psycopg.types.json import Jsonb
@@ -26,9 +26,10 @@ from .command_state import (
     decide_transition, event_state, result_state,
 )
 from .protocol import (
-    ActivationCodeRequest, ActivationRequest, AdminDeviceCreateRequest, CommandCreateRequest, CommandResult,
+    ActivationCodeRequest, ActivationRequest, AdminDeviceCreateRequest, AdminOperatorCreateRequest,
+    AdminOperatorUpdateRequest, AdminTokenCreateRequest, CommandCreateRequest, CommandResult,
     CredentialRotationRequest, DeviceEvent, Heartbeat, PaymentCreateRequest, PublicOrderCreateRequest,
-    RefundCreateRequest, Snapshot, TaskAck,
+    RefundCreateRequest, Snapshot, TaskAck, DeviceLifecycleUpdateRequest,
     canonical_digest, utc_now,
 )
 from .order_logic import TERMINAL_ORDER_STATUSES, device_progress, order_state_for_event
@@ -48,6 +49,7 @@ from .services.errors import ServiceError
 from .services.order_state import transition_order
 from .services.payments import PaymentApplicationService
 from .services.public_orders import PublicOrderService
+from .services.admin_access import AdminAccessService
 
 
 SERVICE_VERSION = "0.4.0"
@@ -241,21 +243,65 @@ async def service_error_handler(_: Request, exc: ServiceError) -> JSONResponse:
 
 @app.middleware("http")
 async def disable_public_order_cache(request: Request, call_next: Any) -> Response:
+    request.state.request_id = request.headers.get("X-Request-Id") or str(uuid.uuid4())
     response = await call_next(request)
-    if request.url.path in {"/order", "/order/status", "/assets/order.js"}:
+    response.headers["X-Request-Id"] = request.state.request_id
+    if request.url.path in {"/order", "/order/status", "/admin", "/assets/order.js"} \
+            or request.url.path.startswith("/api/v1/admin/"):
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
     return response
 
+
+def request_id(request: Request) -> str:
+    return str(request.state.request_id)
+
 device_bearer = HTTPBearer(auto_error=False, scheme_name="deviceBearer")
 admin_bearer = HTTPBearer(auto_error=False, scheme_name="adminBearer")
 
 
-def require_admin(credentials: Annotated[HTTPAuthorizationCredentials | None, Security(admin_bearer)] = None) -> None:
+def require_admin(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Security(admin_bearer)] = None,
+) -> dict[str, Any]:
     token = credentials.credentials if credentials and credentials.scheme.lower() == "bearer" else None
-    if token is None or not tokens_equal(token, settings.admin_token):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid admin credential")
+    return admin_access_service.authenticate(token)
+
+
+def require_dashboard_read(principal: Annotated[dict[str, Any], Depends(require_admin)]) -> dict[str, Any]:
+    return admin_access_service.require(principal, "dashboard.read")
+
+
+def require_devices_read(principal: Annotated[dict[str, Any], Depends(require_admin)]) -> dict[str, Any]:
+    return admin_access_service.require(principal, "devices.read")
+
+
+def require_devices_manage(principal: Annotated[dict[str, Any], Depends(require_admin)]) -> dict[str, Any]:
+    return admin_access_service.require(principal, "devices.manage")
+
+
+def require_orders_read(principal: Annotated[dict[str, Any], Depends(require_admin)]) -> dict[str, Any]:
+    return admin_access_service.require(principal, "orders.read")
+
+
+def require_commands_execute(principal: Annotated[dict[str, Any], Depends(require_admin)]) -> dict[str, Any]:
+    return admin_access_service.require(principal, "commands.execute")
+
+
+def require_refunds_manage(principal: Annotated[dict[str, Any], Depends(require_admin)]) -> dict[str, Any]:
+    return admin_access_service.require(principal, "refunds.manage")
+
+
+def require_access_read(principal: Annotated[dict[str, Any], Depends(require_admin)]) -> dict[str, Any]:
+    return admin_access_service.require(principal, "access.read")
+
+
+def require_access_manage(principal: Annotated[dict[str, Any], Depends(require_admin)]) -> dict[str, Any]:
+    return admin_access_service.require(principal, "access.manage")
+
+
+def require_audit_read(principal: Annotated[dict[str, Any], Depends(require_admin)]) -> dict[str, Any]:
+    return admin_access_service.require(principal, "audit.read")
 
 
 def require_gateway(x_gateway_token: Annotated[str | None, Header(alias="X-Gateway-Token")] = None) -> None:
@@ -277,7 +323,16 @@ def require_device(
 
 
 DeviceIdentity = Annotated[dict[str, Any], Depends(require_device)]
-AdminAuth = Annotated[None, Depends(require_admin)]
+AdminAuth = Annotated[dict[str, Any], Depends(require_admin)]
+DashboardRead = Annotated[dict[str, Any], Depends(require_dashboard_read)]
+DevicesRead = Annotated[dict[str, Any], Depends(require_devices_read)]
+DevicesManage = Annotated[dict[str, Any], Depends(require_devices_manage)]
+OrdersRead = Annotated[dict[str, Any], Depends(require_orders_read)]
+CommandsExecute = Annotated[dict[str, Any], Depends(require_commands_execute)]
+RefundsManage = Annotated[dict[str, Any], Depends(require_refunds_manage)]
+AccessRead = Annotated[dict[str, Any], Depends(require_access_read)]
+AccessManage = Annotated[dict[str, Any], Depends(require_access_manage)]
+AuditRead = Annotated[dict[str, Any], Depends(require_audit_read)]
 GatewayAuth = Annotated[None, Depends(require_gateway)]
 
 
@@ -301,9 +356,16 @@ def public_order_page() -> Path:
 def create_activation_code(
     identifier: str,
     payload: ActivationCodeRequest,
-    _: AdminAuth,
+    principal: DevicesManage,
+    request: Request,
 ) -> dict[str, Any]:
-    return device_identity_service.create_activation_code(identifier, payload.ttlSeconds)
+    result = device_identity_service.create_activation_code(identifier, payload.ttlSeconds)
+    admin_access_service.audit(
+        principal, "device.activation_code.create", "terminal", result["deviceId"],
+        {"activationId": result["activationId"], "expiresAt": result["expiresAt"]},
+        request_id(request),
+    )
+    return result
 
 
 @app.post("/api/v1/device-activations", tags=["device-identity"])
@@ -318,8 +380,13 @@ def rotate_mqtt_credential(device_id: str, identity: DeviceIdentity) -> dict[str
 
 
 @app.post("/api/v1/admin/devices/{identifier}/mqtt-credentials/revoke", tags=["device-identity"])
-def revoke_mqtt_credential(identifier: str, _: AdminAuth) -> dict[str, Any]:
-    return device_identity_service.revoke_mqtt(identifier)
+def revoke_mqtt_credential(identifier: str, principal: DevicesManage, request: Request) -> dict[str, Any]:
+    result = device_identity_service.revoke_mqtt(identifier)
+    admin_access_service.audit(
+        principal, "device.mqtt_credentials.revoke", "terminal", result["deviceId"], result,
+        request_id(request),
+    )
+    return result
 
 
 @app.post("/api/v1/devices/{device_id}/credentials/rotate", tags=["device-identity"])
@@ -335,13 +402,20 @@ def rotate_credential(
 
 
 @app.get("/api/v1/admin/devices/{identifier}/credentials", tags=["device-identity"])
-def list_credentials(identifier: str, _: AdminAuth) -> dict[str, Any]:
+def list_credentials(identifier: str, _: DevicesRead) -> dict[str, Any]:
     return device_identity_service.list_http(identifier)
 
 
 @app.post("/api/v1/admin/devices/{identifier}/credentials/{credential_id}/revoke", tags=["device-identity"])
-def revoke_credential(identifier: str, credential_id: uuid.UUID, _: AdminAuth) -> dict[str, Any]:
-    return device_identity_service.revoke_http(identifier, credential_id)
+def revoke_credential(
+    identifier: str, credential_id: uuid.UUID, principal: DevicesManage, request: Request
+) -> dict[str, Any]:
+    result = device_identity_service.revoke_http(identifier, credential_id)
+    admin_access_service.audit(
+        principal, "device.http_credential.revoke", "terminal", result["deviceId"],
+        {"credentialId": str(credential_id)}, request_id(request),
+    )
+    return result
 
 
 @app.post("/api/v1/devices/{device_id}/heartbeat")
@@ -531,14 +605,21 @@ async def retry_device_command(outbox_id: uuid.UUID, request: Request, _: Gatewa
 def admin_create_command(
     identifier: str,
     payload: CommandCreateRequest,
-    _: AdminAuth,
+    principal: CommandsExecute,
+    request: Request,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> dict[str, Any]:
-    return command_service.create_admin(identifier, payload, idempotency_key)
+    result = command_service.create_admin(identifier, payload, idempotency_key)
+    admin_access_service.audit(
+        principal, "device.command.create", "terminal", identifier,
+        {"messageId": result["messageId"], "type": payload.type, "duplicate": result["duplicate"]},
+        request_id(request),
+    )
+    return result
 
 
 @app.get("/api/v1/admin/devices/{identifier}/commands/{message_id}", tags=["admin-commands"])
-def admin_get_command(identifier: str, message_id: str, _: AdminAuth) -> dict[str, Any]:
+def admin_get_command(identifier: str, message_id: str, _: DevicesRead) -> dict[str, Any]:
     return command_service.get_admin(identifier, message_id)
 
 
@@ -982,6 +1063,7 @@ def watchdog_scan_once() -> None:
 
 unit_of_work = UnitOfWork(database)
 system_service = SystemService(unit_of_work, SERVICE_VERSION, logger)
+admin_access_service = AdminAccessService(unit_of_work, settings)
 device_identity_service = DeviceIdentityService(
     unit_of_work, settings=settings, provisioner_factory=emqx_provisioner, logger=logger
 )
@@ -1076,7 +1158,7 @@ async def alipay_callback(request: Request) -> str:
 
 
 @app.post("/api/v1/payments/callback/mock", tags=["payments"], include_in_schema=False)
-async def mock_payment_callback(request: Request, _: AdminAuth) -> dict[str, Any]:
+async def mock_payment_callback(request: Request, _: AccessManage) -> dict[str, Any]:
     return payment_application_service.mock_callback(await request.json())
 
 
@@ -1084,10 +1166,17 @@ async def mock_payment_callback(request: Request, _: AdminAuth) -> dict[str, Any
 def create_refund(
     payment_id: uuid.UUID,
     payload: RefundCreateRequest,
-    _: AdminAuth,
+    principal: RefundsManage,
+    request: Request,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> dict[str, Any]:
-    return payment_application_service.refund(payment_id, payload, idempotency_key)
+    result = payment_application_service.refund(payment_id, payload, idempotency_key)
+    admin_access_service.audit(
+        principal, "payment.refund.create", "payment", str(payment_id),
+        {"refundId": result.get("refundId"), "amountMinor": payload.amountMinor, "reason": payload.reason},
+        request_id(request),
+    )
+    return result
 
 
 @app.get("/api/v1/public/orders/{order_id}", tags=["public-orders"])
@@ -1107,28 +1196,36 @@ def cancel_public_order(
 
 
 @app.post("/api/v1/admin/devices", tags=["device-identity"], status_code=201)
-def register_admin_device(payload: AdminDeviceCreateRequest, _: AdminAuth) -> dict[str, Any]:
-    return admin_operations_service.register_device(payload)
+def register_admin_device(
+    payload: AdminDeviceCreateRequest, principal: DevicesManage, request: Request
+) -> dict[str, Any]:
+    result = admin_operations_service.register_device(payload)
+    admin_access_service.audit(
+        principal, "device.register", "terminal", result["deviceId"],
+        {"serialNumber": payload.serialNumber, "storeId": payload.storeId, "duplicate": result["duplicate"]},
+        request_id(request),
+    )
+    return result
 
 
 @app.get("/api/v1/admin/devices/{identifier}")
-def admin_device(identifier: str, _: AdminAuth) -> dict[str, Any]:
+def admin_device(identifier: str, _: DevicesRead) -> dict[str, Any]:
     return admin_operations_service.device(identifier)
 
 
 @app.get("/api/v1/admin/devices")
-def admin_devices(_: AdminAuth) -> dict[str, Any]:
+def admin_devices(_: DevicesRead) -> dict[str, Any]:
     return admin_operations_service.devices()
 
 
 @app.get("/api/v1/admin/devices/{identifier}/inventory", tags=["admin-operations"])
-def admin_device_inventory(identifier: str, _: AdminAuth) -> dict[str, Any]:
+def admin_device_inventory(identifier: str, _: DevicesRead) -> dict[str, Any]:
     return admin_operations_service.inventory(identifier)
 
 
 @app.get("/api/v1/admin/orders", tags=["admin-operations"])
 def admin_orders(
-    _: AdminAuth,
+    _: OrdersRead,
     device_id: str | None = Query(default=None, alias="deviceId"),
     order_status: str | None = Query(default=None, alias="status"),
     limit: int = Query(default=100, ge=1, le=500),
@@ -1138,61 +1235,110 @@ def admin_orders(
     )
 
 
-ADMIN_HTML = """<!doctype html>
-<html lang=\"zh-CN\">
-<head>
-<meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">
-<title>Coffee Cloud · 设备运营台</title>
-<style>
-:root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;color:#29231f;background:#f5f1ec;line-height:1.45}
-*{box-sizing:border-box}body{margin:0}.shell{max-width:1440px;margin:auto;padding:28px 28px 56px}.topbar{display:flex;align-items:center;justify-content:space-between;gap:20px;margin-bottom:28px}.brand{display:flex;align-items:center;gap:14px}.logo{width:44px;height:44px;border-radius:14px;background:#4c2f20;color:#fff;display:grid;place-items:center;font-size:23px;box-shadow:0 8px 20px #4c2f2030}.eyebrow{font-size:12px;letter-spacing:.13em;text-transform:uppercase;color:#9a7255;font-weight:800}.brand h1{font-size:25px;margin:1px 0 0;letter-spacing:-.03em}.session{display:flex;align-items:center;gap:10px}.input,.button{font:inherit;border:1px solid #d8cec4;border-radius:11px;padding:10px 13px;background:#fff;color:inherit}.input:focus{outline:3px solid #c9905d55;border-color:#b67a4b}.button{background:#4c2f20;color:#fff;border-color:#4c2f20;font-weight:700;cursor:pointer}.button.secondary{background:#fff;color:#4c2f20;border-color:#d8cec4}.button.ghost{background:transparent;color:#6b5546;border-color:transparent}.button:disabled{opacity:.55;cursor:not-allowed}.card{background:#fff;border:1px solid #e7ddd4;border-radius:18px;box-shadow:0 12px 32px #5036210d}.login{max-width:520px;margin:12vh auto;padding:34px}.login h2{margin:0 0 8px;font-size:26px}.muted{color:#887b72}.login-row{display:flex;gap:10px;margin-top:22px}.login-row .input{flex:1}.hidden{display:none!important}.dashboard-head{display:flex;justify-content:space-between;align-items:end;gap:20px;margin-bottom:18px}.dashboard-head h2{margin:0;font-size:27px;letter-spacing:-.035em}.refresh-note{font-size:13px;color:#887b72}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:18px}.stat{padding:18px 20px}.stat-label{font-size:13px;color:#887b72}.stat-value{font-size:30px;font-weight:800;margin-top:4px;letter-spacing:-.05em}.stat-value.green{color:#087f5b}.stat-value.red{color:#bd4034}.toolbar{padding:14px;display:flex;gap:10px;align-items:center;margin-bottom:14px}.toolbar .input{min-width:250px}.toolbar select{font:inherit}.toolbar-spacer{flex:1}.table-card{overflow:hidden}.table-scroll{overflow:auto}.devices{width:100%;border-collapse:collapse;min-width:860px}.devices th{text-align:left;font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#95877d;background:#faf8f5;padding:13px 16px;border-bottom:1px solid #eee5dd;white-space:nowrap}.devices td{padding:15px 16px;border-bottom:1px solid #f0e9e3;vertical-align:middle;font-size:14px}.devices tbody tr{cursor:pointer;transition:background .15s}.devices tbody tr:hover,.devices tbody tr.selected{background:#fff8f1}.device-name{font-weight:750;color:#35271f}.device-sub{font-size:12px;color:#998d84;margin-top:2px}.badge{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:5px 9px;font-size:12px;font-weight:750}.badge:before{content:\"\";width:7px;height:7px;border-radius:50%;background:currentColor}.badge.online{color:#087f5b;background:#e8f6ef}.badge.offline{color:#9c5147;background:#fff0ec}.badge.pending{color:#9a6b22;background:#fff5d9}.empty{padding:42px;text-align:center;color:#95877d}.lower{display:grid;grid-template-columns:1.3fr .7fr;gap:18px;margin-top:18px}.detail,.register{padding:22px}.detail h3,.register h3{margin:0 0 16px}.detail-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}.detail-item{background:#faf8f5;border-radius:12px;padding:11px 13px}.detail-item label{display:block;color:#95877d;font-size:12px;margin-bottom:3px}.detail-item strong{font-size:14px;word-break:break-word}.detail pre{background:#28221e;color:#f7eee7;border-radius:12px;padding:14px;overflow:auto;font-size:12px;max-height:180px;margin:14px 0 0}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.form-grid .full{grid-column:1/-1}.form-actions{display:flex;gap:10px;margin-top:13px;align-items:center}.activation{margin-top:15px;background:#fff7df;border:1px solid #eed58f;border-radius:12px;padding:13px;font-size:13px}.activation code{display:block;word-break:break-all;margin:7px 0;font-size:14px;color:#6d451f}.error{color:#b7352d;font-size:13px;margin-top:9px}.ok{color:#087f5b;font-size:13px;margin-top:9px}@media(max-width:900px){.shell{padding:18px}.topbar{align-items:flex-start;flex-direction:column}.session{width:100%}.session .input{flex:1;min-width:0}.stats{grid-template-columns:repeat(2,1fr)}.lower{grid-template-columns:1fr}}@media(max-width:540px){.stats{gap:8px}.stat{padding:14px}.stat-value{font-size:25px}.toolbar{align-items:stretch;flex-direction:column}.toolbar .input{min-width:0}.toolbar-spacer{display:none}.login-row{flex-direction:column}.form-grid,.detail-grid{grid-template-columns:1fr}}
-.stats{grid-template-columns:repeat(5,1fr)}
-</style>
-</head>
-<body>
-<main class=\"shell\">
-  <header class=\"topbar\">
-    <div class=\"brand\"><div class=\"logo\">☕</div><div><div class=\"eyebrow\">Coffee Cloud</div><h1>终端运营台</h1></div></div>
-    <div id=\"session\" class=\"session hidden\"><span id=\"last-refresh\" class=\"refresh-note\"></span><button class=\"button ghost\" onclick=\"logout()\">退出</button></div>
-  </header>
-
-  <section id=\"login\" class=\"card login\">
-    <div class=\"eyebrow\">Admin access</div><h2>登录设备运营台</h2>
-    <p class=\"muted\">登录后查看全部已登记终端。Token 只保存在当前页面内存中，刷新页面后需要重新输入。</p>
-    <div class=\"login-row\"><input id=\"token\" class=\"input\" type=\"password\" autocomplete=\"off\" placeholder=\"管理员 Token\"><button class=\"button\" onclick=\"login()\">登录</button></div>
-    <div id=\"login-error\" class=\"error\"></div>
-  </section>
-
-  <section id=\"dashboard\" class=\"hidden\">
-    <div class=\"dashboard-head\"><div><div class=\"eyebrow\">Fleet overview</div><h2>设备总览</h2></div><div id=\"server-time\" class=\"refresh-note\"></div></div>
-    <div class=\"stats\"><div class=\"card stat\"><div class=\"stat-label\">已登记实例</div><div id=\"total\" class=\"stat-value\">-</div></div><div class=\"card stat\"><div class=\"stat-label\">当前在线</div><div id=\"online\" class=\"stat-value green\">-</div></div><div class=\"card stat\"><div class=\"stat-label\">当前离线</div><div id=\"offline\" class=\"stat-value red\">-</div></div><div class=\"card stat\"><div class=\"stat-label\">从未上线</div><div id=\"never\" class=\"stat-value\">-</div></div><div class=\"card stat\"><div class=\"stat-label\">进行中订单</div><div id=\"active-orders\" class=\"stat-value\">-</div></div></div>
-    <div class=\"card toolbar\"><input id=\"search\" class=\"input\" placeholder=\"搜索设备、门店或实例\" oninput=\"renderTable()\"><select id=\"filter\" class=\"input\" onchange=\"renderTable()\"><option value=\"all\">全部状态</option><option value=\"online\">在线</option><option value=\"offline\">离线</option><option value=\"never\">从未上线</option></select><div class=\"toolbar-spacer\"></div><button class=\"button secondary\" onclick=\"loadDevices()\">刷新</button><button class=\"button\" onclick=\"toggleRegister()\">登记新设备</button></div>
-    <div class=\"card table-card\"><div class=\"table-scroll\"><table class=\"devices\"><thead><tr><th>连接</th><th>设备</th><th>门店 / 实例</th><th>设备状态</th><th>最近心跳</th><th>历史记录</th></tr></thead><tbody id=\"device-rows\"></tbody></table></div></div>
-    <h3 style=\"margin:25px 0 12px\">最近订单</h3><div class=\"card table-card\"><div class=\"table-scroll\"><table class=\"devices\"><thead><tr><th>订单</th><th>设备</th><th>饮品</th><th>状态</th><th>制作进度</th><th>创建时间</th></tr></thead><tbody id=\"order-rows\"></tbody></table></div></div>
-    <div class=\"lower\"><section id=\"detail\" class=\"card detail\"><h3>选择一个设备</h3><p class=\"muted\">点击上方实例查看详细状态、版本和同步记录。</p></section><section id=\"register\" class=\"card register hidden\"><h3>登记新设备</h3><p class=\"muted\">登记后生成一次性激活码，交给对应的本地模拟器使用。</p><div class=\"form-grid\"><input id=\"new-device\" class=\"input\" placeholder=\"deviceId，例如 coffee-bot-003\"><input id=\"new-serial\" class=\"input\" placeholder=\"序列号，例如 003\"><input id=\"new-instance\" class=\"input\" placeholder=\"instanceId，可选\"><input id=\"new-store\" class=\"input\" placeholder=\"storeId，可选\"></div><div class=\"form-actions\"><button class=\"button\" onclick=\"registerDevice()\">登记并生成激活码</button><button class=\"button ghost\" onclick=\"toggleRegister()\">取消</button></div><div id=\"register-message\"></div></section></div>
-  </section>
-</main>
-<script>
-let adminToken='',devices=[],orders=[],selectedId='',refreshTimer=null;
-const el=id=>document.getElementById(id);
-const text=value=>value===null||value===undefined||value===''?'-':String(value);
-const time=value=>value?new Date(value).toLocaleString('zh-CN',{hour12:false}):'-';
-function setMessage(id,message,kind='error'){const node=el(id);node.textContent=message;node.className=kind}
-async function api(path,options={}){const headers={'Accept':'application/json','Authorization':'Bearer '+adminToken,...(options.headers||{})};if(options.body){headers['Content-Type']='application/json'}const response=await fetch(path,{...options,headers});let data={};try{data=await response.json()}catch(_){ }if(!response.ok){throw new Error('HTTP '+response.status+(data.detail?': '+data.detail:''))}return data}
-async function login(){const value=el('token').value.trim();if(!value){setMessage('login-error','请输入管理员 Token');return}adminToken=value;const loaded=await loadDevices();if(!loaded){adminToken='';return}el('login').classList.add('hidden');el('dashboard').classList.remove('hidden');el('session').classList.remove('hidden');el('token').value='';if(refreshTimer)clearInterval(refreshTimer);refreshTimer=setInterval(loadDevices,10000)}
-function logout(){adminToken='';devices=[];selectedId='';if(refreshTimer)clearInterval(refreshTimer);el('dashboard').classList.add('hidden');el('session').classList.add('hidden');el('login').classList.remove('hidden');el('login-error').textContent='';el('token').focus()}
-async function loadDevices(){try{const [data,orderData]=await Promise.all([api('/api/v1/admin/devices'),api('/api/v1/admin/orders?limit=50')]);devices=Array.isArray(data.devices)?data.devices:[];orders=Array.isArray(orderData.orders)?orderData.orders:[];el('server-time').textContent='服务时间：'+time(data.serverTime);el('last-refresh').textContent='每 10 秒自动刷新 · '+new Date().toLocaleTimeString('zh-CN',{hour12:false});el('total').textContent=devices.length;el('online').textContent=devices.filter(d=>d.online).length;el('offline').textContent=devices.filter(d=>!d.online&&d.hasEverConnected).length;el('never').textContent=devices.filter(d=>!d.hasEverConnected).length;el('active-orders').textContent=orders.filter(o=>['QUEUED','DISPATCHED','ACCEPTED','MAKING'].includes(o.status)).length;renderTable();renderOrders();if(selectedId){const selected=devices.find(d=>d.deviceId===selectedId);if(selected)renderDetail(selected)}return true}catch(error){if(adminToken)setMessage('login-error','加载失败：'+error.message);return false}}
-function renderOrders(){const rows=el('order-rows');rows.replaceChildren();if(!orders.length){const row=document.createElement('tr');const cell=document.createElement('td');cell.colSpan=6;cell.className='empty';cell.textContent='还没有扫码订单';row.append(cell);rows.append(row);return}for(const order of orders){const row=document.createElement('tr');for(const value of [order.orderNo,order.deviceId,order.productName,order.status,Math.round((order.progress||0)*100)+'% '+text(order.currentStepName),time(order.createdAt)]){const cell=document.createElement('td');cell.textContent=text(value);row.append(cell)}rows.append(row)}}
-function renderTable(){const query=el('search').value.trim().toLowerCase();const filter=el('filter').value;const rows=el('device-rows');rows.replaceChildren();const filtered=devices.filter(device=>{const hay=[device.deviceId,device.serialNumber,device.instanceId,device.storeId].join(' ').toLowerCase();const matches=!query||hay.includes(query);const status=filter==='online'?device.online:filter==='offline'?(!device.online&&device.hasEverConnected):filter==='never'?!device.hasEverConnected:true;return matches&&status});if(!filtered.length){const row=document.createElement('tr');const cell=document.createElement('td');cell.colSpan=6;cell.className='empty';cell.textContent=devices.length?'没有符合筛选条件的设备':'还没有登记设备';row.append(cell);rows.append(row);return}for(const device of filtered){const row=document.createElement('tr');if(device.deviceId===selectedId)row.className='selected';row.onclick=()=>selectDevice(device.deviceId);const status=document.createElement('td');const badge=document.createElement('span');badge.className='badge '+(device.online?'online':device.hasEverConnected?'offline':'pending');badge.textContent=device.online?'在线':device.hasEverConnected?'离线':'待激活';status.append(badge);const identity=document.createElement('td');identity.innerHTML='<div class=\"device-name\"></div><div class=\"device-sub\"></div>';identity.children[0].textContent=device.deviceId;identity.children[1].textContent='序列号 '+text(device.serialNumber);const location=document.createElement('td');location.innerHTML='<div></div><div class=\"device-sub\"></div>';location.children[0].textContent=text(device.storeId);location.children[1].textContent=text(device.instanceId);const state=document.createElement('td');const reported=device.reportedStatus||{};state.textContent=text(reported.deviceStatus||device.lifecycleStatus);const heartbeat=document.createElement('td');heartbeat.textContent=time(device.lastHeartbeatAt);const history=document.createElement('td');history.innerHTML='<div></div><div class=\"device-sub\"></div>';history.children[0].textContent=device.hasEverConnected?'最近上线 '+time(device.lastConnectedAt):'登记于 '+time(device.registeredAt);history.children[1].textContent='心跳 '+device.heartbeatCount+' · 事件 '+device.eventCount;row.append(status,identity,location,state,heartbeat,history);rows.append(row)}}
-function selectDevice(deviceId){selectedId=deviceId;const device=devices.find(item=>item.deviceId===deviceId);if(device){renderTable();renderDetail(device)}}
-async function renderDetail(device){const detail=el('detail');detail.replaceChildren();const title=document.createElement('h3');title.textContent=device.deviceId+' · '+text(device.storeId);detail.append(title);const grid=document.createElement('div');grid.className='detail-grid';const fields=[['连接',device.online?'在线':device.hasEverConnected?'离线':'待激活'],['生命周期',device.lifecycleStatus],['实例',device.instanceId],['序列号',device.serialNumber],['软件版本',device.softwareVersion],['最近心跳',time(device.lastHeartbeatAt)],['进行中订单',device.activeOrderCount],['消息统计','心跳 '+device.heartbeatCount+' · 事件 '+device.eventCount+' · 命令 '+device.commandCount]];for(const [label,value] of fields){const item=document.createElement('div');item.className='detail-item';const key=document.createElement('label');key.textContent=label;const val=document.createElement('strong');val.textContent=text(value);item.append(key,val);grid.append(item)}detail.append(grid);try{const inventory=await api('/api/v1/admin/devices/'+encodeURIComponent(device.deviceId)+'/inventory');if(selectedId!==device.deviceId)return;const heading=document.createElement('h3');heading.textContent='实时物料';heading.style.marginTop='22px';detail.append(heading);const pre=document.createElement('pre');pre.textContent=(inventory.materials||[]).map(m=>m.name+' · '+m.status+' · 可用 '+m.available+' / '+m.capacity+' '+m.unit).join('\\n')||'尚未收到物料快照';detail.append(pre)}catch(error){const note=document.createElement('p');note.className='error';note.textContent='物料读取失败：'+error.message;detail.append(note)}}
-function toggleRegister(){el('register').classList.toggle('hidden');if(!el('register').classList.contains('hidden'))el('new-device').focus()}
-async function registerDevice(){const deviceId=el('new-device').value.trim(),serialNumber=el('new-serial').value.trim();if(!deviceId||!serialNumber){setMessage('register-message','deviceId 和序列号必填');return}try{const registered=await api('/api/v1/admin/devices',{method:'POST',body:JSON.stringify({deviceId,serialNumber,instanceId:el('new-instance').value.trim()||null,storeId:el('new-store').value.trim()||null})});const activation=await api('/api/v1/admin/devices/'+encodeURIComponent(deviceId)+'/activation-codes',{method:'POST',body:'{}'});setMessage('register-message','设备已登记。激活码只显示这一次，请复制到安全的临时文件。','ok');const box=document.createElement('div');box.className='activation';const label=document.createElement('strong');label.textContent='一次性激活码（'+time(activation.expiresAt)+' 过期）';const code=document.createElement('code');code.textContent=activation.activationCode;const copy=document.createElement('button');copy.className='button secondary';copy.textContent='复制激活码';copy.onclick=()=>navigator.clipboard?.writeText(activation.activationCode);box.append(label,code,copy);el('register-message').append(box);await loadDevices();selectDevice(deviceId)}catch(error){setMessage('register-message','操作失败：'+error.message)}}
-el('token').addEventListener('keydown',event=>{if(event.key==='Enter')login()});
-</script>
-</body></html>"""
+@app.get("/api/v1/admin/session", tags=["admin-access"])
+def admin_session(principal: AdminAuth) -> dict[str, Any]:
+    return admin_access_service.session(principal)
 
 
-@app.get("/admin", response_class=HTMLResponse)
-def admin_page() -> str:
-    return ADMIN_HTML
+@app.get("/api/v1/admin/dashboard", tags=["admin-operations"])
+def admin_dashboard(_: DashboardRead) -> dict[str, Any]:
+    return admin_access_service.dashboard()
+
+
+@app.get("/api/v1/admin/devices/{identifier}/capabilities", tags=["admin-operations"])
+def admin_device_capabilities(identifier: str, _: DevicesRead) -> dict[str, Any]:
+    return admin_operations_service.capabilities(identifier)
+
+
+@app.patch("/api/v1/admin/devices/{identifier}/lifecycle", tags=["admin-operations"])
+def admin_update_device_lifecycle(
+    identifier: str, payload: DeviceLifecycleUpdateRequest,
+    principal: DevicesManage, request: Request,
+) -> dict[str, Any]:
+    result = admin_operations_service.update_lifecycle(identifier, payload.status)
+    admin_access_service.audit(
+        principal, "device.lifecycle.update", "terminal", result["deviceId"],
+        {"status": payload.status, "reason": payload.reason}, request_id(request),
+    )
+    return result
+
+
+@app.get("/api/v1/admin/operators", tags=["admin-access"])
+def admin_operators(_: AccessRead) -> dict[str, Any]:
+    return admin_access_service.list_operators()
+
+
+@app.post("/api/v1/admin/operators", tags=["admin-access"], status_code=201)
+def admin_create_operator(
+    payload: AdminOperatorCreateRequest, principal: AccessManage, request: Request,
+) -> dict[str, Any]:
+    result = admin_access_service.create_operator(payload.displayName, payload.role)
+    admin_access_service.audit(
+        principal, "admin.operator.create", "admin_operator", result["operatorId"],
+        {"displayName": payload.displayName, "role": payload.role}, request_id(request),
+    )
+    return result
+
+
+@app.patch("/api/v1/admin/operators/{operator_id}", tags=["admin-access"])
+def admin_update_operator(
+    operator_id: uuid.UUID, payload: AdminOperatorUpdateRequest,
+    principal: AccessManage, request: Request,
+) -> dict[str, Any]:
+    result = admin_access_service.update_operator(
+        operator_id, display_name=payload.displayName, role=payload.role, status=payload.status
+    )
+    admin_access_service.audit(
+        principal, "admin.operator.update", "admin_operator", str(operator_id),
+        payload.model_dump(mode="json", exclude_none=True), request_id(request),
+    )
+    return result
+
+
+@app.get("/api/v1/admin/operators/{operator_id}/tokens", tags=["admin-access"])
+def admin_operator_tokens(operator_id: uuid.UUID, _: AccessRead) -> dict[str, Any]:
+    return admin_access_service.list_tokens(operator_id)
+
+
+@app.post("/api/v1/admin/operators/{operator_id}/tokens", tags=["admin-access"], status_code=201)
+def admin_create_operator_token(
+    operator_id: uuid.UUID, payload: AdminTokenCreateRequest,
+    principal: AccessManage, request: Request,
+) -> dict[str, Any]:
+    result = admin_access_service.create_token(operator_id, payload.label, payload.expiresAt)
+    admin_access_service.audit(
+        principal, "admin.token.create", "admin_operator", str(operator_id),
+        {"tokenId": result["tokenId"], "label": payload.label, "expiresAt": result["expiresAt"]},
+        request_id(request),
+    )
+    return result
+
+
+@app.delete("/api/v1/admin/operators/{operator_id}/tokens/{token_id}", tags=["admin-access"])
+def admin_revoke_operator_token(
+    operator_id: uuid.UUID, token_id: uuid.UUID,
+    principal: AccessManage, request: Request,
+) -> dict[str, Any]:
+    result = admin_access_service.revoke_token(operator_id, token_id)
+    admin_access_service.audit(
+        principal, "admin.token.revoke", "admin_operator", str(operator_id),
+        {"tokenId": str(token_id)}, request_id(request),
+    )
+    return result
+
+
+@app.get("/api/v1/admin/audit-logs", tags=["admin-audit"])
+def admin_audit_logs(
+    _: AuditRead,
+    limit: int = Query(default=100, ge=1, le=500),
+    action: str | None = Query(default=None, max_length=160),
+    resource_type: str | None = Query(default=None, max_length=80),
+) -> dict[str, Any]:
+    return admin_access_service.audit_logs(
+        limit=limit, action=action, resource_type=resource_type
+    )
+
+
+@app.get("/admin", response_class=FileResponse, include_in_schema=False)
+def admin_page() -> Path:
+    return PUBLIC_DIR / "admin.html"

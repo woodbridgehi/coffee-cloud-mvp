@@ -32,6 +32,7 @@ Service 使用 `UnitOfWork.transaction()` 开启事务，并在事务内创建�
 - `CommandService` → `CommandRepository`、`TerminalRepository`
 - `MqttGatewayService` → `MqttGatewayRepository`，并将已去重消息交给设备消息 Service
 - `AdminOperationsService` → `TerminalRepository`、`OrderRepository`
+- `AdminAccessService` → `AdminAccessRepository`，负责运营员、角色权限、可撤销令牌与审计日志
 
 外部支付和 EMQX 管理 API 由 Service 调用。数据库事务不能跨越耗时网络调用：先保存待处理状态并提交，调用外部系统，再在新事务中保存结果。这样可避免长事务和数据库行锁长期占用。
 
@@ -42,6 +43,7 @@ Service 使用 `UnitOfWork.transaction()` 开启事务，并在事务内创建�
 - Repository 不自行开启事务，因此一个业务用例可以原子更新多张表。
 - MQTT Inbox、Command Outbox、Payment Callback Inbox 和 Business Outbox 的唯一键仍是幂等性的最终保护。
 - Service 抛出 `ServiceError`，统一由 HTTP 层转换为响应；Repository 不依赖 FastAPI。
+- `ADMIN_TOKEN` 只作为应急 OWNER；日常运营使用数据库中仅保存摘要的独立运营 Token。
 
 ## 尚待迁移的后台适配器
 

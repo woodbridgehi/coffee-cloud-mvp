@@ -1,5 +1,8 @@
 import os
+from pathlib import Path
 
+
+ROOT = Path(__file__).resolve().parents[1]
 
 os.environ.setdefault("DATABASE_URL", "postgresql://unused:unused@127.0.0.1:1/unused")
 os.environ.setdefault("DEVICE_TOKEN", "test-device-token-at-least-24-characters")
@@ -26,6 +29,13 @@ def test_openapi_exposes_identity_and_formal_command_contracts() -> None:
     assert "/api/v1/payments/{payment_id}" in paths
     assert "/api/v1/payments/callback/alipay" in paths
     assert "/api/v1/payments/{payment_id}/refund" in paths
+    assert "/api/v1/admin/session" in paths
+    assert "/api/v1/admin/dashboard" in paths
+    assert "/api/v1/admin/operators" in paths
+    assert "/api/v1/admin/operators/{operator_id}/tokens" in paths
+    assert "/api/v1/admin/audit-logs" in paths
+    assert "/api/v1/admin/devices/{identifier}/lifecycle" in paths
+    assert "/api/v1/admin/devices/{identifier}/capabilities" in paths
     schemes = schema["components"]["securitySchemes"]
     assert schemes["deviceBearer"]["scheme"] == "bearer"
     assert schemes["adminBearer"]["scheme"] == "bearer"
@@ -49,9 +59,14 @@ def test_real_terminal_event_task_id_is_read_from_nested_payload() -> None:
 
 
 def test_admin_page_is_a_fleet_dashboard() -> None:
-    from app.main import ADMIN_HTML
-
-    assert "设备总览" in ADMIN_HTML
-    assert "登记新设备" in ADMIN_HTML
-    assert "/api/v1/admin/devices" in ADMIN_HTML
-    assert "setInterval(loadDevices,10000)" in ADMIN_HTML
+    html = (ROOT / "public" / "admin.html").read_text(encoding="utf-8")
+    script = (ROOT / "public" / "admin.js").read_text(encoding="utf-8")
+    styles = (ROOT / "public" / "admin.css").read_text(encoding="utf-8")
+    assert '/assets/admin.css' in html
+    assert '/assets/admin.js' in html
+    assert "运营总览" in script
+    assert "登记设备" in script
+    assert "/api/v1/admin/devices" in script
+    assert "REFRESH_INTERVAL_MS" in script
+    assert "/api/v1/admin/session" in script
+    assert "sidebar" in styles

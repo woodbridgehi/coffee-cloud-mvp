@@ -91,6 +91,31 @@ class AdminOperationsService:
             "receivedAt": iso(row["received_at"]), **row["payload_json"],
         }
 
+    def capabilities(self, identifier: str) -> dict[str, Any]:
+        with self.uow.transaction() as connection:
+            terminals = TerminalRepository(connection)
+            terminal = terminals.find(identifier)
+            if terminal is None:
+                raise ServiceError(404, "device not found")
+            row = terminals.snapshot_row(terminal["id"], "capabilities")
+        if not row:
+            return {"deviceId": terminal["device_id"], "available": False, "recipes": []}
+        return {
+            "deviceId": terminal["device_id"], "available": True,
+            "receivedAt": iso(row["received_at"]), **row["payload_json"],
+        }
+
+    def update_lifecycle(self, identifier: str, status: str) -> dict[str, Any]:
+        with self.uow.transaction() as connection:
+            terminals = TerminalRepository(connection)
+            terminal = terminals.find(identifier, for_update=True)
+            if terminal is None:
+                raise ServiceError(404, "device not found")
+            if terminal["lifecycle_status"] == "PENDING":
+                raise ServiceError(409, "pending device must complete activation first")
+            row = terminals.update_lifecycle(terminal["id"], status)
+        return self.device_payload(row)
+
     def orders(
         self, *, device_id: str | None, order_status: str | None, limit: int
     ) -> dict[str, Any]:
@@ -104,9 +129,13 @@ class AdminOperationsService:
                     "orderId": str(row["id"]), "orderNo": row["order_no"],
                     "deviceId": row["device_id"], "storeId": row["store_id"],
                     "status": row["status"], "productName": row["product_name"],
-                    "paymentMode": row["payment_mode"], "productionStatus": row["production_status"],
+                    "paymentMode": row["payment_mode"], "paymentStatus": row["payment_status"],
+                    "totalAmountMinor": row["total_amount_minor"], "currency": row["currency"],
+                    "productionStatus": row["production_status"],
                     "progress": row["progress"], "currentStepName": row["current_step_name"],
-                    "failureCode": row["failure_code"], "createdAt": iso(row["created_at"]),
+                    "failureCode": row["failure_code"], "failureMessage": row["failure_message"],
+                    "manualReviewRequired": bool(row["manual_review_required"]),
+                    "holdReason": row["hold_reason"], "createdAt": iso(row["created_at"]),
                     "updatedAt": iso(row["updated_at"]),
                 }
                 for row in rows

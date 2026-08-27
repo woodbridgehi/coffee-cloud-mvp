@@ -66,3 +66,9 @@ class TerminalRepository:
                  values(%s,%s,%s,%s,'PENDING_ACTIVATION') returning *""",
             (device_id, serial_number, instance_id, store_id),
         ).fetchone()
+
+    def update_lifecycle(self, terminal_id: int, status: str) -> dict[str, Any]:
+        return self.connection.execute(
+            "update terminal set lifecycle_status=%s,updated_at=now() where id=%s returning *",
+            (status, terminal_id),
+        ).fetchone()

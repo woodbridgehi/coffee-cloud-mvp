@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#241a12">
+  <title>Coffee Cloud · 设备运营台</title>
+  <link rel="stylesheet" href="/assets/admin.css?v=20260827">
+</head>
+<body class="admin-body">
+
+  <!-- 登录层 -->
+  <section id="login-view" class="login-wrap" aria-label="登录">
+    <div class="login-card">
+      <div class="login-brand">
+        <span class="login-mark" aria-hidden="true">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
+            <path d="M4 9h12v6.5a4.5 4.5 0 0 1-4.5 4.5h-3A4.5 4.5 0 0 1 4 15.5V9Z" fill="currentColor" opacity=".92"/>
+            <path d="M16 10.5h1.8a2.7 2.7 0 0 1 0 5.4H16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            <path d="M7.5 6c0-1.2 1-1.6 1-2.8M11 6c0-1.2 1-1.6 1-2.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" opacity=".7"/>
+          </svg>
+        </span>
+        <div>
+          <div class="login-eyebrow">Coffee Cloud</div>
+          <h1>设备运营台</h1>
+        </div>
+      </div>
+      <p class="login-note">使用运营 Token 登录。Token 只保存在当前页面内存中，刷新或关闭页面后即失效，不会写入浏览器存储。</p>
+      <form id="login-form" class="login-form" autocomplete="off">
+        <label class="field">
+          <span class="field-label">运营 Token</span>
+          <input id="login-token" class="input" type="password" placeholder="粘贴管理员或运营员 Token" autocomplete="off" spellcheck="false" required>
+        </label>
+        <button id="login-submit" class="btn primary block" type="submit">登录</button>
+        <p id="login-error" class="form-error" role="alert"></p>
+      </form>
+    </div>
+  </section>
+
+  <!-- 应用外壳 -->
+  <div id="shell" class="shell hidden">
+    <aside class="sidebar">
+      <div class="side-brand">
+        <span class="side-mark" aria-hidden="true">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+            <path d="M4 9h12v6.5a4.5 4.5 0 0 1-4.5 4.5h-3A4.5 4.5 0 0 1 4 15.5V9Z" fill="currentColor" opacity=".92"/>
+            <path d="M16 10.5h1.8a2.7 2.7 0 0 1 0 5.4H16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            <path d="M7.5 6c0-1.2 1-1.6 1-2.8M11 6c0-1.2 1-1.6 1-2.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" opacity=".7"/>
+          </svg>
+        </span>
+        <div>
+          <div class="side-eyebrow">Coffee Cloud</div>
+          <div class="side-title">设备运营台</div>
+        </div>
+      </div>
+      <nav id="side-nav" class="side-nav" aria-label="主导航"></nav>
+      <div class="side-foot">
+        <div id="who" class="who"></div>
+        <button id="logout-btn" class="btn ghost small" type="button">退出登录</button>
+      </div>
+    </aside>
+
+    <div class="main-col">
+      <header class="topbar">
+        <div class="topbar-title">
+          <h2 id="view-title">总览</h2>
+          <p id="view-sub"></p>
+        </div>
+        <div class="topbar-side">
+          <span id="refresh-note" class="refresh-note"></span>
+          <button id="refresh-btn" class="btn secondary small" type="button">立即刷新</button>
+        </div>
+      </header>
+      <main id="workspace" class="workspace" tabindex="-1"></main>
+    </div>
+  </div>
+
+  <div id="toast-root" class="toast-root" role="status" aria-live="polite"></div>
+  <div id="modal-root" class="modal-root hidden" aria-hidden="true"></div>
+
+  <script src="/assets/admin.js?v=20260827" defer></script>
+</body>
+</html>

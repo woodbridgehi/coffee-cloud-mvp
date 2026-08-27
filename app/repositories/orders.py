@@ -132,7 +132,7 @@ class OrderRepository:
         params.append(limit)
         return self.connection.execute(
             f"""select o.*,t.device_id,t.store_id,j.task_id,j.status as production_status,
-                       j.progress,j.current_step_name
+                       j.progress,j.current_step_name,j.manual_review_required,j.hold_reason
                   from sales_order o join terminal t on t.id=o.terminal_id
                   left join production_job j on j.order_id=o.id
                   {where} order by o.created_at desc limit %s""",
