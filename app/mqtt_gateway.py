@@ -27,6 +27,8 @@ MQTT_PASSWORD = os.environ["MQTT_PASSWORD"]
 CLAIM_SECONDS = float(os.getenv("MQTT_COMMAND_CLAIM_SECONDS", "1"))
 QUEUE_CAPACITY = max(100, int(os.getenv("MQTT_GATEWAY_QUEUE_CAPACITY", "10000")))
 WORKER_COUNT = max(1, min(32, int(os.getenv("MQTT_GATEWAY_WORKERS", "4"))))
+TELEMETRY_BATCH_SIZE = max(1, min(500, int(os.getenv("MQTT_TELEMETRY_BATCH_SIZE", "100"))))
+TELEMETRY_BATCH_WAIT_SECONDS = max(0.01, min(1.0, float(os.getenv("MQTT_TELEMETRY_BATCH_WAIT_SECONDS", "0.1"))))
 
 
 class GatewayApiClient:
@@ -112,16 +114,68 @@ class Gateway:
         if message.qos:
             self.client.ack(message.mid, message.qos)
 
-    def process(self, message: mqtt.MQTTMessage) -> None:
+    def _message_body(self, message: mqtt.MQTTMessage) -> dict[str, Any]:
         try:
             envelope = json.loads(message.payload)
         except json.JSONDecodeError as exc:
             raise ValueError("MQTT payload is not valid JSON") from exc
         if not isinstance(envelope, dict):
             raise ValueError("MQTT payload must be an object")
-        self.api_client.request(
-            "POST", "/api/v1/internal/mqtt/messages", {"topic": message.topic, "envelope": envelope}
-        )
+        return {"topic": message.topic, "envelope": envelope}
+
+    @staticmethod
+    def _is_batchable_telemetry(body: dict[str, Any]) -> bool:
+        topic = str(body["topic"])
+        envelope = body["envelope"]
+        if topic.endswith("/presence") or topic.endswith("/state") or envelope.get("type") == "heartbeat":
+            return True
+        payload = envelope.get("payload")
+        return envelope.get("type") == "event" and isinstance(payload, dict) and payload.get("type") in {
+            "task.progress", "step.started", "step.completed",
+        }
+
+    def _process_body(self, body: dict[str, Any]) -> None:
+        self.api_client.request("POST", "/api/v1/internal/mqtt/messages", body)
+
+    def _process_batch(self, bodies: list[dict[str, Any]]) -> None:
+        response = self.api_client.request("POST", "/api/v1/internal/mqtt/messages/batch", {"messages": bodies})
+        accepted = response.get("accepted")
+        rejected = response.get("rejected")
+        if not isinstance(accepted, list) or not isinstance(rejected, list):
+            raise ConnectionError("cloud API returned an invalid telemetry batch response")
+        settled = {item for item in accepted if isinstance(item, int)}
+        settled.update(item.get("index") for item in rejected if isinstance(item, dict) and isinstance(item.get("index"), int))
+        if settled != set(range(len(bodies))):
+            raise ConnectionError("cloud API did not settle every telemetry batch message")
+
+    def _retry(
+        self, inbox: queue.Queue[tuple[mqtt.MQTTMessage, int]], items: list[tuple[mqtt.MQTTMessage, int]],
+        worker_id: int, exc: Exception,
+    ) -> None:
+        attempt = max(item[1] for item in items)
+        delay = min(30.0, 2 ** min(attempt, 5))
+        log.warning("MQTT uplink retry count=%s in %.1fs worker=%s: %s", len(items), delay, worker_id, exc)
+        if not self.stop_event.wait(delay):
+            for message, item_attempt in items:
+                try:
+                    inbox.put((message, item_attempt + 1), timeout=1)
+                except queue.Full:
+                    log.error("MQTT gateway retry queue full; disconnecting")
+                    self.client.disconnect()
+                    return
+
+    def _process_one(
+        self, inbox: queue.Queue[tuple[mqtt.MQTTMessage, int]], message: mqtt.MQTTMessage, attempt: int,
+        worker_id: int, body: dict[str, Any] | None = None,
+    ) -> None:
+        try:
+            self._process_body(body or self._message_body(message))
+            self.ack(message)
+        except ValueError as exc:
+            log.error("non-retryable MQTT uplink rejected topic=%s: %s", message.topic, exc)
+            self.ack(message)
+        except (ConnectionError, OSError) as exc:
+            self._retry(inbox, [(message, attempt)], worker_id, exc)
 
     def _worker_loop(self, inbox: queue.Queue[tuple[mqtt.MQTTMessage, int]], worker_id: int) -> None:
         log.info("MQTT uplink worker started id=%s", worker_id)
@@ -132,20 +186,55 @@ class Gateway:
                 continue
             try:
                 try:
-                    self.process(message)
-                    self.ack(message)
+                    body = self._message_body(message)
                 except ValueError as exc:
                     log.error("non-retryable MQTT uplink rejected topic=%s: %s", message.topic, exc)
                     self.ack(message)
+                    continue
+                if not self._is_batchable_telemetry(body):
+                    self._process_one(inbox, message, attempt, worker_id, body)
+                    continue
+
+                batch = [(message, attempt, body)]
+                deadline = time.monotonic() + TELEMETRY_BATCH_WAIT_SECONDS
+                deferred: tuple[mqtt.MQTTMessage, int, dict[str, Any]] | None = None
+                while len(batch) < TELEMETRY_BATCH_SIZE:
+                    try:
+                        next_message, next_attempt = inbox.get(timeout=max(0.0, deadline - time.monotonic()))
+                    except queue.Empty:
+                        break
+                    try:
+                        next_body = self._message_body(next_message)
+                    except ValueError as exc:
+                        log.error("non-retryable MQTT uplink rejected topic=%s: %s", next_message.topic, exc)
+                        self.ack(next_message)
+                        inbox.task_done()
+                        continue
+                    if not self._is_batchable_telemetry(next_body):
+                        deferred = (next_message, next_attempt, next_body)
+                        break
+                    batch.append((next_message, next_attempt, next_body))
+                try:
+                    self._process_batch([item[2] for item in batch])
+                    for batch_message, _, _ in batch:
+                        self.ack(batch_message)
+                except ValueError as exc:
+                    log.error("non-retryable MQTT telemetry batch rejected: %s", exc)
+                    for batch_message, _, _ in batch:
+                        self.ack(batch_message)
                 except (ConnectionError, OSError) as exc:
-                    delay = min(30.0, 2 ** min(attempt, 5))
-                    log.warning("MQTT uplink retry in %.1fs worker=%s: %s", delay, worker_id, exc)
-                    if not self.stop_event.wait(delay):
-                        try:
-                            inbox.put((message, attempt + 1), timeout=1)
-                        except queue.Full:
-                            log.error("MQTT gateway retry queue full; disconnecting")
-                            self.client.disconnect()
+                    self._retry(inbox, [(batch_message, batch_attempt) for batch_message, batch_attempt, _ in batch], worker_id, exc)
+                finally:
+                    # The outer finally settles the first queue item; these are
+                    # the extra items drained into this micro-batch.
+                    for _ in batch[1:]:
+                        inbox.task_done()
+                if deferred:
+                    deferred_message, deferred_attempt, deferred_body = deferred
+                    try:
+                        self._process_one(inbox, deferred_message, deferred_attempt, worker_id, deferred_body)
+                    finally:
+                        inbox.task_done()
             finally:
                 inbox.task_done()
 

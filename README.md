@@ -245,7 +245,9 @@ curl http://127.0.0.1:8788/health
 
 ## 9. MQTT 5.0 接入网关
 
-`coffee-mqtt-gateway` 是无单设备配置的独立进程，不承载扫码 Web/API，也不复制订单状态机。一个实例订阅所有设备上行 Topic：心跳、presence、state 及制作进度默认先写入项目专用 Redis 热状态层，并按批量合并刷新 PostgreSQL 的最新快照；设备端对普通进度采用“5% 或 5 秒”节流，但任务/步骤生命周期、命令结果和订单事件仍进入持久 `mqtt_inbox` 与领域状态机。设置 `TELEMETRY_HISTORY_MODE=audit` 可额外保留遥测历史。下行从 `command_outbox` 领取带租约的命令，Broker PUBACK 后再标记 `PUBLISHED`。QoS 1 上行启用 manual ACK，进程崩溃时由持久 MQTT session 重投。
+`coffee-mqtt-gateway` 是无单设备配置的独立进程，不承载扫码 Web/API，也不复制订单状态机。一个实例订阅所有设备上行 Topic：心跳、presence、state 及制作进度默认先写入项目专用 Redis 热状态层，并按批量合并刷新 PostgreSQL 的最新快照；网关会将这类可覆盖遥测按最多 100 条或 100ms 聚成一个 HTTP 内部请求。订单、任务/步骤生命周期、命令结果和订单事件绕过微批，立即进入持久 `mqtt_inbox` 与领域状态机。设备端对普通进度采用“5% 或 5 秒”节流；设置 `TELEMETRY_HISTORY_MODE=audit` 可额外保留遥测历史。下行从 `command_outbox` 领取带租约的命令，Broker PUBACK 后再标记 `PUBLISHED`。QoS 1 上行启用 manual ACK，进程崩溃时由持久 MQTT session 重投。
+
+`coffee-cloud-mvp` 的两个 Uvicorn worker 现在只处理 API 请求；`coffee-domain-worker` 是唯一的后台进程，负责离线扫描、Redis 遥测落库、领域 outbox、订单派发、支付对账、退款和看门狗。这样扩展 API 并发时不会重复启动这些轮询任务。
 
 `coffee-telemetry-redis` 只绑定 VPS 回环地址的 6380 端口，保存在线 TTL、设备最新状态和最新制作进度；Redis 不参与订单、支付或命令事实判定，缓存不可用时 MQTT 接入自动回退为 PostgreSQL 更新。
 

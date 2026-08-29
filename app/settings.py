@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     telemetry_redis_url: str | None = Field(default=None, alias="TELEMETRY_REDIS_URL")
     telemetry_online_ttl_seconds: int = Field(default=60, alias="TELEMETRY_ONLINE_TTL_SECONDS", ge=10, le=3600)
     telemetry_flush_batch_size: int = Field(default=500, alias="TELEMETRY_FLUSH_BATCH_SIZE", ge=10, le=5000)
+    run_background_workers: bool = Field(default=True, alias="RUN_BACKGROUND_WORKERS")
     device_id: str = Field(default="coffee-bot-002", alias="DEVICE_ID")
     device_serial_number: str = Field(default="002", alias="DEVICE_SERIAL_NUMBER")
     device_instance_id: str = Field(default="instance-coffee-bot-002", alias="DEVICE_INSTANCE_ID")

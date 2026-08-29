@@ -166,17 +166,21 @@ domain_worker = DomainWorker()
 async def lifespan(_: FastAPI):
     database.initialize()
     telemetry_cache.start()
-    device_identity_service.bootstrap_device()
-    background_worker_service.reconcile_stored_command_events()
-    background_worker_service.reconcile_stored_order_events()
-    offline_monitor.scan_once()
-    offline_monitor.start()
-    domain_worker.start()
+    background_started = False
+    if settings.run_background_workers:
+        device_identity_service.bootstrap_device()
+        background_worker_service.reconcile_stored_command_events()
+        background_worker_service.reconcile_stored_order_events()
+        offline_monitor.scan_once()
+        offline_monitor.start()
+        domain_worker.start()
+        background_started = True
     try:
         yield
     finally:
-        domain_worker.stop()
-        offline_monitor.stop()
+        if background_started:
+            domain_worker.stop()
+            offline_monitor.stop()
         telemetry_cache.close()
         database.close()
 
@@ -460,6 +464,28 @@ def command_result(
 @app.post("/api/v1/internal/mqtt/messages", tags=["device-platform"], include_in_schema=False)
 async def ingest_mqtt_message(request: Request, _: GatewayAuth) -> dict[str, Any]:
     return mqtt_gateway_service.ingest(await request.json())
+
+
+@app.post("/api/v1/internal/mqtt/messages/batch", tags=["device-platform"], include_in_schema=False)
+async def ingest_mqtt_message_batch(request: Request, _: GatewayAuth) -> dict[str, Any]:
+    """Accept a small telemetry batch while preserving per-message rejection details."""
+    body = await request.json()
+    messages = body.get("messages") if isinstance(body, dict) else None
+    if not isinstance(messages, list) or not messages or len(messages) > 500:
+        raise HTTPException(status_code=422, detail="messages must contain 1 to 500 MQTT messages")
+
+    accepted: list[int] = []
+    rejected: list[dict[str, Any]] = []
+    for index, message in enumerate(messages):
+        if not isinstance(message, dict):
+            rejected.append({"index": index, "status": 422, "detail": "message must be an object"})
+            continue
+        try:
+            mqtt_gateway_service.ingest(message)
+            accepted.append(index)
+        except ServiceError as exc:
+            rejected.append({"index": index, "status": exc.status_code, "detail": exc.detail})
+    return {"accepted": accepted, "rejected": rejected}
 
 
 @app.get("/api/v1/internal/device-commands/claim", tags=["device-platform"], include_in_schema=False)
