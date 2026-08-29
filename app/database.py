@@ -506,6 +506,34 @@ MIGRATIONS: tuple[tuple[int, str, str], ...] = (
             on production_job(terminal_id)
             where status in ('DISPATCHED','ACCEPTED','EXECUTING','HOLD','UNKNOWN');
     """),
+    (9, "transactional-order-update-notifications", """
+        create or replace function coffee_notify_order_update() returns trigger
+        language plpgsql as $$
+        declare order_identifier uuid;
+        begin
+            if tg_table_name = 'sales_order' then
+                order_identifier := new.id;
+            else
+                order_identifier := new.order_id;
+            end if;
+            perform pg_notify('coffee_order_updates', order_identifier::text);
+            return new;
+        end;
+        $$;
+
+        drop trigger if exists notify_sales_order_update on sales_order;
+        create trigger notify_sales_order_update after insert or update on sales_order
+            for each row execute function coffee_notify_order_update();
+        drop trigger if exists notify_production_job_update on production_job;
+        create trigger notify_production_job_update after insert or update on production_job
+            for each row execute function coffee_notify_order_update();
+        drop trigger if exists notify_payment_update on payment;
+        create trigger notify_payment_update after insert or update on payment
+            for each row execute function coffee_notify_order_update();
+        drop trigger if exists notify_order_transition_update on order_transition;
+        create trigger notify_order_transition_update after insert on order_transition
+            for each row execute function coffee_notify_order_update();
+    """),
 )
 
 
@@ -535,9 +563,14 @@ class Database:
         with self.pool.connection() as connection:
             yield connection
 
-    def initialize(self) -> None:
+    def initialize(self, *, run_migrations: bool = True) -> None:
         self.pool.open(wait=True)
         with self.connect() as connection:
+            if not run_migrations:
+                if connection.execute("select to_regclass('terminal') as relation").fetchone()["relation"] is None:
+                    raise RuntimeError("database schema is not initialized; run app.migrate first")
+                return
+            connection.execute("select pg_advisory_xact_lock(hashtext('coffee-cloud-schema-migration'))")
             connection.execute(SCHEMA_SQL)
             for version, name, sql in MIGRATIONS:
                 applied = connection.execute("select 1 from schema_migration where version=%s", (version,)).fetchone()
@@ -549,6 +582,9 @@ class Database:
     def ping(self) -> None:
         with self.connect() as connection:
             connection.execute("select 1").fetchone()
+
+    def stats(self) -> dict[str, int]:
+        return {key: int(value) for key, value in self.pool.get_stats().items()}
 
     def close(self) -> None:
         self.pool.close()

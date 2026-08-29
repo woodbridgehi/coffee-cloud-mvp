@@ -4,7 +4,9 @@ from datetime import datetime
 from typing import Any
 
 
-def iso(value: datetime | None) -> str | None:
+def iso(value: datetime | str | None) -> str | None:
+    if isinstance(value, str):
+        return value.replace("+00:00", "Z")
     return value.isoformat().replace("+00:00", "Z") if value else None
 
 

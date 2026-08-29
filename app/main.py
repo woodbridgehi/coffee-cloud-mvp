@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import json
 import io
+import asyncio
 import threading
 import time
 import uuid
@@ -14,9 +15,10 @@ from urllib.parse import quote
 from urllib.parse import parse_qsl
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Security, status
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 import qrcode
 
 from .database import Database
@@ -46,6 +48,7 @@ from .services.admin_access import AdminAccessService
 from .services.production import ProductionService
 from .services.background_worker import BackgroundWorkerService
 from .telemetry import TelemetryCache
+from .order_events import OrderEventBroker
 
 
 SERVICE_VERSION = "0.4.0"
@@ -63,6 +66,7 @@ telemetry_cache = TelemetryCache(
     online_ttl_seconds=settings.telemetry_online_ttl_seconds,
     logger=logger,
 )
+order_event_broker = OrderEventBroker(settings.database_url, logger=logger)
 
 
 def payment_provider(name: str) -> PaymentProvider:
@@ -108,6 +112,8 @@ class OfflineMonitor:
     def __init__(self) -> None:
         self.stop_event = threading.Event()
         self.thread = threading.Thread(target=self._run, name="offline-monitor", daemon=True)
+        self.last_success_at = 0.0
+        self.last_error: str | None = None
 
     def start(self) -> None:
         self.thread.start()
@@ -118,12 +124,15 @@ class OfflineMonitor:
 
     def scan_once(self) -> None:
         background_worker_service.offline_scan_once()
+        self.last_success_at = time.time()
+        self.last_error = None
 
     def _run(self) -> None:
         while not self.stop_event.wait(settings.offline_scan_seconds):
             try:
                 self.scan_once()
             except Exception:
+                self.last_error = "offline scan failed"
                 logger.exception("offline monitor failed")
 
 
@@ -133,30 +142,77 @@ offline_monitor = OfflineMonitor()
 class DomainWorker:
     def __init__(self) -> None:
         self.stop_event = threading.Event()
-        self.thread = threading.Thread(target=self._run, name="domain-worker", daemon=True)
+        self.threads = [
+            threading.Thread(target=self._telemetry_run, name="telemetry-worker", daemon=True),
+            threading.Thread(target=self._domain_run, name="domain-worker", daemon=True),
+            threading.Thread(target=self._payment_run, name="payment-worker", daemon=True),
+        ]
+        self.status_lock = threading.Lock()
+        self.status: dict[str, dict[str, Any]] = {
+            name: {"lastSuccessAt": 0.0, "lastError": None}
+            for name in ("telemetry", "domain", "payment")
+        }
+
+    def _record(self, name: str, error: Exception | None = None) -> None:
+        with self.status_lock:
+            if error is None:
+                self.status[name] = {"lastSuccessAt": time.time(), "lastError": None}
+            else:
+                self.status[name]["lastError"] = f"{type(error).__name__}: {error}"[:500]
+
+    def health_snapshot(self) -> dict[str, Any]:
+        with self.status_lock:
+            workers = {name: dict(value) for name, value in self.status.items()}
+        for thread in self.threads:
+            workers.setdefault(thread.name.removesuffix("-worker"), {})["alive"] = thread.is_alive()
+        return workers
 
     def start(self) -> None:
-        self.thread.start()
+        for thread in self.threads:
+            thread.start()
 
     def stop(self) -> None:
         self.stop_event.set()
-        self.thread.join(timeout=3)
+        for thread in self.threads:
+            thread.join(timeout=3)
 
-    def _run(self) -> None:
-        last_watchdog = 0.0
+    def _telemetry_run(self) -> None:
         while not self.stop_event.wait(settings.outbox_scan_seconds):
             try:
                 background_worker_service.flush_telemetry_batch()
+                self._record("telemetry")
+            except Exception as exc:
+                self._record("telemetry", exc)
+                logger.exception("telemetry worker iteration failed")
+
+    def _domain_run(self) -> None:
+        last_watchdog = 0.0
+        last_maintenance = 0.0
+        while not self.stop_event.wait(settings.outbox_scan_seconds):
+            try:
                 background_worker_service.process_business_outbox_batch()
                 background_worker_service.process_dispatch_batch()
-                background_worker_service.reconcile_payment_once()
-                background_worker_service.process_refund_batch()
                 now = time.monotonic()
                 if now - last_watchdog >= min(10, settings.offline_scan_seconds):
                     background_worker_service.watchdog_scan_once()
                     last_watchdog = now
-            except Exception:
+                if now - last_maintenance >= settings.maintenance_interval_seconds:
+                    background_worker_service.cleanup_history_once()
+                    last_maintenance = now
+                self._record("domain")
+            except Exception as exc:
+                self._record("domain", exc)
                 logger.exception("domain worker iteration failed")
+
+    def _payment_run(self) -> None:
+        while not self.stop_event.wait(settings.outbox_scan_seconds):
+            try:
+                background_worker_service.reconcile_payment_once()
+                background_worker_service.process_refund_batch()
+                self._record("payment")
+            except Exception as exc:
+                self._record("payment", exc)
+                logger.exception("payment worker iteration failed")
 
 
 domain_worker = DomainWorker()
@@ -164,8 +220,10 @@ domain_worker = DomainWorker()
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    database.initialize()
+    database.initialize(run_migrations=settings.run_database_migrations)
     telemetry_cache.start()
+    if settings.run_order_sse_listener:
+        order_event_broker.start()
     background_started = False
     if settings.run_background_workers:
         device_identity_service.bootstrap_device()
@@ -181,6 +239,8 @@ async def lifespan(_: FastAPI):
         if background_started:
             domain_worker.stop()
             offline_monitor.stop()
+        if settings.run_order_sse_listener:
+            order_event_broker.stop()
         telemetry_cache.close()
         database.close()
 
@@ -298,6 +358,22 @@ GatewayAuth = Annotated[None, Depends(require_gateway)]
 @app.get("/health")
 def health() -> dict[str, Any]:
     return system_service.health()
+
+
+@app.get("/metrics", response_class=PlainTextResponse, include_in_schema=False)
+def metrics() -> str:
+    lines = [
+        "# TYPE coffee_order_sse_subscribers gauge",
+        f"coffee_order_sse_subscribers {order_event_broker.subscriber_count()}",
+        "# TYPE coffee_telemetry_dirty_devices gauge",
+        f"coffee_telemetry_dirty_devices {telemetry_cache.dirty_count()}",
+        "# TYPE coffee_telemetry_redis_enabled gauge",
+        f"coffee_telemetry_redis_enabled {1 if telemetry_cache.enabled else 0}",
+    ]
+    for key, value in sorted(database.stats().items()):
+        safe_key = ''.join(character if character.isalnum() else '_' for character in key)
+        lines.append(f"coffee_db_pool_{safe_key} {value}")
+    return "\n".join(lines) + "\n"
 
 
 @app.get("/")
@@ -462,29 +538,29 @@ def command_result(
 
 
 @app.post("/api/v1/internal/mqtt/messages", tags=["device-platform"], include_in_schema=False)
-async def ingest_mqtt_message(request: Request, _: GatewayAuth) -> dict[str, Any]:
-    return mqtt_gateway_service.ingest(await request.json())
+def ingest_mqtt_message(body: dict[str, Any], _: GatewayAuth) -> dict[str, Any]:
+    return mqtt_gateway_service.ingest(body)
 
 
 @app.post("/api/v1/internal/mqtt/messages/batch", tags=["device-platform"], include_in_schema=False)
-async def ingest_mqtt_message_batch(request: Request, _: GatewayAuth) -> dict[str, Any]:
+def ingest_mqtt_message_batch(body: dict[str, Any], _: GatewayAuth) -> dict[str, Any]:
     """Accept a small telemetry batch while preserving per-message rejection details."""
-    body = await request.json()
     messages = body.get("messages") if isinstance(body, dict) else None
     if not isinstance(messages, list) or not messages or len(messages) > 500:
         raise HTTPException(status_code=422, detail="messages must contain 1 to 500 MQTT messages")
 
     accepted: list[int] = []
     rejected: list[dict[str, Any]] = []
-    for index, message in enumerate(messages):
-        if not isinstance(message, dict):
-            rejected.append({"index": index, "status": 422, "detail": "message must be an object"})
-            continue
-        try:
-            mqtt_gateway_service.ingest(message)
-            accepted.append(index)
-        except ServiceError as exc:
-            rejected.append({"index": index, "status": exc.status_code, "detail": exc.detail})
+    with telemetry_cache.batch():
+        for index, message in enumerate(messages):
+            if not isinstance(message, dict):
+                rejected.append({"index": index, "status": 422, "detail": "message must be an object"})
+                continue
+            try:
+                mqtt_gateway_service.ingest(message)
+                accepted.append(index)
+            except ServiceError as exc:
+                rejected.append({"index": index, "status": exc.status_code, "detail": exc.detail})
     return {"accepted": accepted, "rejected": rejected}
 
 
@@ -681,6 +757,42 @@ def get_public_order(
     access_token: Annotated[str | None, Header(alias="X-Order-Access-Token")] = None,
 ) -> dict[str, Any]:
     return public_order_service.get(order_id, access_token)
+
+
+@app.get("/api/v1/public/orders/{order_id}/events", tags=["public-orders"], include_in_schema=False)
+async def stream_public_order(
+    order_id: uuid.UUID,
+    access_token: Annotated[str | None, Header(alias="X-Order-Access-Token")] = None,
+) -> StreamingResponse:
+    # Authenticate before response headers are sent. The generator re-reads
+    # after subscribing so an update cannot fall into a query/subscribe gap.
+    await run_in_threadpool(public_order_service.get, order_id, access_token)
+
+    async def events():
+        queue = order_event_broker.subscribe(str(order_id), asyncio.get_running_loop())
+        try:
+            initial = await run_in_threadpool(public_order_service.get, order_id, access_token)
+            yield f"event: order\ndata: {json.dumps(initial, default=str, separators=(',', ':'))}\n\n"
+            while True:
+                try:
+                    await asyncio.wait_for(queue.get(), timeout=15)
+                except TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
+                await asyncio.sleep(0.05)
+                while not queue.empty():
+                    queue.get_nowait()
+                payload = await run_in_threadpool(public_order_service.get, order_id, access_token)
+                yield f"event: order\ndata: {json.dumps(payload, default=str, separators=(',', ':'))}\n\n"
+                if payload["status"] in {"READY", "FAILED", "CANCELLED", "EXPIRED", "REFUNDED"}:
+                    return
+        finally:
+            order_event_broker.unsubscribe(str(order_id), queue)
+
+    return StreamingResponse(
+        events(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
+    )
 
 
 @app.post("/api/v1/public/orders/{order_id}/cancel", tags=["public-orders"])

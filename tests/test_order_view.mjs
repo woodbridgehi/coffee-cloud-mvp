@@ -27,7 +27,8 @@ const context = vm.createContext({
   clearTimeout() {},
   alert() {},
 });
-vm.runInContext(fs.readFileSync(new URL('../public/order.js', import.meta.url), 'utf8'), context);
+const source = fs.readFileSync(new URL('../public/order.js', import.meta.url), 'utf8');
+vm.runInContext(source, context);
 
 test('renders device-authoritative step names and overall progress', () => {
   const order = {
@@ -65,4 +66,11 @@ test('keeps the payment DOM and QR node stable across status polls', () => {
   assert.equal(afterFirst, before + 1);
   assert.equal(app.writes, afterFirst);
   assert.match(app.innerHTML, /二维码加载后保持不变/);
+});
+
+test('uses one SSE stream instead of production status polling', () => {
+  assert.match(source, /\/api\/v1\/public\/orders\/\$\{encodeURIComponent\(orderId\)\}\/events/);
+  assert.match(source, /Accept': 'text\/event-stream'/);
+  assert.doesNotMatch(source, /setTimeout\(loadOrder/);
+  assert.doesNotMatch(source, /PRODUCTION_POLL_MS/);
 });

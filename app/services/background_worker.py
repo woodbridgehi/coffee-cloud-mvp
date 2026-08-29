@@ -130,10 +130,20 @@ class BackgroundWorkerService:
         if payment is None:
             return 0
         try:
-            result = self.payment_provider(payment["provider"]).query_payment(payment["merchant_payment_no"])
+            provider = self.payment_provider(payment["provider"])
+            result = provider.query_payment(payment["merchant_payment_no"])
         except Exception as exc:
             log.info("payment reconciliation deferred payment=%s: %s", payment["id"], exc)
             return 0
+        expired = payment["created_at"] <= utc_now() - timedelta(
+            seconds=self.settings.payment_pending_ttl_seconds
+        )
+        if expired and result.status not in {"PAID", "CLOSED", "FAILED"}:
+            try:
+                result = provider.close_payment(payment["merchant_payment_no"])
+            except Exception as exc:
+                log.info("expired payment close deferred payment=%s: %s", payment["id"], exc)
+                return 0
         with self.uow.transaction() as connection:
             payments = PaymentRepository(connection)
             current = payments.find(payment["id"], for_update=True)
@@ -225,6 +235,16 @@ class BackgroundWorkerService:
                 order = OrderRepository(connection).find_with_terminal(row["order_id"], for_update=True)
                 if order and order["status"] not in TERMINAL_ORDER_STATUSES:
                     transition_order(connection, order, "HOLD", "watchdog", reason="device outcome unknown")
+
+    def cleanup_history_once(self) -> dict[str, int]:
+        with self.uow.transaction() as connection:
+            return WorkerRepository(connection).cleanup_history(
+                heartbeat_days=self.settings.heartbeat_retention_days,
+                mqtt_days=self.settings.mqtt_inbox_retention_days,
+                event_days=self.settings.device_event_retention_days,
+                outbox_days=self.settings.processed_outbox_retention_days,
+                audit_days=self.settings.audit_retention_days,
+            )
 
     def reconcile_stored_command_events(self) -> None:
         with self.uow.transaction() as connection:

@@ -21,6 +21,24 @@ class OrderRepository:
             (order_id,),
         ).fetchone()
 
+    def public_view(self, order_id: uuid.UUID) -> dict[str, Any] | None:
+        """Load the complete public status projection in one database statement."""
+        return self.connection.execute(
+            """select o.*,t.device_id,t.store_id,to_jsonb(j) as job_json,
+                      (select to_jsonb(p) from payment p where p.order_id=o.id
+                        order by p.created_at desc limit 1) as payment_json,
+                      (select coalesce(jsonb_agg(to_jsonb(history) order by history.revision),'[]'::jsonb)
+                         from order_transition history where history.order_id=o.id) as transitions_json,
+                      case when o.status='QUEUED' then
+                        (select count(*) from sales_order queued where queued.terminal_id=o.terminal_id
+                          and queued.status='QUEUED' and queued.created_at<=o.created_at)
+                      else 0 end as queue_position_value
+                 from sales_order o join terminal t on t.id=o.terminal_id
+                 left join production_job j on j.order_id=o.id
+                where o.id=%s""",
+            (order_id,),
+        ).fetchone()
+
     def find_idempotent(self, terminal_id: int, idempotency_key: str, *, for_update: bool = True) -> dict[str, Any] | None:
         return self.connection.execute(
             f"""select o.*,t.device_id,t.store_id from sales_order o

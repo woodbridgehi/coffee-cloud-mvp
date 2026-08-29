@@ -18,7 +18,7 @@ HTTP 应用代码采用 `Route → Application Service → Repository → Postgr
   → Command Outbox 经多设备 MQTT Gateway 发布 MAKE_DRINK
   → 终端整杯预占、按步骤扣减共享物料
   → 终端可靠上报生命周期事件，并按变化/时间阈值上报制作进度
-  → 手机订单页轮询显示实时状态
+  → PostgreSQL 事务通知驱动 SSE，手机订单页实时显示状态
   → 运营台查看订单、设备和逐项物料余量
 ```
 
@@ -53,6 +53,7 @@ HTTP 应用代码采用 `Route → Application Service → Repository → Postgr
 GET  /api/v1/public/devices/{deviceId}/menu
 POST /api/v1/public/devices/{deviceId}/orders
 GET  /api/v1/public/orders/{orderId}
+GET  /api/v1/public/orders/{orderId}/events   # SSE
 POST /api/v1/public/orders/{orderId}/cancel
 ```
 
@@ -245,11 +246,19 @@ curl http://127.0.0.1:8788/health
 
 ## 9. MQTT 5.0 接入网关
 
-`coffee-mqtt-gateway` 是无单设备配置的独立进程，不承载扫码 Web/API，也不复制订单状态机。一个实例订阅所有设备上行 Topic：心跳、presence、state 及制作进度默认先写入项目专用 Redis 热状态层，并按批量合并刷新 PostgreSQL 的最新快照；网关会将这类可覆盖遥测按最多 100 条或 100ms 聚成一个 HTTP 内部请求。订单、任务/步骤生命周期、命令结果和订单事件绕过微批，立即进入持久 `mqtt_inbox` 与领域状态机。设备端对普通进度采用“5% 或 5 秒”节流；设置 `TELEMETRY_HISTORY_MODE=audit` 可额外保留遥测历史。下行从 `command_outbox` 领取带租约的命令，Broker PUBACK 后再标记 `PUBLISHED`。QoS 1 上行启用 manual ACK，进程崩溃时由持久 MQTT session 重投。
+`coffee-mqtt-gateway` 是无单设备配置的独立进程，不承载扫码 Web/API，也不复制订单状态机。一个实例订阅所有设备上行 Topic：心跳、presence、state 及 `task.progress` 默认先写入项目专用 Redis 热状态层，并按批量合并刷新 PostgreSQL 的最新快照；网关会将这类可覆盖遥测按最多 100 条或 100ms 聚成一个 HTTP 内部请求。订单、任务/步骤生命周期、命令结果和订单事件绕过微批，立即进入持久 `mqtt_inbox` 与领域状态机。设备端对普通进度采用“5% 或 5 秒”节流；设置 `TELEMETRY_HISTORY_MODE=audit` 可额外保留遥测历史。下行从 `command_outbox` 领取带租约的命令，Broker PUBACK 后再标记 `PUBLISHED`。QoS 1 上行启用 manual ACK，进程崩溃时由持久 MQTT session 重投。
 
-`coffee-cloud-mvp` 的两个 Uvicorn worker 现在只处理 API 请求；`coffee-domain-worker` 是唯一的后台进程，负责离线扫描、Redis 遥测落库、领域 outbox、订单派发、支付对账、退款和看门狗。这样扩展 API 并发时不会重复启动这些轮询任务。
+`coffee-cloud-mvp` 的两个 Uvicorn worker 只处理 API 与订单 SSE；PostgreSQL 在订单事务提交后通过 `NOTIFY` 唤醒对应 SSE 连接，顾客制作页面不再固定轮询。`coffee-domain-worker` 是唯一的后台进程，内部将 Redis 遥测落库、领域派单、支付退款拆成三个互不阻塞的工作循环，并另行执行离线扫描和历史清理。
 
 `coffee-telemetry-redis` 只绑定 VPS 回环地址的 6380 端口，保存在线 TTL、设备最新状态和最新制作进度；Redis 不参与订单、支付或命令事实判定，缓存不可用时 MQTT 接入自动回退为 PostgreSQL 更新。
+
+数据库 migration 由一次性 `coffee-db-migrate` 工具执行，API 和 Worker 不在并发启动时修改 schema：
+
+```bash
+docker compose --profile tools run --rm coffee-db-migrate
+```
+
+默认离线判定为 90 秒、Redis 在线 TTL 为 120 秒。已处理的 heartbeat、MQTT inbox、设备事件和 outbox 按配置分批清理；订单、支付和制作业务事实不由该清理任务删除。容量和故障验收步骤见 `docs/capacity-and-fault-test-plan.md`。
 
 ```bash
 docker compose build coffee-mqtt-gateway

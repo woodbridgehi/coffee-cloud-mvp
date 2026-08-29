@@ -2,8 +2,12 @@
 from __future__ import annotations
 
 import logging
+import json
+import os
 import signal
 import threading
+import time
+from pathlib import Path
 
 from .main import (
     background_worker_service,
@@ -16,6 +20,27 @@ from .main import (
 
 
 logger = logging.getLogger("coffee-domain-worker")
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
+HEALTH_FILE = Path(os.getenv("WORKER_HEALTH_FILE", "/tmp/domain-worker.json"))
+
+
+def write_health() -> None:
+    payload = {
+        "updatedAt": time.time(),
+        "workers": domain_worker.health_snapshot(),
+        "offline": {
+            "alive": offline_monitor.thread.is_alive(),
+            "lastSuccessAt": offline_monitor.last_success_at,
+            "lastError": offline_monitor.last_error,
+        },
+    }
+    HEALTH_FILE.parent.mkdir(parents=True, exist_ok=True)
+    temporary = HEALTH_FILE.with_suffix(".tmp")
+    temporary.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+    temporary.replace(HEALTH_FILE)
 
 
 def main() -> None:
@@ -29,7 +54,7 @@ def main() -> None:
 
     offline_started = False
     domain_started = False
-    database.initialize()
+    database.initialize(run_migrations=False)
     telemetry_cache.start()
     try:
         device_identity_service.bootstrap_device()
@@ -41,7 +66,9 @@ def main() -> None:
         domain_worker.start()
         domain_started = True
         logger.info("singleton domain worker started")
-        stop_event.wait()
+        write_health()
+        while not stop_event.wait(5):
+            write_health()
     finally:
         if domain_started:
             domain_worker.stop()

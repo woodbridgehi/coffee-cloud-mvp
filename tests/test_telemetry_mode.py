@@ -28,14 +28,27 @@ class FakeMqttRepository:
     def state(self, terminal_id: int, payload: dict[str, object]) -> None:
         self.calls.append(("state", (terminal_id, payload)))
 
+    def inbox(self, _device_id: str, _message_id: str):
+        return None
 
-def service(heartbeat, request_dispatch=lambda *_: None, telemetry_cache=None):
+    def insert_inbox(self, _values: object) -> bool:
+        self.calls.append(("insert_inbox", _values))
+        return True
+
+    def processed(self, _device_id: str, _message_id: str) -> None:
+        self.calls.append(("processed", _message_id))
+
+    def retry(self, _device_id: str, _message_id: str, _error: str) -> None:
+        self.calls.append(("retry", _message_id))
+
+
+def service(heartbeat, request_dispatch=lambda *_: None, telemetry_cache=None, event=None):
     return MqttGatewayService(
         FakeUnitOfWork(),
         logger=logging.getLogger("test-telemetry-mode"),
         retain_telemetry_history=False,
         heartbeat=heartbeat,
-        event=lambda *args, **kwargs: {"ok": True},
+        event=event or (lambda *args, **kwargs: {"ok": True}),
         task_ack=lambda *args, **kwargs: {"ok": True},
         command_result=lambda *args, **kwargs: {"ok": True},
         request_dispatch=request_dispatch,
@@ -138,6 +151,35 @@ def test_progress_event_is_coalesced_in_redis_before_event_inbox(monkeypatch) ->
     })
 
     assert result["telemetryMode"] == "redis-progress"
+
+
+def test_step_lifecycle_event_bypasses_lossy_telemetry_cache(monkeypatch) -> None:
+    FakeMqttRepository.calls = []
+    monkeypatch.setattr("app.services.mqtt_gateway.MqttGatewayRepository", FakeMqttRepository)
+    events = []
+
+    class FakeTelemetryCache:
+        def progress(self, *_args: object) -> bool:  # pragma: no cover - lifecycle must bypass this
+            raise AssertionError("step lifecycle was incorrectly treated as lossy telemetry")
+
+    result = service(
+        lambda *_args, **_kwargs: {"ok": True},
+        telemetry_cache=FakeTelemetryCache(),
+        event=lambda *args, **kwargs: events.append((args, kwargs)) or {"ok": True},
+    ).ingest({
+        "topic": "v1/devices/coffee-bot-001/up",
+        "envelope": {
+            "deviceId": "coffee-bot-001", "type": "event",
+            "payload": {
+                "eventId": "step-started-1", "deviceId": "coffee-bot-001", "type": "step.started",
+                "occurredAt": "2026-08-30T00:00:00Z", "payload": {"taskId": "task-1", "stepId": "brew"},
+            },
+        },
+    })
+
+    assert result["ok"] is True
+    assert len(events) == 1
+    assert [name for name, _ in FakeMqttRepository.calls] == ["insert_inbox", "processed"]
 
 
 def test_latest_heartbeat_updates_online_state_without_history(monkeypatch) -> None:

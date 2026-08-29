@@ -5,6 +5,9 @@ services:
     hostname: coffee-emqx
     restart: unless-stopped
     init: true
+    mem_limit: 768m
+    cpus: 1.5
+    pids_limit: 256
     env_file:
       - .env
     environment:

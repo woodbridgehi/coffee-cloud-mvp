@@ -8,6 +8,7 @@ import ssl
 import threading
 import time
 import uuid
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
@@ -17,6 +18,7 @@ import paho.mqtt.client as mqtt
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper(), format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("coffee-mqtt-gateway")
+logging.getLogger("httpx").setLevel(logging.WARNING)
 HTTP_BASE = os.getenv("DEVICE_API_BASE_URL", "http://127.0.0.1:8788").rstrip("/")
 GATEWAY_TOKEN = os.environ["INTERNAL_GATEWAY_TOKEN"]
 GATEWAY_ID = os.getenv("MQTT_GATEWAY_ID", f"gateway-{uuid.uuid4()}")
@@ -29,6 +31,7 @@ QUEUE_CAPACITY = max(100, int(os.getenv("MQTT_GATEWAY_QUEUE_CAPACITY", "10000"))
 WORKER_COUNT = max(1, min(32, int(os.getenv("MQTT_GATEWAY_WORKERS", "4"))))
 TELEMETRY_BATCH_SIZE = max(1, min(500, int(os.getenv("MQTT_TELEMETRY_BATCH_SIZE", "100"))))
 TELEMETRY_BATCH_WAIT_SECONDS = max(0.01, min(1.0, float(os.getenv("MQTT_TELEMETRY_BATCH_WAIT_SECONDS", "0.1"))))
+HEALTH_FILE = Path(os.getenv("GATEWAY_HEALTH_FILE", "/tmp/mqtt-gateway.json"))
 
 
 class GatewayApiClient:
@@ -131,7 +134,7 @@ class Gateway:
             return True
         payload = envelope.get("payload")
         return envelope.get("type") == "event" and isinstance(payload, dict) and payload.get("type") in {
-            "task.progress", "step.started", "step.completed",
+            "task.progress",
         }
 
     def _process_body(self, body: dict[str, Any]) -> None:
@@ -246,6 +249,19 @@ class Gateway:
             self.worker_threads.append(thread)
             thread.start()
 
+    def _write_health(self) -> None:
+        payload = {
+            "updatedAt": time.time(),
+            "connected": self.connected,
+            "workersAlive": all(thread.is_alive() for thread in self.worker_threads),
+            "commandWorkerAlive": bool(self.command_thread and self.command_thread.is_alive()),
+            "queueDepth": sum(inbox.qsize() for inbox in self.inboxes),
+        }
+        HEALTH_FILE.parent.mkdir(parents=True, exist_ok=True)
+        temporary = HEALTH_FILE.with_suffix(".tmp")
+        temporary.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+        temporary.replace(HEALTH_FILE)
+
     def _command_loop(self) -> None:
         next_claim = 0.0
         while not self.stop_event.wait(0.05):
@@ -298,7 +314,7 @@ class Gateway:
         self.command_thread.start()
         try:
             while not self.stop_event.wait(1.0):
-                pass
+                self._write_health()
         finally:
             self.stop_event.set()
             self.client.disconnect()

@@ -23,17 +23,18 @@
 
 ## 手机下单与订单状态页
 
-保留现有 URL、请求字段、鉴权头、幂等键和轮询规则：
+保留现有 URL、请求字段、鉴权头、幂等键和 SSE 实时更新规则：
 
 - `GET /api/v1/public/devices/{deviceId}/menu`
 - `POST /api/v1/public/devices/{deviceId}/orders`
 - `POST /api/v1/orders/{orderId}/payments`
 - `GET /api/v1/public/orders/{orderId}`
+- `GET /api/v1/public/orders/{orderId}/events`（`text/event-stream`，同样使用订单访问请求头）
 - `GET /api/v1/payments/{paymentId}/qr`
 
 必须保留：
 
-- 同一 `paymentId` 不因订单轮询反复替换二维码 DOM 或 Blob URL。
+- 同一 `paymentId` 不因 SSE 重复状态事件而替换二维码 DOM 或 Blob URL。
 - 初次二维码加载失败后至少 20 秒再重试。
 - 测试依赖的设备权威 `stepName`、`overallProgress` 和 `#payment-qr` DOM 稳定语义。
 - 菜单展示设备状态、饮品、价格、剩余杯数、预计时长、不可售原因、底部结算栏。

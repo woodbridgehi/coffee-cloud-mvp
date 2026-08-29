@@ -17,15 +17,14 @@ const app = document.getElementById('app');
 const qs = new URLSearchParams(location.search);
 const deviceId = qs.get('device_id') || '';
 
-const PAYMENT_STATUS_POLL_MS = 3000;  // 支付等待阶段的轮询间隔
-const PRODUCTION_POLL_MS = 1200;      // 制作阶段的轮询间隔
 const PAYMENT_QR_REFRESH_MS = 20000;  // 二维码加载失败后的最短重试间隔
 
 let menu = null;
 let selected = null;
 let submitting = false;
-let pollTimer = null;
-let polling = false;
+let orderStreamAbort = null;
+let orderStreamReconnectTimer = null;
+let orderStreamTerminal = false;
 let artSeq = 0;
 let paymentQrCache = { paymentId: null, url: null, loadedAt: 0, loading: false };
 
@@ -343,16 +342,56 @@ async function loadOrder() {
       headers: { 'X-Order-Access-Token': token },
     });
     renderOrder(order);
-    polling = ![...TERMINAL_STATUSES, 'REFUNDED'].includes(order.status);
-    if (polling) {
-      clearTimeout(pollTimer);
-      const delay = ['CREATED', 'AWAITING_PAYMENT'].includes(order.status)
-        ? PAYMENT_STATUS_POLL_MS : PRODUCTION_POLL_MS;
-      pollTimer = setTimeout(loadOrder, delay);
+    orderStreamTerminal = [...TERMINAL_STATUSES, 'REFUNDED'].includes(order.status);
+    if (!orderStreamTerminal) startOrderStream(orderId, token);
+  } catch (error) {
+    renderError(`订单状态暂时不可用：${error.message}`, true);
+  }
+}
+
+async function startOrderStream(orderId, token) {
+  if (orderStreamTerminal) return;
+  if (orderStreamAbort) orderStreamAbort.abort();
+  clearTimeout(orderStreamReconnectTimer);
+  const controller = new AbortController();
+  orderStreamAbort = controller;
+  try {
+    const response = await fetch(`/api/v1/public/orders/${encodeURIComponent(orderId)}/events`, {
+      headers: { 'Accept': 'text/event-stream', 'X-Order-Access-Token': token },
+      cache: 'no-store',
+      signal: controller.signal,
+    });
+    if (!response.ok || !response.body) throw new Error(`SSE HTTP ${response.status}`);
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (!orderStreamTerminal) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true }).replaceAll('\r\n', '\n');
+      let boundary;
+      while ((boundary = buffer.indexOf('\n\n')) >= 0) {
+        const frame = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        const data = frame.split('\n')
+          .filter(line => line.startsWith('data:'))
+          .map(line => line.slice(5).trimStart())
+          .join('\n');
+        if (!data) continue;
+        const order = JSON.parse(data);
+        renderOrder(order);
+        orderStreamTerminal = [...TERMINAL_STATUSES, 'REFUNDED'].includes(order.status);
+        if (orderStreamTerminal) {
+          controller.abort();
+          return;
+        }
+      }
     }
   } catch (error) {
-    polling = false;
-    renderError(`订单状态暂时不可用：${error.message}`, true);
+    if (controller.signal.aborted || orderStreamTerminal) return;
+  }
+  if (!orderStreamTerminal && document.visibilityState === 'visible') {
+    orderStreamReconnectTimer = setTimeout(() => startOrderStream(orderId, token), 3000);
   }
 }
 
@@ -473,12 +512,12 @@ function renderOrder(order) {
             ${order.payment?.qrCode
               ? `<a class="btn-primary" href="${esc(order.payment.qrCode)}">打开支付宝付款</a>`
               : '<span class="pay-hint">正在获取付款方式…</span>'}
-            <span class="pay-hint">支付状态每 ${PAYMENT_STATUS_POLL_MS / 1000} 秒自动确认</span>
+            <span class="pay-hint">支付状态由服务端实时推送</span>
           </div>
         </div>
       </section>
       <footer class="status-foot">
-        <span>支付状态每 ${PAYMENT_STATUS_POLL_MS / 1000} 秒查询，二维码加载后保持不变</span>
+        <span>支付状态由服务端实时推送，二维码加载后保持不变</span>
         <button class="btn-secondary" id="refresh">刷新状态</button>
       </footer>`;
     document.getElementById('refresh').onclick = loadOrder;
@@ -621,12 +660,13 @@ renderOrder = function (order) {
   renderOrderContent(order);
 };
 
-/* 页面回到前台时立即核对一次状态（避免后台轮询被节流造成滞后） */
+/* 页面隐藏时释放 SSE 连接，回到前台时重新加载并订阅。 */
 if (typeof document.addEventListener === 'function') {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && location.pathname === '/order/status') {
-      clearTimeout(pollTimer);
       loadOrder();
+    } else if (orderStreamAbort) {
+      orderStreamAbort.abort();
     }
   });
 }

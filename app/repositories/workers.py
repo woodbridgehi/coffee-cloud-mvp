@@ -127,3 +127,27 @@ class WorkerRepository:
                  manual_review_required=true,revision=revision+1,updated_at=now() where id=%s""",
             (job_id,),
         )
+
+    def cleanup_history(
+        self, *, heartbeat_days: int, mqtt_days: int, event_days: int,
+        outbox_days: int, audit_days: int, limit: int = 5000,
+    ) -> dict[str, int]:
+        statements = {
+            "heartbeat": ("heartbeat_inbox", "received_at", "true", heartbeat_days),
+            "mqtt": ("mqtt_inbox", "received_at", "status='PROCESSED'", mqtt_days),
+            "events": ("terminal_event", "received_at", "true", event_days),
+            "businessOutbox": ("business_outbox", "processed_at", "status='PROCESSED'", outbox_days),
+            "commandOutbox": ("command_outbox", "published_at", "status='PUBLISHED'", outbox_days),
+            "audit": ("audit_log", "created_at", "true", audit_days),
+        }
+        deleted: dict[str, int] = {}
+        for name, (table, timestamp, predicate, days) in statements.items():
+            cursor = self.connection.execute(
+                f"""with expired as (
+                       select ctid from {table} where {predicate}
+                         and {timestamp}<now()-(%s::text||' days')::interval limit %s
+                     ) delete from {table} target using expired where target.ctid=expired.ctid""",
+                (days, limit),
+            )
+            deleted[name] = max(0, cursor.rowcount)
+        return deleted

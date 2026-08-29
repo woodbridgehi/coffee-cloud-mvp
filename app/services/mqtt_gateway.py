@@ -70,7 +70,7 @@ class MqttGatewayService:
         nested = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
         revision = nested.get("taskRevision") or payload.get("revision")
         lossy_progress_event = message_type == "event" and str(payload.get("type") or "") in {
-            "task.progress", "step.started", "step.completed",
+            "task.progress",
         }
         if lossy_progress_event and self.telemetry_cache:
             terminal = self._terminal_for_telemetry(device_id)

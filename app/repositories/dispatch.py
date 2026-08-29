@@ -24,7 +24,8 @@ class DispatchRepository:
     def claim(self, worker_id: str) -> dict[str, Any] | None:
         request = self.connection.execute(
             """select * from terminal_dispatch_request
-                 where status in ('PENDING','RETRY') and next_attempt_at<=now()
+                 where (status in ('PENDING','RETRY') and next_attempt_at<=now())
+                    or (status='PROCESSING' and locked_until<now())
                  order by requested_at for update skip locked limit 1"""
         ).fetchone()
         if not request:
@@ -38,16 +39,30 @@ class DispatchRepository:
     def complete(self, terminal_id: int, revision: int) -> None:
         # A request raised while this one was being processed increments revision,
         # so it remains queued for the following dispatch pass.
-        self.connection.execute(
-            "delete from terminal_dispatch_request where terminal_id=%s and revision=%s",
+        deleted = self.connection.execute(
+            "delete from terminal_dispatch_request where terminal_id=%s and revision=%s returning terminal_id",
             (terminal_id, revision),
-        )
+        ).fetchone()
+        if deleted is None:
+            self.connection.execute(
+                """update terminal_dispatch_request set status='PENDING',next_attempt_at=now(),
+                     locked_by=null,locked_until=null
+                     where terminal_id=%s and status='PROCESSING'""",
+                (terminal_id,),
+            )
 
     def retry(self, terminal_id: int, revision: int, error: str) -> None:
-        self.connection.execute(
+        retried = self.connection.execute(
             """update terminal_dispatch_request set status='RETRY',attempt_count=attempt_count+1,
                  next_attempt_at=now()+(least(30,power(2,least(attempt_count+1,5)))::text||' seconds')::interval,
                  last_error=%s,locked_by=null,locked_until=null
-                 where terminal_id=%s and revision=%s""",
+                 where terminal_id=%s and revision=%s returning terminal_id""",
             (error[:1000], terminal_id, revision),
-        )
+        ).fetchone()
+        if retried is None:
+            self.connection.execute(
+                """update terminal_dispatch_request set status='PENDING',next_attempt_at=now(),
+                     last_error=%s,locked_by=null,locked_until=null
+                     where terminal_id=%s and status='PROCESSING'""",
+                (error[:1000], terminal_id),
+            )

@@ -9,9 +9,16 @@ services:
     environment:
       API_WORKERS: "2"
       RUN_BACKGROUND_WORKERS: "false"
+      RUN_DATABASE_MIGRATIONS: "false"
+      RUN_ORDER_SSE_LISTENER: "true"
+      OFFLINE_THRESHOLD_SECONDS: "90"
+      TELEMETRY_ONLINE_TTL_SECONDS: "120"
     restart: unless-stopped
     init: true
     read_only: true
+    mem_limit: 768m
+    cpus: 1.5
+    pids_limit: 128
     volumes:
       - ./.secrets/alipay:/run/secrets/alipay:ro
     tmpfs:
@@ -44,10 +51,17 @@ services:
       MQTT_TELEMETRY_BATCH_WAIT_SECONDS: "0.1"
     command: ["python", "-m", "app.mqtt_gateway"]
     healthcheck:
-      disable: true
+      test: ["CMD", "python", "-m", "app.file_healthcheck", "gateway", "/tmp/mqtt-gateway.json"]
+      interval: 10s
+      timeout: 3s
+      start_period: 20s
+      retries: 3
     restart: unless-stopped
     init: true
     read_only: true
+    mem_limit: 256m
+    cpus: 1.0
+    pids_limit: 96
     tmpfs:
       - /tmp:size=16m,mode=1777
     security_opt:
@@ -67,10 +81,18 @@ services:
     network_mode: host
     env_file:
       - .env
+    environment:
+      RUN_DATABASE_MIGRATIONS: "false"
+      RUN_ORDER_SSE_LISTENER: "false"
+      OFFLINE_THRESHOLD_SECONDS: "90"
+      TELEMETRY_ONLINE_TTL_SECONDS: "120"
     command: ["python", "-m", "app.domain_worker"]
     restart: unless-stopped
     init: true
     read_only: true
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 128
     volumes:
       - ./.secrets/alipay:/run/secrets/alipay:ro
     tmpfs:
@@ -79,11 +101,34 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.file_healthcheck", "domain", "/tmp/domain-worker.json"]
+      interval: 10s
+      timeout: 3s
+      start_period: 20s
+      retries: 3
     logging:
       driver: json-file
       options:
         max-size: 10m
         max-file: "3"
+
+  coffee-db-migrate:
+    profiles: ["tools"]
+    build:
+      context: .
+    network_mode: host
+    env_file:
+      - .env
+    command: ["python", "-m", "app.migrate"]
+    restart: "no"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
 
   coffee-telemetry-redis:
     image: redis:7-alpine
@@ -94,6 +139,9 @@ services:
       - telemetry-redis-data:/data
     restart: unless-stopped
     init: true
+    mem_limit: 384m
+    cpus: 0.5
+    pids_limit: 64
     security_opt:
       - no-new-privileges:true
     logging:

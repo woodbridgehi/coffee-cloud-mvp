@@ -51,9 +51,10 @@ class PublicOrderService:
 
     @staticmethod
     def _payload(orders: OrderRepository, payments: PaymentRepository, order: dict[str, Any]) -> dict[str, Any]:
-        job = orders.job(order["id"])
-        payment = payments.latest_for_order(order["id"])
-        transitions = orders.transitions(order["id"])
+        projected = "job_json" in order
+        job = order.get("job_json") if projected else orders.job(order["id"])
+        payment = order.get("payment_json") if projected else payments.latest_for_order(order["id"])
+        transitions = order.get("transitions_json") if projected else orders.transitions(order["id"])
         return {
             "orderId": str(order["id"]), "orderNo": order["order_no"],
             "deviceId": order.get("device_id"), "storeId": order.get("store_id"),
@@ -61,7 +62,8 @@ class PublicOrderService:
             "paymentStatus": order["payment_status"],
             "payment": payment_payload(payment) if payment else None,
             "totalAmountMinor": order["total_amount_minor"], "currency": order["currency"],
-            "product": order["product_snapshot"], "queuePosition": orders.queue_position(order),
+            "product": order["product_snapshot"],
+            "queuePosition": int(order["queue_position_value"]) if projected else orders.queue_position(order),
             "failure": {"code": order["failure_code"], "message": order["failure_message"]}
                 if order["failure_code"] else None,
             "production": {
@@ -165,7 +167,11 @@ class PublicOrderService:
     def get(self, order_id: uuid.UUID, access_token: str | None) -> dict[str, Any]:
         with self.uow.transaction() as connection:
             orders = OrderRepository(connection)
-            order = self._authenticate(orders, order_id, access_token)
+            if not access_token:
+                raise ServiceError(401, "missing order access token")
+            order = orders.public_view(order_id)
+            if order is None or not tokens_equal(order["access_token_hash"].strip(), hash_token(access_token)):
+                raise ServiceError(404, "order not found")
             return self._payload(orders, PaymentRepository(connection), order)
 
     def cancel(self, order_id: uuid.UUID, access_token: str | None) -> dict[str, Any]:

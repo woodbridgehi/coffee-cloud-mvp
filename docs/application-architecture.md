@@ -34,7 +34,8 @@ Service 使用 `UnitOfWork.transaction()` 开启事务，并在事务内创建�
 - `AdminOperationsService` → `TerminalRepository`、`OrderRepository`
 - `AdminAccessService` → `AdminAccessRepository`，负责运营员、角色权限、可撤销令牌与审计日志
 - `ProductionService` → `CommandRepository`、`OrderRepository`、`PaymentRepository`，负责制作任务、设备事件、订单状态和自动退款意图
-- `BackgroundWorkerService` → `WorkerRepository`、`ProductionService`、`OrderRepository`、`PaymentRepository`，负责离线扫描、Business Outbox、支付对账、退款重试和 watchdog
+- `BackgroundWorkerService` → `WorkerRepository`、`ProductionService`、`OrderRepository`、`PaymentRepository`，负责离线扫描、Business Outbox、支付对账、退款重试、历史清理和 watchdog
+- `OrderEventBroker` → PostgreSQL `LISTEN/NOTIFY`，在事务提交后将订单变化推送到对应 SSE 连接
 
 外部支付和 EMQX 管理 API 由 Service 调用。数据库事务不能跨越耗时网络调用：先保存待处理状态并提交，调用外部系统，再在新事务中保存结果。这样可避免长事务和数据库行锁长期占用。
 
@@ -49,12 +50,12 @@ Service 使用 `UnitOfWork.transaction()` 开启事务，并在事务内创建�
 
 ## 后台任务边界
 
-`main.py` 只保留应用组装、生命周期和线程调度。启动引导由 `DeviceIdentityService.bootstrap_device()` 完成；离线扫描、支付对账、退款执行、Business Outbox 和 watchdog 由 `BackgroundWorkerService` 完成；制作任务和设备事件由 `ProductionService` 完成。后台任务仍采用短事务：领取/标记本地状态后提交，外部支付调用完成后再开启新事务保存结果。
+`main.py` 只保留应用组装、生命周期和线程调度。API 进程不执行 migration 或后台扫描；migration 由一次性 `app.migrate` 完成。独立 `coffee-domain-worker` 将遥测刷库、领域派单、支付退款拆成三个工作循环，避免支付渠道超时阻塞派单或遥测。后台任务仍采用短事务：领取/标记本地状态后提交，外部支付调用完成后再开启新事务保存结果。
 
 后台任务的依赖关系如下：
 
 ```text
-OfflineMonitor / DomainWorker（线程调度）
+OfflineMonitor / Telemetry / Domain / Payment（独立线程调度）
                  ↓
       BackgroundWorkerService
           ├── WorkerRepository
@@ -78,8 +79,9 @@ OfflineMonitor / DomainWorker（线程调度）
 - Business Outbox 由 `BackgroundWorkerService` 一次领取一批事件，并使用 savepoint 隔离单条失败，避免一个坏事件回滚整批事件。
 - MQTT Gateway 按 `deviceId` 将上行消息分片到多个 Worker；同一设备保持在同一分片中，以保留消息顺序，不同设备可以并发处理。
 - MQTT Gateway 的内部 API 使用共享 Keep-Alive HTTP 客户端，命令发布独立于上行消息处理线程。
-- 心跳、presence 和 state 默认使用 `latest` 模式，只更新 `terminal` 最新状态与计数，不新增历史 Inbox；设置 `TELEMETRY_HISTORY_MODE=audit` 才保留这些遥测消息的历史记录。
-- 设备进度事件仍应控制频率；高频进度不应不加限制地写入 PostgreSQL。扩容前应观察连接池等待、事务耗时、Gateway 队列长度和 Outbox 积压。
+- 心跳、presence、state 和 `task.progress` 默认使用 `latest` 模式；Redis pipeline 合并一个 Gateway 批次，Worker 通过集合式 SQL 刷新 PostgreSQL。`step.started/step.completed` 等生命周期事件始终进入持久 Inbox。
+- 顾客订单状态通过 PostgreSQL 事务通知驱动 SSE，不按客户端数量固定轮询数据库。
+- 扩容前应观察 `/metrics` 中的连接池、Redis dirty backlog、SSE 连接数和 Worker 健康文件，并执行容量与故障验收计划。
 
 ## 新功能开发规则
 
