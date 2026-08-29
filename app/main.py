@@ -7,7 +7,7 @@ import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Annotated
 from urllib.parse import quote
@@ -17,40 +17,34 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Sec
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
-from psycopg.types.json import Jsonb
 import qrcode
 
 from .database import Database
-from .command_state import (
-    ACKED, CREATED, DELIVERING, EXECUTING, EXPIRED, PUBLISHED, TERMINAL_STATES,
-    decide_transition, event_state, result_state,
-)
 from .protocol import (
     ActivationCodeRequest, ActivationRequest, AdminDeviceCreateRequest, AdminOperatorCreateRequest,
     CITY_OPTIONS,
     AdminOperatorUpdateRequest, AdminTokenCreateRequest, CommandCreateRequest, CommandResult,
     CredentialRotationRequest, DeviceEvent, Heartbeat, PaymentCreateRequest, PublicOrderCreateRequest,
     RefundCreateRequest, Snapshot, TaskAck, DeviceLifecycleUpdateRequest,
-    canonical_digest, utc_now,
 )
-from .order_logic import TERMINAL_ORDER_STATUSES, device_progress, order_state_for_event
-from .security import derive_order_access_token, hash_token, tokens_equal
+from .security import tokens_equal
 from .settings import get_settings
-from .payment_providers import AlipayProvider, MockPaymentProvider, PaymentProvider, PaymentRequest, RefundRequest
-from .payment_service import apply_paid_callback, callback_event_id, enqueue_outbox, transition_payment, transition_refund
+from .payment_providers import AlipayProvider, MockPaymentProvider, PaymentProvider
 from .emqx_provisioner import EmqxProvisioner
 from .db import UnitOfWork
 from .services.admin_operations import AdminOperationsService
 from .services.device_messages import DeviceMessageService
 from .services.device_identity import DeviceIdentityService
 from .services.commands import CommandService
+from .services.command_state import transition_command as service_transition_command
 from .services.mqtt_gateway import MqttGatewayService
 from .services.system import SystemService
 from .services.errors import ServiceError
-from .services.order_state import transition_order
 from .services.payments import PaymentApplicationService
 from .services.public_orders import PublicOrderService
 from .services.admin_access import AdminAccessService
+from .services.production import ProductionService
+from .services.background_worker import BackgroundWorkerService
 
 
 SERVICE_VERSION = "0.4.0"
@@ -99,40 +93,6 @@ def order_url(device_id: str) -> str:
     return f"{base}/order?device_id={quote(device_id, safe='')}"
 
 
-def provision_device() -> None:
-    if not settings.bootstrap_device_enabled:
-        return
-    if not settings.device_token:
-        raise RuntimeError("DEVICE_TOKEN is required when BOOTSTRAP_DEVICE_ENABLED=true")
-    token_hash = hash_token(settings.device_token)
-    with database.connect() as connection:
-        row = connection.execute(
-            """
-            insert into terminal(device_id, serial_number, instance_id, store_id)
-            values (%s, %s, %s, %s)
-            on conflict(device_id) do update set
-              serial_number = excluded.serial_number,
-              instance_id = excluded.instance_id,
-              store_id = excluded.store_id,
-              updated_at = now()
-            returning id
-            """,
-            (settings.device_id, settings.device_serial_number, settings.device_instance_id, settings.device_store_id),
-        ).fetchone()
-        existing = connection.execute("select id from terminal_credential where token_hash=%s", (token_hash,)).fetchone()
-        if existing is None:
-            version = connection.execute(
-                "select coalesce(max(version),0)+1 as version from terminal_credential where terminal_id=%s",
-                (row["id"],),
-            ).fetchone()["version"]
-            connection.execute(
-                """insert into terminal_credential(
-                       terminal_id, token_hash, credential_id, version, not_before, status)
-                     values (%s, %s, %s, %s, now(), 'ACTIVE')""",
-                (row["id"], token_hash, uuid.uuid4(), version),
-            )
-
-
 class OfflineMonitor:
     def __init__(self) -> None:
         self.stop_event = threading.Event()
@@ -146,29 +106,7 @@ class OfflineMonitor:
         self.thread.join(timeout=settings.offline_scan_seconds + 2)
 
     def scan_once(self) -> None:
-        cutoff = utc_now() - timedelta(seconds=settings.offline_threshold_seconds)
-        with database.connect() as connection:
-            connection.execute(
-                """update terminal_credential set status='EXPIRED'
-                     where (status='GRACE' and grace_expires_at <= now())
-                        or (status='ACTIVE' and expires_at is not null and expires_at <= now())"""
-            )
-            connection.execute(
-                """
-                update terminal
-                   set connection_status='offline', updated_at=now()
-                 where connection_status <> 'offline'
-                   and (last_heartbeat_at is null or last_heartbeat_at < %s)
-                """,
-                (cutoff,),
-            )
-            expired_commands = connection.execute(
-                """select * from terminal_command where status='CREATED'
-                     and expires_at is not null and expires_at <= now() for update skip locked"""
-            ).fetchall()
-            for command in expired_commands:
-                updated, _ = transition_command(connection, command, EXPIRED, "timeout-monitor", reason="command delivery deadline exceeded")
-                expire_order_for_command(connection, updated)
+        background_worker_service.offline_scan_once()
 
     def _run(self) -> None:
         while not self.stop_event.wait(settings.offline_scan_seconds):
@@ -197,12 +135,12 @@ class DomainWorker:
         last_watchdog = 0.0
         while not self.stop_event.wait(settings.outbox_scan_seconds):
             try:
-                process_business_outbox_batch()
-                reconcile_payment_once()
-                process_refund_batch()
+                background_worker_service.process_business_outbox_batch()
+                background_worker_service.reconcile_payment_once()
+                background_worker_service.process_refund_batch()
                 now = time.monotonic()
                 if now - last_watchdog >= min(10, settings.offline_scan_seconds):
-                    watchdog_scan_once()
+                    background_worker_service.watchdog_scan_once()
                     last_watchdog = now
             except Exception:
                 logger.exception("domain worker iteration failed")
@@ -214,9 +152,9 @@ domain_worker = DomainWorker()
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     database.initialize()
-    provision_device()
-    reconcile_stored_command_events()
-    reconcile_stored_order_events()
+    device_identity_service.bootstrap_device()
+    background_worker_service.reconcile_stored_command_events()
+    background_worker_service.reconcile_stored_order_events()
     offline_monitor.scan_once()
     offline_monitor.start()
     domain_worker.start()
@@ -448,50 +386,6 @@ def commands(
     return device_message_service.commands(identity, after, limit)
 
 
-def transition_command(
-    connection: Any,
-    command: dict[str, Any],
-    target: str,
-    actor: str,
-    *,
-    reason: str | None = None,
-    payload: dict[str, Any] | None = None,
-    strict: bool = True,
-) -> tuple[dict[str, Any], bool]:
-    decision = decide_transition(command["status"], target)
-    if decision.duplicate:
-        return command, True
-    if not decision.allowed:
-        if strict:
-            raise HTTPException(status_code=409, detail=decision.reason)
-        return command, False
-    revision = command["revision"] + 1
-    now = utc_now()
-    completed_at = now if target in TERMINAL_STATES else command.get("completed_at")
-    delivered_at = now if target in {DELIVERING, PUBLISHED} and not command.get("delivered_at") else command.get("delivered_at")
-    acked_at = now if target == ACKED and not command.get("acked_at") else command.get("acked_at")
-    executing_at = now if target == EXECUTING and not command.get("executing_at") else command.get("executing_at")
-    updated = connection.execute(
-        """update terminal_command set
-               status=%s,revision=%s,last_transition_at=%s,delivered_at=%s,
-               acked_at=%s,executing_at=%s,completed_at=%s,
-               result_json=case when %s::jsonb is null then result_json else %s::jsonb end
-             where id=%s returning *""",
-        (target, revision, now, delivered_at, acked_at, executing_at, completed_at,
-         Jsonb(payload) if payload is not None else None,
-         Jsonb(payload) if payload is not None else None,
-         command["id"]),
-    ).fetchone()
-    connection.execute(
-        """insert into terminal_command_transition(
-               command_id,revision,from_status,to_status,actor,reason,payload_json)
-             values(%s,%s,%s,%s,%s,%s,%s)""",
-        (command["id"], revision, command["status"], target, actor, reason,
-         Jsonb(payload) if payload is not None else None),
-    )
-    return updated, False
-
-
 @app.put("/api/v1/devices/{device_id}/capabilities")
 def capabilities(device_id: str, payload: Snapshot, identity: DeviceIdentity) -> dict[str, Any]:
     body = payload.model_dump(mode="json")
@@ -514,49 +408,8 @@ def events(device_id: str, payload: DeviceEvent, identity: DeviceIdentity) -> di
 
 
 def event_task_id(body: dict[str, Any]) -> str | None:
-    direct = body.get("taskId")
-    nested = body.get("payload")
-    value = direct or (nested.get("taskId") if isinstance(nested, dict) else None)
-    return value if isinstance(value, str) and value else None
-
-
-def reconcile_command_event(
-    connection: Any,
-    terminal_id: int,
-    body: dict[str, Any],
-    event_type: str,
-) -> dict[str, Any] | None:
-    target = event_state(event_type)
-    task_id = event_task_id(body)
-    if not target or not task_id:
-        return None
-    command = connection.execute(
-        """select * from terminal_command
-             where terminal_id=%s and payload_json->>'taskId'=%s
-             order by id desc limit 1 for update""",
-        (terminal_id, task_id),
-    ).fetchone()
-    if command is None:
-        return None
-    updated, duplicate = transition_command(
-        connection, command, target, "device-event",
-        reason=event_type, payload=body, strict=False,
-    )
-    return {
-        "messageId": updated["message_id"], "status": updated["status"],
-        "revision": updated["revision"], "duplicate": duplicate,
-    }
-
-
-def reconcile_stored_command_events() -> None:
-    with database.connect() as connection:
-        events_to_reconcile = connection.execute(
-            """select terminal_id,event_type,payload_json from terminal_event
-                 where event_type in ('task.started','task.succeeded','task.failed','task.cancelled')
-                 order by received_at,id"""
-        ).fetchall()
-        for item in events_to_reconcile:
-            reconcile_command_event(connection, item["terminal_id"], item["payload_json"], item["event_type"])
+    """Compatibility export for integrations that imported this parser from app.main."""
+    return ProductionService.event_task_id(body)
 
 
 @app.get("/api/v1/devices/{device_id}/display-config")
@@ -655,436 +508,19 @@ async def debug_overrides(device_id: str, request: Request, identity: DeviceIden
     return command_service.debug_overrides(identity, await request.json())
 
 
-def snapshot_payload(connection: Any, terminal_id: int, snapshot_type: str) -> dict[str, Any] | None:
-    row = connection.execute(
-        "select payload_json from terminal_snapshot where terminal_id=%s and snapshot_type=%s",
-        (terminal_id, snapshot_type),
-    ).fetchone()
-    return row["payload_json"] if row else None
-
-
-def expire_order_for_command(connection: Any, command: dict[str, Any]) -> None:
-    job = connection.execute(
-        "select * from production_job where command_id=%s for update", (command["id"],)
-    ).fetchone()
-    if not job or job["status"] not in {"DISPATCHED", "QUEUED"}:
-        return
-    connection.execute(
-        """update production_job set status='EXPIRED',revision=revision+1,
-             failure_json=%s,completed_at=now(),updated_at=now() where id=%s""",
-        (Jsonb({"code": "COMMAND_EXPIRED", "messageId": command["message_id"]}), job["id"]),
-    )
-    order = connection.execute("select * from sales_order where id=%s for update", (job["order_id"],)).fetchone()
-    connection.execute(
-        "update sales_order set failure_code='COMMAND_EXPIRED',failure_message='设备未在时限内接收制作指令' where id=%s",
-        (order["id"],),
-    )
-    transition_order(connection, order, "EXPIRED", "timeout-monitor", reason="device command expired")
-
-
-def reconcile_order_ack(connection: Any, terminal_id: int, task_id: str, body: dict[str, Any]) -> dict[str, Any] | None:
-    row = connection.execute(
-        """select j.*,o.status as order_status,o.id as sales_order_id
-             from production_job j join sales_order o on o.id=j.order_id
-             where j.terminal_id=%s and j.task_id=%s for update""",
-        (terminal_id, task_id),
-    ).fetchone()
-    if not row:
-        return None
-    order = connection.execute("select * from sales_order where id=%s for update", (row["sales_order_id"],)).fetchone()
-    if body.get("accepted"):
-        connection.execute(
-            """update production_job set status='ACCEPTED',revision=revision+1,
-                 accepted_at=coalesce(accepted_at,now()),updated_at=now() where id=%s""",
-            (row["id"],),
-        )
-        order = transition_order(connection, order, "ACCEPTED", "device-ack", reason="device reserved recipe and materials", payload=body)
-    else:
-        reason = body.get("reasonCode") or body.get("reason") or "DEVICE_REJECTED"
-        connection.execute(
-            """update production_job set status='REJECTED',revision=revision+1,failure_json=%s,
-                 completed_at=now(),updated_at=now() where id=%s""",
-            (Jsonb(body), row["id"]),
-        )
-        connection.execute(
-            "update sales_order set failure_code=%s,failure_message=%s where id=%s",
-            (reason, "设备未接受制作任务", order["id"]),
-        )
-        order = transition_order(connection, order, "FAILED", "device-ack", reason=reason, payload=body)
-        dispatch_next_order(connection, terminal_id)
-    return {"orderId": str(order["id"]), "status": order["status"]}
-
-
-def reconcile_order_event(
-    connection: Any,
-    terminal_id: int,
-    body: dict[str, Any],
-    event_type: str,
-) -> dict[str, Any] | None:
-    task_id = event_task_id(body)
-    if not task_id:
-        return None
-    row = connection.execute(
-        """select j.*,o.id as sales_order_id from production_job j
-             join sales_order o on o.id=j.order_id
-             where j.terminal_id=%s and j.task_id=%s for update""",
-        (terminal_id, task_id),
-    ).fetchone()
-    if not row:
-        return None
-    event_payload = body.get("payload") if isinstance(body.get("payload"), dict) else {}
-    device_revision = event_payload.get("taskRevision")
-    if isinstance(device_revision, int) and device_revision < int(row.get("last_device_revision") or 0):
-        return {"orderId": str(row["sales_order_id"]), "status": "STALE", "duplicate": True}
-    if event_type in {"task.progress", "step.started", "step.completed"}:
-        if row["status"] in {"SUCCEEDED", "FAILED", "REJECTED", "CANCELLED", "EXPIRED", "HOLD"}:
-            return {"orderId": str(row["sales_order_id"]), "status": "STALE_TERMINAL", "duplicate": True}
-        progress, step_progress = device_progress(
-            event_payload, float(row["progress"] or 0), float(row.get("step_progress") or 0)
-        )
-        connection.execute(
-            """update production_job set progress=%s,step_progress=%s,
-                 current_step_id=coalesce(%s,current_step_id),current_step_name=coalesce(%s,current_step_name),
-                 elapsed_seconds=coalesce(%s,elapsed_seconds),remaining_seconds=coalesce(%s,remaining_seconds),
-                 last_device_revision=greatest(last_device_revision,coalesce(%s,last_device_revision)),
-                 revision=revision+1,updated_at=now() where id=%s""",
-            (progress, step_progress,
-             event_payload.get("stepId"), event_payload.get("stepName") or body.get("message"),
-             event_payload.get("elapsedSeconds"), event_payload.get("remainingSeconds"), device_revision, row["id"]),
-        )
-        return {"orderId": str(row["sales_order_id"]), "status": "PROGRESS"}
-    mapped = order_state_for_event(event_type)
-    if not mapped:
-        return None
-    order_status, job_status = mapped
-    order = connection.execute("select * from sales_order where id=%s for update", (row["sales_order_id"],)).fetchone()
-    planned = event_payload.get("plannedDurationSeconds")
-    steps = event_payload.get("stepPlan") or event_payload.get("stepDurations")
-    failure = event_payload.get("failure") or ({"code": event_payload.get("reasonCode"), "details": event_payload.get("details")} if event_type == "task.rejected" else None)
-    progress = 1.0 if event_type == "task.succeeded" else float(event_payload.get("overallProgress", row["progress"] or 0))
-    step_progress = 1.0 if event_type == "task.succeeded" else float(event_payload.get("stepProgress", row.get("step_progress") or 0))
-    elapsed_seconds = planned if event_type == "task.succeeded" and planned is not None else event_payload.get("elapsedSeconds")
-    remaining_seconds = 0.0 if event_type == "task.succeeded" else event_payload.get("remainingSeconds")
-    accepted_at = utc_now() if job_status == "ACCEPTED" and not row.get("accepted_at") else row.get("accepted_at")
-    started_at = utc_now() if job_status == "EXECUTING" and not row.get("started_at") else row.get("started_at")
-    completed_at = utc_now() if job_status in {"SUCCEEDED", "FAILED", "CANCELLED", "REJECTED"} else row.get("completed_at")
-    connection.execute(
-        """update production_job set status=%s,progress=%s,step_progress=%s,
-             planned_duration_seconds=coalesce(%s,planned_duration_seconds),
-             step_durations=coalesce(%s::jsonb,step_durations),failure_json=coalesce(%s,failure_json),
-             elapsed_seconds=coalesce(%s,elapsed_seconds),remaining_seconds=coalesce(%s,remaining_seconds),
-             last_device_revision=greatest(last_device_revision,coalesce(%s,last_device_revision)),
-             revision=revision+1,accepted_at=%s,started_at=%s,completed_at=%s,updated_at=now() where id=%s""",
-        (job_status, progress, step_progress, planned, Jsonb(steps) if steps is not None else None, Jsonb(failure) if failure else None,
-         elapsed_seconds, remaining_seconds, device_revision, accepted_at, started_at, completed_at, row["id"]),
-    )
-    if failure:
-        failure_code = failure.get("code") or failure.get("errorCode") or "PRODUCTION_FAILED"
-        connection.execute(
-            "update sales_order set failure_code=%s,failure_message=%s where id=%s",
-            (failure_code, body.get("message") or "制作失败", order["id"]),
-        )
-    order = transition_order(connection, order, order_status, "device-event", reason=event_type, payload=body)
-    if order_status == "FAILED" and event_type in {"task.failed", "task.rejected"}:
-        create_automatic_refund_record(connection, order, row, event_type)
-    if order_status in TERMINAL_ORDER_STATUSES:
-        dispatch_next_order(connection, terminal_id)
-    return {"orderId": str(order["id"]), "status": order["status"]}
-
-
-def create_automatic_refund_record(
-    connection: Any, order: dict[str, Any], job: dict[str, Any], reason: str,
-) -> dict[str, Any] | None:
-    payment = connection.execute(
-        "select * from payment where order_id=%s and status in ('PAID','PARTIALLY_REFUNDED') order by paid_at desc limit 1 for update",
-        (order["id"],),
-    ).fetchone()
-    if not payment:
-        return None
-    key = f"production:{job['id']}:automatic-refund"
-    existing = connection.execute(
-        "select * from refund where payment_id=%s and idempotency_key=%s", (payment["id"], key)
-    ).fetchone()
-    if existing:
-        return existing
-    request_body = {"amountMinor": payment["amount_minor"], "reason": reason}
-    refund = connection.execute(
-        """insert into refund(id,payment_id,provider,merchant_refund_no,idempotency_key,
-               request_digest,status,amount_minor,reason,next_attempt_at)
-             values(%s,%s,%s,%s,%s,%s,'REQUESTED',%s,%s,now()) returning *""",
-        (uuid.uuid4(), payment["id"], payment["provider"], f"R{uuid.uuid4().hex[:24].upper()}",
-         key, canonical_digest(request_body), payment["amount_minor"], f"production failure: {reason}"),
-    ).fetchone()
-    transition_payment(connection, payment, "REFUNDING", actor="production-service", payload={"refundId": str(refund["id"])})
-    connection.execute("update sales_order set payment_status='REFUNDING',updated_at=now() where id=%s", (order["id"],))
-    return refund
-
-
-def reconcile_stored_order_events() -> None:
-    with database.connect() as connection:
-        rows = connection.execute(
-            """select terminal_id,event_type,payload_json from terminal_event
-                 where event_type like 'task.%' or event_type like 'step.%'
-                 order by received_at,id"""
-        ).fetchall()
-        for row in rows:
-            reconcile_order_event(connection, row["terminal_id"], row["payload_json"], row["event_type"])
-
-
-def enqueue_command_outbox(connection: Any, command: dict[str, Any], terminal: dict[str, Any]) -> None:
-    envelope = {
-        "schema": "coffee.mqtt-envelope.v1", "messageId": command["message_id"],
-        "deviceId": terminal["device_id"], "type": "command", "sentAt": iso(utc_now()),
-        "payload": command["payload_json"],
-    }
-    connection.execute(
-        """insert into command_outbox(id,command_id,terminal_id,topic,envelope_json)
-             values(%s,%s,%s,%s,%s) on conflict(command_id) do nothing""",
-        (uuid.uuid4(), command["id"], terminal["id"], f"v1/devices/{terminal['device_id']}/down", Jsonb(envelope)),
-    )
-
-
-def dispatch_next_order(connection: Any, terminal_id: int) -> dict[str, Any] | None:
-    terminal = connection.execute("select * from terminal where id=%s for update", (terminal_id,)).fetchone()
-    cutoff = utc_now() - timedelta(seconds=settings.offline_threshold_seconds)
-    if not terminal.get("last_heartbeat_at") or terminal["last_heartbeat_at"] < cutoff or terminal.get("lifecycle_status") != "ACTIVE":
-        return None
-    active = connection.execute(
-        """select 1 from production_job where terminal_id=%s
-             and status in ('DISPATCHED','ACCEPTED','EXECUTING','HOLD','UNKNOWN') limit 1""",
-        (terminal_id,),
-    ).fetchone()
-    if active:
-        return None
-    job = connection.execute(
-        """select j.*,o.recipe_id,o.recipe_version,o.status as order_status
-             from production_job j join sales_order o on o.id=j.order_id
-             where j.terminal_id=%s and j.status='QUEUED' and o.status='QUEUED'
-             order by j.created_at for update skip locked limit 1""",
-        (terminal_id,),
-    ).fetchone()
-    if not job:
-        return None
-    expires_at = utc_now() + timedelta(minutes=10)
-    message_id = f"cmd-{uuid.uuid4()}"
-    command = {
-        "messageId": message_id,
-        "type": "MAKE_DRINK",
-        "taskId": job["task_id"],
-        "orderId": str(job["order_id"]),
-        "recipeId": job["recipe_id"],
-        "recipeVersion": job["recipe_version"],
-        "expiresAt": iso(expires_at),
-    }
-    command_row = connection.execute(
-        """insert into terminal_command(
-               terminal_id,message_id,command_type,payload_json,idempotency_key,payload_digest,expires_at)
-             values(%s,%s,'MAKE_DRINK',%s,%s,%s,%s) returning *""",
-        (terminal_id, message_id, Jsonb(command), f"order:{job['order_id']}:make", canonical_digest(command), expires_at),
-    ).fetchone()
-    connection.execute(
-        """insert into terminal_command_transition(
-               command_id,revision,from_status,to_status,actor,reason,payload_json)
-             values(%s,0,null,'CREATED','order-service','dispatch queued order',%s)""",
-        (command_row["id"], Jsonb(command)),
-    )
-    enqueue_command_outbox(connection, command_row, terminal)
-    connection.execute(
-        "update production_job set command_id=%s,status='DISPATCHED',revision=revision+1,updated_at=now() where id=%s",
-        (command_row["id"], job["id"]),
-    )
-    order = connection.execute("select * from sales_order where id=%s for update", (job["order_id"],)).fetchone()
-    transition_order(connection, order, "DISPATCHED", "order-service", reason="device command created", payload={"messageId": message_id})
-    return command
-
-
-def process_business_outbox_batch(limit: int = 20) -> int:
-    processed = 0
-    worker_id = f"domain-{uuid.uuid4()}"
-    for _ in range(limit):
-        event_id: uuid.UUID | None = None
-        try:
-            with database.connect() as connection:
-                event = connection.execute(
-                    """select * from business_outbox
-                         where status in ('PENDING','RETRY') and next_attempt_at<=now()
-                         order by created_at for update skip locked limit 1"""
-                ).fetchone()
-                if not event:
-                    break
-                event_id = event["id"]
-                connection.execute(
-                    "update business_outbox set status='PROCESSING',locked_by=%s,locked_until=now()+interval '30 seconds' where id=%s",
-                    (worker_id, event["id"]),
-                )
-                if event["event_type"] == "payment.paid":
-                    order_id = uuid.UUID(str(event["payload_json"]["orderId"]))
-                    order = connection.execute("select * from sales_order where id=%s for update", (order_id,)).fetchone()
-                    if order and order["payment_status"] == "PAID":
-                        job = connection.execute("select * from production_job where order_id=%s", (order_id,)).fetchone()
-                        if not job:
-                            connection.execute(
-                                """insert into production_job(id,task_id,order_id,terminal_id,status,planned_duration_seconds)
-                                     values(%s,%s,%s,%s,'QUEUED',%s)""",
-                                (uuid.uuid4(), f"task-{uuid.uuid4()}", order_id, order["terminal_id"],
-                                 (order["product_snapshot"] or {}).get("estimatedDurationSeconds")),
-                            )
-                        if order["status"] == "PAID":
-                            order = transition_order(connection, order, "QUEUED", "outbox-worker", reason="paid order queued")
-                        dispatch_next_order(connection, order["terminal_id"])
-                connection.execute(
-                    "update business_outbox set status='PROCESSED',processed_at=now(),locked_by=null,locked_until=null where id=%s",
-                    (event["id"],),
-                )
-                processed += 1
-        except Exception as exc:
-            logger.exception("business outbox event failed id=%s", event_id)
-            if event_id is not None:
-                with database.connect() as connection:
-                    connection.execute(
-                        """update business_outbox set status='RETRY',attempt_count=attempt_count+1,
-                             next_attempt_at=now()+(least(300,power(2,least(attempt_count+1,8)))::text||' seconds')::interval,
-                             last_error=%s,locked_by=null,locked_until=null where id=%s""",
-                        (str(exc)[:1000], event_id),
-                    )
-    return processed
-
-
-def reconcile_payment_once() -> int:
-    with database.connect() as connection:
-        payment = connection.execute(
-            """select * from payment where status in ('CREATED','PENDING')
-                 and (next_reconcile_at is null or next_reconcile_at<=now())
-                 order by created_at for update skip locked limit 1"""
-        ).fetchone()
-        if not payment:
-            return 0
-        connection.execute(
-            "update payment set next_reconcile_at=now()+(%s::text||' seconds')::interval where id=%s",
-            (settings.payment_reconcile_seconds, payment["id"]),
-        )
-    try:
-        result = payment_provider(payment["provider"]).query_payment(payment["merchant_payment_no"])
-    except Exception as exc:
-        logger.info("payment reconciliation deferred payment=%s: %s", payment["id"], exc)
-        return 0
-    with database.connect() as connection:
-        current = connection.execute("select * from payment where id=%s for update", (payment["id"],)).fetchone()
-        if current["status"] not in {"CREATED", "PENDING"}:
-            return 1
-        if result.status == "PAID":
-            apply_paid_callback(
-                connection, provider=current["provider"],
-                event_id=f"reconcile-paid:{current['merchant_payment_no']}",
-                values={
-                    "merchant_payment_no": current["merchant_payment_no"],
-                    "amount_minor": str(current["amount_minor"]),
-                    "provider_trade_no": result.provider_trade_no or "",
-                },
-            )
-        elif result.status in {"CLOSED", "FAILED"}:
-            target = "CLOSED" if result.status == "CLOSED" else "FAILED"
-            transition_payment(connection, current, target, actor="payment-reconciliation", payload=result.raw)
-            connection.execute(
-                "update sales_order set payment_status=%s,status=case when status in ('CREATED','AWAITING_PAYMENT') then 'CANCELLED' else status end,updated_at=now() where id=%s",
-                (target, current["order_id"]),
-            )
-    return 1
-
-
-def process_refund_batch() -> int:
-    with database.connect() as connection:
-        refund = connection.execute(
-            """select * from refund where status in ('REQUESTED','UNKNOWN','PROCESSING')
-                 and (next_attempt_at is null or next_attempt_at<=now())
-                 order by created_at for update skip locked limit 1"""
-        ).fetchone()
-        if not refund:
-            return 0
-        payment = connection.execute("select * from payment where id=%s", (refund["payment_id"],)).fetchone()
-        if refund["status"] != "PROCESSING":
-            refund, _ = transition_refund(connection, refund, "PROCESSING")
-            connection.execute("update refund set next_attempt_at=now()+interval '30 seconds' where id=%s", (refund["id"],))
-        connection.execute(
-            "update refund set attempt_count=attempt_count+1,next_attempt_at=now()+interval '30 seconds' where id=%s",
-            (refund["id"],),
-        )
-    try:
-        provider = payment_provider(payment["provider"])
-        refund_request = RefundRequest(
-            merchant_payment_no=payment["merchant_payment_no"], merchant_refund_no=refund["merchant_refund_no"],
-            amount_minor=refund["amount_minor"], reason=refund["reason"], provider_trade_no=payment["provider_trade_no"],
-        )
-        result = provider.query_refund(refund_request) if int(refund["attempt_count"] or 0) > 0 else provider.refund(refund_request)
-        if result.status == "NOT_FOUND":
-            result = provider.refund(refund_request)
-        target = "SUCCEEDED" if result.status == "REFUNDED" else "PROCESSING"
-        provider_payload = result.raw
-    except Exception as exc:
-        logger.warning("refund reconciliation outcome unknown refund=%s: %s", refund["id"], exc)
-        target = "UNKNOWN"
-        provider_payload = {"error": f"{type(exc).__name__}: {exc}"}
-    with database.connect() as connection:
-        current = connection.execute("select * from refund where id=%s for update", (refund["id"],)).fetchone()
-        current, _ = transition_refund(connection, current, target, payload=provider_payload)
-        if target == "SUCCEEDED":
-            current_payment = connection.execute("select * from payment where id=%s for update", (current["payment_id"],)).fetchone()
-            refunded = connection.execute(
-                "select coalesce(sum(amount_minor),0) as total from refund where payment_id=%s and status='SUCCEEDED'",
-                (current_payment["id"],),
-            ).fetchone()["total"]
-            payment_target = "REFUNDED" if refunded >= current_payment["amount_minor"] else "PARTIALLY_REFUNDED"
-            transition_payment(connection, current_payment, payment_target, actor="refund-reconciliation", payload=provider_payload)
-            order = connection.execute("select * from sales_order where id=%s for update", (current_payment["order_id"],)).fetchone()
-            connection.execute("update sales_order set payment_status=%s,updated_at=now() where id=%s", (payment_target, order["id"]))
-            if payment_target == "REFUNDED" and order["status"] == "FAILED":
-                transition_order(connection, order, "REFUNDED", "refund-reconciliation", reason="full refund completed")
-        else:
-            connection.execute(
-                "update refund set next_attempt_at=now()+interval '30 seconds' where id=%s", (current["id"],)
-            )
-    return 1
-
-
-def watchdog_scan_once() -> None:
-    with database.connect() as connection:
-        rows = connection.execute(
-            """select c.*,j.id as job_id,j.order_id,j.status as job_status,j.planned_duration_seconds,
-                      j.started_at as job_started_at
-                 from terminal_command c join production_job j on j.command_id=c.id
-                where (c.status in ('DELIVERING','PUBLISHED') and coalesce(c.published_at,c.delivered_at) is not null
-                       and coalesce(c.published_at,c.delivered_at) < now()-(%s::text||' seconds')::interval)
-                   or (c.status='ACKED' and c.acked_at < now()-(%s::text||' seconds')::interval)
-                   or (c.status='EXECUTING' and j.started_at is not null
-                       and j.started_at + ((coalesce(j.planned_duration_seconds,300)+%s)::text||' seconds')::interval < now())
-                for update skip locked""",
-            (settings.command_ack_timeout_seconds, settings.command_start_timeout_seconds,
-             settings.production_timeout_grace_seconds),
-        ).fetchall()
-        for row in rows:
-            command, _ = transition_command(
-                connection, row, "UNKNOWN", "watchdog",
-                reason="device outcome requires reconciliation", strict=False,
-            )
-            connection.execute(
-                """update production_job set status='HOLD',hold_reason='DEVICE_OUTCOME_UNKNOWN',
-                     manual_review_required=true,revision=revision+1,updated_at=now() where id=%s""",
-                (row["job_id"],),
-            )
-            order = connection.execute("select * from sales_order where id=%s for update", (row["order_id"],)).fetchone()
-            if order and order["status"] not in TERMINAL_ORDER_STATUSES:
-                transition_order(connection, order, "HOLD", "watchdog", reason="device outcome unknown")
-
-
 unit_of_work = UnitOfWork(database)
 system_service = SystemService(unit_of_work, SERVICE_VERSION, logger)
 admin_access_service = AdminAccessService(unit_of_work, settings)
 device_identity_service = DeviceIdentityService(
     unit_of_work, settings=settings, provisioner_factory=emqx_provisioner, logger=logger
 )
+production_service = ProductionService(settings, payment_provider=payment_provider)
+background_worker_service = BackgroundWorkerService(
+    unit_of_work, settings, payment_provider=payment_provider, production=production_service,
+)
 public_order_service = PublicOrderService(
     unit_of_work, settings,
-    dispatch_next_order=dispatch_next_order,
+    dispatch_next_order=production_service.dispatch_next_order,
     payment_provider=payment_provider,
 )
 payment_application_service = PaymentApplicationService(
@@ -1099,19 +535,18 @@ admin_operations_service = AdminOperationsService(
 )
 device_message_service = DeviceMessageService(
     unit_of_work,
-    dispatch_next_order=dispatch_next_order,
-    transition_command=transition_command,
-    expire_order_for_command=expire_order_for_command,
-    reconcile_command_event=reconcile_command_event,
-    reconcile_order_event=reconcile_order_event,
-    reconcile_order_ack=reconcile_order_ack,
+    dispatch_next_order=production_service.dispatch_next_order,
+    transition_command=service_transition_command,
+    expire_order_for_command=production_service.expire_order_for_command,
+    reconcile_command_event=production_service.reconcile_command_event,
+    reconcile_order_event=production_service.reconcile_order_event,
+    reconcile_order_ack=production_service.reconcile_order_ack,
     order_url=order_url,
 )
 command_service = CommandService(
     unit_of_work,
     lease_seconds=settings.command_publish_lease_seconds,
-    enqueue_outbox=enqueue_command_outbox,
-    transition_command=transition_command,
+    transition_command=service_transition_command,
 )
 mqtt_gateway_service = MqttGatewayService(
     unit_of_work,

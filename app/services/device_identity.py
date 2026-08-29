@@ -51,6 +51,27 @@ class DeviceIdentityService:
             raise ServiceError(401, "invalid device credential")
         return identity
 
+    def bootstrap_device(self) -> None:
+        if not self.settings.bootstrap_device_enabled:
+            return
+        if not self.settings.device_token:
+            raise RuntimeError("DEVICE_TOKEN is required when BOOTSTRAP_DEVICE_ENABLED=true")
+        token_hash = hash_token(self.settings.device_token)
+        now = utc_now()
+        with self.uow.transaction() as connection:
+            terminal = TerminalRepository(connection).upsert_bootstrap(
+                device_id=self.settings.device_id,
+                serial_number=self.settings.device_serial_number,
+                instance_id=self.settings.device_instance_id,
+                store_id=self.settings.device_store_id,
+            )
+            identity = IdentityRepository(connection)
+            if not identity.token_exists(token_hash):
+                identity.create_http_credential(
+                    terminal_id=terminal["id"], token_hash=token_hash,
+                    version=identity.next_http_version(terminal["id"]), now=now,
+                )
+
     def create_activation_code(self, identifier: str, ttl_seconds: int | None) -> dict[str, Any]:
         ttl = ttl_seconds or self.settings.activation_ttl_seconds
         code = secrets.token_urlsafe(24)

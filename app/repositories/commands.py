@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+import uuid
 from typing import Any
 
 from psycopg.types.json import Jsonb
@@ -45,6 +47,51 @@ class CommandRepository:
             "select * from terminal_command where id=%s for update", (command_id,)
         ).fetchone()
 
+    def by_task(self, terminal_id: int, task_id: str, *, for_update: bool = False) -> dict[str, Any] | None:
+        suffix = " for update" if for_update else ""
+        return self.connection.execute(
+            """select * from terminal_command
+                 where terminal_id=%s and payload_json->>'taskId'=%s
+                 order by id desc limit 1""" + suffix,
+            (terminal_id, task_id),
+        ).fetchone()
+
+    def transition(
+        self,
+        command: dict[str, Any],
+        target: str,
+        actor: str,
+        *,
+        reason: str | None = None,
+        payload: dict[str, Any] | None = None,
+        now_at: datetime,
+    ) -> dict[str, Any]:
+        revision = command["revision"] + 1
+        terminal_states = {"SUCCEEDED", "REJECTED", "FAILED", "EXPIRED", "CANCELLED"}
+        completed_at = now_at if target in terminal_states else command.get("completed_at")
+        delivered_at = now_at if target in {"DELIVERING", "PUBLISHED"} and not command.get("delivered_at") else command.get("delivered_at")
+        acked_at = now_at if target == "ACKED" and not command.get("acked_at") else command.get("acked_at")
+        executing_at = now_at if target == "EXECUTING" and not command.get("executing_at") else command.get("executing_at")
+        updated = self.connection.execute(
+            """update terminal_command set
+                   status=%s,revision=%s,last_transition_at=%s,delivered_at=%s,
+                   acked_at=%s,executing_at=%s,completed_at=%s,
+                   result_json=case when %s::jsonb is null then result_json else %s::jsonb end
+                 where id=%s returning *""",
+            (target, revision, now_at, delivered_at, acked_at, executing_at, completed_at,
+             Jsonb(payload) if payload is not None else None,
+             Jsonb(payload) if payload is not None else None,
+             command["id"]),
+        ).fetchone()
+        self.connection.execute(
+            """insert into terminal_command_transition(
+                   command_id,revision,from_status,to_status,actor,reason,payload_json)
+                 values(%s,%s,%s,%s,%s,%s,%s)""",
+            (command["id"], revision, command["status"], target, actor, reason,
+             Jsonb(payload) if payload is not None else None),
+        )
+        return updated
+
     def set_published_at(self, command_id: int) -> None:
         self.connection.execute(
             "update terminal_command set published_at=coalesce(published_at,now()) where id=%s", (command_id,)
@@ -73,6 +120,13 @@ class CommandRepository:
                    command_id,revision,from_status,to_status,actor,reason,payload_json)
                  values(%s,0,null,'CREATED',%s,%s,%s)""",
             (command_id, actor, reason, Jsonb(payload)),
+        )
+
+    def insert_outbox(self, command_id: int, terminal_id: int, topic: str, envelope: dict[str, Any]) -> None:
+        self.connection.execute(
+            """insert into command_outbox(id,command_id,terminal_id,topic,envelope_json)
+                 values(%s,%s,%s,%s,%s) on conflict(command_id) do nothing""",
+            (uuid.uuid4(), command_id, terminal_id, topic, Jsonb(envelope)),
         )
 
     def find(self, terminal_id: int, message_id: str) -> dict[str, Any] | None:

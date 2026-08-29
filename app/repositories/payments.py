@@ -40,6 +40,12 @@ class PaymentRepository:
             (order_id,),
         ).fetchone()
 
+    def paid_for_order(self, order_id: uuid.UUID) -> dict[str, Any] | None:
+        return self.connection.execute(
+            """select * from payment where order_id=%s and status in ('PAID','PARTIALLY_REFUNDED')
+                 order by paid_at desc limit 1 for update""", (order_id,)
+        ).fetchone()
+
     def find_mock_by_merchant_no(self, merchant_no: str) -> dict[str, Any] | None:
         return self.connection.execute(
             "select * from payment where provider='mock' and merchant_payment_no=%s", (merchant_no,)

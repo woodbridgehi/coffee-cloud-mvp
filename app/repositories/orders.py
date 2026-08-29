@@ -84,10 +84,127 @@ class OrderRepository:
             (job_id, task_id, order_id, terminal_id, planned_duration_seconds),
         )
 
+    def insert_production_job(
+        self, *, job_id: uuid.UUID, task_id: str, order_id: uuid.UUID, terminal_id: int,
+        planned_duration_seconds: float | None,
+    ) -> None:
+        """Create the queued job produced by a successful payment event."""
+        self.insert_test_free_job(
+            job_id=job_id, task_id=task_id, order_id=order_id,
+            terminal_id=terminal_id, planned_duration_seconds=planned_duration_seconds,
+        )
+
     def job(self, order_id: uuid.UUID) -> dict[str, Any] | None:
         return self.connection.execute(
             "select * from production_job where order_id=%s", (order_id,)
         ).fetchone()
+
+    def job_for_command(self, command_id: int, *, for_update: bool = False) -> dict[str, Any] | None:
+        suffix = " for update" if for_update else ""
+        return self.connection.execute(
+            "select * from production_job where command_id=%s" + suffix, (command_id,)
+        ).fetchone()
+
+    def job_for_task(self, terminal_id: int, task_id: str, *, for_update: bool = False) -> dict[str, Any] | None:
+        suffix = " for update" if for_update else ""
+        return self.connection.execute(
+            """select j.*,o.status as order_status,o.id as sales_order_id
+                 from production_job j join sales_order o on o.id=j.order_id
+                where j.terminal_id=%s and j.task_id=%s""" + suffix,
+            (terminal_id, task_id),
+        ).fetchone()
+
+    def update_job_expired(self, job_id: uuid.UUID, failure: dict[str, Any]) -> None:
+        self.connection.execute(
+            """update production_job set status='EXPIRED',revision=revision+1,
+                 failure_json=%s,completed_at=now(),updated_at=now() where id=%s""",
+            (Jsonb(failure), job_id),
+        )
+
+    def update_job_acknowledged(self, job_id: uuid.UUID, *, accepted: bool, payload: dict[str, Any]) -> None:
+        if accepted:
+            self.connection.execute(
+                """update production_job set status='ACCEPTED',revision=revision+1,
+                     accepted_at=coalesce(accepted_at,now()),updated_at=now() where id=%s""",
+                (job_id,),
+            )
+            return
+        self.connection.execute(
+            """update production_job set status='REJECTED',revision=revision+1,failure_json=%s,
+                 completed_at=now(),updated_at=now() where id=%s""",
+            (Jsonb(payload), job_id),
+        )
+
+    def update_job_progress(
+        self, job_id: uuid.UUID, *, progress: float, step_progress: float,
+        step_id: str | None, step_name: str | None, elapsed: float | None,
+        remaining: float | None, device_revision: int | None,
+    ) -> None:
+        self.connection.execute(
+            """update production_job set progress=%s,step_progress=%s,
+                 current_step_id=coalesce(%s,current_step_id),current_step_name=coalesce(%s,current_step_name),
+                 elapsed_seconds=coalesce(%s,elapsed_seconds),remaining_seconds=coalesce(%s,remaining_seconds),
+                 last_device_revision=greatest(last_device_revision,coalesce(%s,last_device_revision)),
+                 revision=revision+1,updated_at=now() where id=%s""",
+            (progress, step_progress, step_id, step_name, elapsed, remaining, device_revision, job_id),
+        )
+
+    def update_job_terminal(
+        self, job_id: uuid.UUID, *, status: str, progress: float, step_progress: float,
+        planned: float | None, steps: Any, failure: dict[str, Any] | None,
+        elapsed: float | None, remaining: float | None, device_revision: int | None,
+        accepted_at: Any, started_at: Any, completed_at: Any,
+    ) -> None:
+        self.connection.execute(
+            """update production_job set status=%s,progress=%s,step_progress=%s,
+                 planned_duration_seconds=coalesce(%s,planned_duration_seconds),
+                 step_durations=coalesce(%s::jsonb,step_durations),failure_json=coalesce(%s,failure_json),
+                 elapsed_seconds=coalesce(%s,elapsed_seconds),remaining_seconds=coalesce(%s,remaining_seconds),
+                 last_device_revision=greatest(last_device_revision,coalesce(%s,last_device_revision)),
+                 revision=revision+1,accepted_at=%s,started_at=%s,completed_at=%s,updated_at=now() where id=%s""",
+            (status, progress, step_progress, planned, Jsonb(steps) if steps is not None else None,
+             Jsonb(failure) if failure else None, elapsed, remaining, device_revision,
+             accepted_at, started_at, completed_at, job_id),
+        )
+
+    def terminal_for_update(self, terminal_id: int) -> dict[str, Any] | None:
+        return self.connection.execute("select * from terminal where id=%s for update", (terminal_id,)).fetchone()
+
+    def active_job_exists(self, terminal_id: int) -> bool:
+        return self.connection.execute(
+            """select 1 from production_job where terminal_id=%s
+                 and status in ('DISPATCHED','ACCEPTED','EXECUTING','HOLD','UNKNOWN') limit 1""",
+            (terminal_id,),
+        ).fetchone() is not None
+
+    def next_queued_job(self, terminal_id: int) -> dict[str, Any] | None:
+        return self.connection.execute(
+            """select j.*,o.recipe_id,o.recipe_version,o.status as order_status
+                 from production_job j join sales_order o on o.id=j.order_id
+                where j.terminal_id=%s and j.status='QUEUED' and o.status='QUEUED'
+                order by j.created_at for update skip locked limit 1""",
+            (terminal_id,),
+        ).fetchone()
+
+    def link_command(self, job_id: uuid.UUID, command_id: int) -> None:
+        self.connection.execute(
+            "update production_job set command_id=%s,status='DISPATCHED',revision=revision+1,updated_at=now() where id=%s",
+            (command_id, job_id),
+        )
+
+    def stored_command_events(self) -> list[dict[str, Any]]:
+        return self.connection.execute(
+            """select terminal_id,event_type,payload_json from terminal_event
+                 where event_type in ('task.started','task.succeeded','task.failed','task.cancelled')
+                 order by received_at,id"""
+        ).fetchall()
+
+    def stored_order_events(self) -> list[dict[str, Any]]:
+        return self.connection.execute(
+            """select terminal_id,event_type,payload_json from terminal_event
+                 where event_type like 'task.%' or event_type like 'step.%'
+                 order by received_at,id"""
+        ).fetchall()
 
     def transitions(self, order_id: uuid.UUID) -> list[dict[str, Any]]:
         return self.connection.execute(
@@ -115,6 +232,20 @@ class OrderRepository:
         self.connection.execute(
             "update sales_order set payment_status=%s,updated_at=now() where id=%s",
             (status, order_id),
+        )
+
+    def update_payment_outcome(self, order_id: uuid.UUID, status: str) -> None:
+        self.connection.execute(
+            """update sales_order set payment_status=%s,
+                 status=case when status in ('CREATED','AWAITING_PAYMENT') then 'CANCELLED' else status end,
+                 updated_at=now() where id=%s""",
+            (status, order_id),
+        )
+
+    def update_failure(self, order_id: uuid.UUID, code: str, message: str) -> None:
+        self.connection.execute(
+            "update sales_order set failure_code=%s,failure_message=%s,updated_at=now() where id=%s",
+            (code, message, order_id),
         )
 
     def list_admin(

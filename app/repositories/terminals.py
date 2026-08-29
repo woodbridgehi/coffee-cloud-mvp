@@ -67,6 +67,19 @@ class TerminalRepository:
             (device_id, serial_number, instance_id, store_id),
         ).fetchone()
 
+    def upsert_bootstrap(
+        self, *, device_id: str, serial_number: str, instance_id: str | None, store_id: str | None
+    ) -> dict[str, Any]:
+        return self.connection.execute(
+            """insert into terminal(device_id,serial_number,instance_id,store_id)
+                 values(%s,%s,%s,%s)
+                 on conflict(device_id) do update set
+                   serial_number=excluded.serial_number,instance_id=excluded.instance_id,
+                   store_id=excluded.store_id,updated_at=now()
+                 returning *""",
+            (device_id, serial_number, instance_id, store_id),
+        ).fetchone()
+
     def complete_onboarding_profile(self, terminal_id: int, profile: dict[str, Any]) -> dict[str, Any]:
         """Fill deployment metadata exactly once; administrator-provided values always win."""
         return self.connection.execute(

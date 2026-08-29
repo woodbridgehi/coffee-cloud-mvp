@@ -15,13 +15,22 @@ from .presenters import iso
 class CommandService:
     def __init__(
         self, uow: UnitOfWork, *, lease_seconds: int,
-        enqueue_outbox: Callable[[Any, dict[str, Any], dict[str, Any]], None],
         transition_command: Callable[..., tuple[dict[str, Any], bool]],
     ) -> None:
         self.uow = uow
         self.lease_seconds = lease_seconds
-        self.enqueue_outbox = enqueue_outbox
         self.transition_command = transition_command
+
+    @staticmethod
+    def _enqueue_outbox(connection: Any, command: dict[str, Any], terminal: dict[str, Any]) -> None:
+        envelope = {
+            "schema": "coffee.mqtt-envelope.v1", "messageId": command["message_id"],
+            "deviceId": terminal["device_id"], "type": "command", "sentAt": iso(utc_now()),
+            "payload": command["payload_json"],
+        }
+        CommandRepository(connection).insert_outbox(
+            command["id"], terminal["id"], f"v1/devices/{terminal['device_id']}/down", envelope
+        )
 
     @staticmethod
     def payload(row: dict[str, Any], transitions: list[dict[str, Any]] | None = None) -> dict[str, Any]:
@@ -91,7 +100,7 @@ class CommandService:
                 expires_at=payload.get("expiresAt"),
             )
             repository.insert_initial_transition(row["id"], "debug-api", "legacy debug command", payload)
-            self.enqueue_outbox(connection, row, identity)
+            self._enqueue_outbox(connection, row, identity)
         return payload
 
     def create_debug_order(self, identity: dict[str, Any], recipe_id: str | None) -> dict[str, Any]:
@@ -145,7 +154,7 @@ class CommandService:
                 payload=command, digest=digest, expires_at=expires_at, idempotency_key=key,
             )
             repository.insert_initial_transition(row["id"], "admin-api", "command created", command)
-            self.enqueue_outbox(connection, row, terminal)
+            self._enqueue_outbox(connection, row, terminal)
         return {"duplicate": False, **self.payload(row)}
 
     def get_admin(self, identifier: str, message_id: str) -> dict[str, Any]:

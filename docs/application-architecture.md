@@ -33,6 +33,8 @@ Service 使用 `UnitOfWork.transaction()` 开启事务，并在事务内创建�
 - `MqttGatewayService` → `MqttGatewayRepository`，并将已去重消息交给设备消息 Service
 - `AdminOperationsService` → `TerminalRepository`、`OrderRepository`
 - `AdminAccessService` → `AdminAccessRepository`，负责运营员、角色权限、可撤销令牌与审计日志
+- `ProductionService` → `CommandRepository`、`OrderRepository`、`PaymentRepository`，负责制作任务、设备事件、订单状态和自动退款意图
+- `BackgroundWorkerService` → `WorkerRepository`、`ProductionService`、`OrderRepository`、`PaymentRepository`，负责离线扫描、Business Outbox、支付对账、退款重试和 watchdog
 
 外部支付和 EMQX 管理 API 由 Service 调用。数据库事务不能跨越耗时网络调用：先保存待处理状态并提交，调用外部系统，再在新事务中保存结果。这样可避免长事务和数据库行锁长期占用。
 
@@ -45,9 +47,30 @@ Service 使用 `UnitOfWork.transaction()` 开启事务，并在事务内创建�
 - Service 抛出 `ServiceError`，统一由 HTTP 层转换为响应；Repository 不依赖 FastAPI。
 - `ADMIN_TOKEN` 只作为应急 OWNER；日常运营使用数据库中仅保存摘要的独立运营 Token。
 
-## 尚待迁移的后台适配器
+## 后台任务边界
 
-`main.py` 中的启动引导、离线扫描、支付对账、退款执行、业务 Outbox 和 watchdog 是后台任务入口，不属于 HTTP 路由。它们目前仍使用旧的函数式事务代码。下一阶段应迁移到 `WorkerService → Repository → PostgreSQL`，但本次没有改变其状态机和调度语义，以降低对现网订单恢复流程的风险。
+`main.py` 只保留应用组装、生命周期和线程调度。启动引导由 `DeviceIdentityService.bootstrap_device()` 完成；离线扫描、支付对账、退款执行、Business Outbox 和 watchdog 由 `BackgroundWorkerService` 完成；制作任务和设备事件由 `ProductionService` 完成。后台任务仍采用短事务：领取/标记本地状态后提交，外部支付调用完成后再开启新事务保存结果。
+
+后台任务的依赖关系如下：
+
+```text
+OfflineMonitor / DomainWorker（线程调度）
+                 ↓
+      BackgroundWorkerService
+          ├── WorkerRepository
+          ├── ProductionService
+          ├── OrderRepository / PaymentRepository
+          └── 外部支付 Provider
+
+设备事件 / 订单支付
+        ↓
+  ProductionService
+        ├── CommandRepository
+        ├── OrderRepository
+        └── PaymentRepository
+```
+
+这样可以在后续拆分独立 Worker 进程时复用 Service 和 Repository，而不需要重新复制 `main.py` 中的 SQL 和状态机逻辑。
 
 ## 新功能开发规则
 
