@@ -8,7 +8,7 @@ from ..command_state import event_state
 from ..order_logic import TERMINAL_ORDER_STATUSES, device_progress, order_state_for_event
 from ..payment_service import transition_payment, transition_refund
 from ..protocol import canonical_digest, utc_now
-from ..repositories import CommandRepository, OrderRepository, PaymentRepository
+from ..repositories import CommandRepository, DispatchRepository, OrderRepository, PaymentRepository
 from ..settings import Settings
 from .command_state import transition_command
 from .order_state import transition_order
@@ -84,7 +84,7 @@ class ProductionService:
             reason = body.get("reasonCode") or body.get("reason") or "DEVICE_REJECTED"
             orders.update_failure(order["id"], reason, "设备未接受制作任务")
             order = transition_order(connection, order, "FAILED", "device-ack", reason=reason, payload=body)
-            self.dispatch_next_order(connection, terminal_id)
+            self.request_dispatch(connection, terminal_id, "task-rejected")
         return {"orderId": str(order["id"]), "status": order["status"]}
 
     def reconcile_order_event(
@@ -147,7 +147,7 @@ class ProductionService:
         if order_status == "FAILED" and event_type in {"task.failed", "task.rejected"}:
             self.create_automatic_refund_record(connection, order, row, event_type)
         if order_status in TERMINAL_ORDER_STATUSES:
-            self.dispatch_next_order(connection, terminal_id)
+            self.request_dispatch(connection, terminal_id, f"order-{order_status.lower()}")
         return {"orderId": str(order["id"]), "status": order["status"]}
 
     def create_automatic_refund_record(
@@ -209,6 +209,9 @@ class ProductionService:
         if order:
             transition_order(connection, order, "DISPATCHED", "order-service", reason="device command created", payload={"messageId": message_id})
         return command
+
+    def request_dispatch(self, connection: Any, terminal_id: int, reason: str) -> None:
+        DispatchRepository(connection).enqueue(terminal_id, reason)
 
     def reconcile_stored_command_events(self, connection: Any) -> None:
         for item in OrderRepository(connection).stored_command_events():

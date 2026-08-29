@@ -29,7 +29,7 @@ class FakeMqttRepository:
         self.calls.append(("state", (terminal_id, payload)))
 
 
-def service(heartbeat):
+def service(heartbeat, request_dispatch=lambda *_: None):
     return MqttGatewayService(
         FakeUnitOfWork(),
         logger=logging.getLogger("test-telemetry-mode"),
@@ -38,6 +38,7 @@ def service(heartbeat):
         event=lambda *args, **kwargs: {"ok": True},
         task_ack=lambda *args, **kwargs: {"ok": True},
         command_result=lambda *args, **kwargs: {"ok": True},
+        request_dispatch=request_dispatch,
     )
 
 
@@ -83,6 +84,7 @@ def test_latest_heartbeat_delegates_without_history(monkeypatch) -> None:
 
 def test_latest_heartbeat_updates_online_state_without_history(monkeypatch) -> None:
     calls = []
+    dispatches = []
 
     class FakeDeviceMessageRepository:
         def __init__(self, _: object) -> None:
@@ -102,7 +104,7 @@ def test_latest_heartbeat_updates_online_state_without_history(monkeypatch) -> N
     monkeypatch.setattr("app.services.device_messages.DeviceMessageRepository", FakeDeviceMessageRepository)
     service = DeviceMessageService(
         FakeDeviceUnitOfWork(),
-        dispatch_next_order=lambda *_: None,
+        request_dispatch=lambda *_args: dispatches.append(_args),
         transition_command=lambda *_args, **_kwargs: ({}, False),
         expire_order_for_command=lambda *_: None,
         reconcile_command_event=lambda *_: None,
@@ -126,3 +128,4 @@ def test_latest_heartbeat_updates_online_state_without_history(monkeypatch) -> N
     )
 
     assert len(calls) == 1
+    assert dispatches == []

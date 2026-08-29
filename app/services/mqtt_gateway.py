@@ -15,6 +15,7 @@ class MqttGatewayService:
         retain_telemetry_history: bool = False,
         heartbeat: Callable[..., dict[str, Any]], event: Callable[..., dict[str, Any]],
         task_ack: Callable[..., dict[str, Any]], command_result: Callable[..., dict[str, Any]],
+        request_dispatch: Callable[[Any, int, str], None],
     ) -> None:
         self.uow = uow
         self.logger = logger
@@ -23,6 +24,7 @@ class MqttGatewayService:
         self.event = event
         self.task_ack = task_ack
         self.command_result = command_result
+        self.request_dispatch = request_dispatch
 
     def ingest(self, body: dict[str, Any]) -> dict[str, Any]:
         topic = str(body.get("topic") or "")
@@ -61,6 +63,8 @@ class MqttGatewayService:
                     if not terminal:
                         raise ServiceError(404, "device not registered")
                     repository.presence(terminal["id"], bool(payload.get("online")))
+                    if bool(payload.get("online")) and terminal.get("connection_status") != "online":
+                        self.request_dispatch(connection, terminal["id"], "mqtt-presence-online")
                 return {"ok": True, "duplicate": False, "telemetryMode": "latest"}
             if parts[3] == "state":
                 with self.uow.transaction() as connection:
@@ -95,6 +99,8 @@ class MqttGatewayService:
             if parts[3] == "presence":
                 with self.uow.transaction() as connection:
                     MqttGatewayRepository(connection).presence(terminal["id"], bool(payload.get("online")))
+                    if bool(payload.get("online")) and terminal.get("connection_status") != "online":
+                        self.request_dispatch(connection, terminal["id"], "mqtt-presence-online")
                 result = {"ok": True}
             elif parts[3] == "state":
                 with self.uow.transaction() as connection:

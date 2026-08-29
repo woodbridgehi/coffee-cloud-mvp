@@ -18,7 +18,7 @@ class DeviceMessageService:
         self,
         uow: UnitOfWork,
         *,
-        dispatch_next_order: Callable[[Any, int], dict[str, Any] | None],
+        request_dispatch: Callable[[Any, int, str], None],
         transition_command: Callable[..., tuple[dict[str, Any], bool]],
         expire_order_for_command: Callable[[Any, dict[str, Any]], None],
         reconcile_command_event: Callable[[Any, int, dict[str, Any], str], dict[str, Any] | None],
@@ -27,7 +27,7 @@ class DeviceMessageService:
         order_url: Callable[[str], str],
     ) -> None:
         self.uow = uow
-        self.dispatch_next_order = dispatch_next_order
+        self.request_dispatch = request_dispatch
         self.transition_command = transition_command
         self.expire_order_for_command = expire_order_for_command
         self.reconcile_command_event = reconcile_command_event
@@ -57,7 +57,8 @@ class DeviceMessageService:
                 if existing["payload_digest"].strip() != digest:
                     raise ServiceError(409, "messageId payload conflict")
                 messages.touch_online(identity["id"], received_at)
-                self.dispatch_next_order(connection, identity["id"])
+                if identity.get("connection_status") != "online":
+                    self.request_dispatch(connection, identity["id"], "heartbeat-online")
                 return {
                     "ok": True, "duplicate": True, "disposition": existing["disposition"],
                     "receivedAt": iso(received_at), "qrUrl": self.order_url(identity["device_id"]),
@@ -68,6 +69,7 @@ class DeviceMessageService:
                 payload.bootId and current_boot == payload.bootId and payload.sequence is not None
                 and last_sequence is not None and payload.sequence <= last_sequence
             )
+            was_offline = identity.get("connection_status") != "online"
             if out_of_order:
                 disposition = "OUT_OF_ORDER"
             if persist_history:
@@ -96,7 +98,8 @@ class DeviceMessageService:
                         "deliveries": body.get("deliveries"), "sentAt": body.get("sentAt"),
                     },
                 )
-            self.dispatch_next_order(connection, identity["id"])
+            if was_offline:
+                self.request_dispatch(connection, identity["id"], "heartbeat-online")
         return {
             "ok": True, "duplicate": False, "disposition": disposition,
             "receivedAt": iso(received_at), "qrUrl": self.order_url(identity["device_id"]),

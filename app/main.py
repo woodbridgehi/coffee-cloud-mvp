@@ -141,6 +141,7 @@ class DomainWorker:
         while not self.stop_event.wait(settings.outbox_scan_seconds):
             try:
                 background_worker_service.process_business_outbox_batch()
+                background_worker_service.process_dispatch_batch()
                 background_worker_service.reconcile_payment_once()
                 background_worker_service.process_refund_batch()
                 now = time.monotonic()
@@ -526,7 +527,7 @@ background_worker_service = BackgroundWorkerService(
 )
 public_order_service = PublicOrderService(
     unit_of_work, settings,
-    dispatch_next_order=production_service.dispatch_next_order,
+    request_dispatch=production_service.request_dispatch,
     payment_provider=payment_provider,
 )
 payment_application_service = PaymentApplicationService(
@@ -541,7 +542,7 @@ admin_operations_service = AdminOperationsService(
 )
 device_message_service = DeviceMessageService(
     unit_of_work,
-    dispatch_next_order=production_service.dispatch_next_order,
+    request_dispatch=production_service.request_dispatch,
     transition_command=service_transition_command,
     expire_order_for_command=production_service.expire_order_for_command,
     reconcile_command_event=production_service.reconcile_command_event,
@@ -562,6 +563,7 @@ mqtt_gateway_service = MqttGatewayService(
     event=device_message_service.event,
     task_ack=device_message_service.task_ack,
     command_result=device_message_service.command_result,
+    request_dispatch=production_service.request_dispatch,
 )
 
 

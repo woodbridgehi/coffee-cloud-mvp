@@ -10,7 +10,7 @@ from ..order_logic import TERMINAL_ORDER_STATUSES
 from ..payment_providers import RefundRequest
 from ..payment_service import apply_paid_callback, transition_payment, transition_refund
 from ..protocol import utc_now
-from ..repositories import OrderRepository, PaymentRepository, WorkerRepository
+from ..repositories import DispatchRepository, OrderRepository, PaymentRepository, WorkerRepository
 from ..settings import Settings
 from .command_state import transition_command
 from .order_state import transition_order
@@ -85,7 +85,27 @@ class BackgroundWorkerService:
             )
         if order["status"] == "PAID":
             order = transition_order(connection, order, "QUEUED", "outbox-worker", reason="paid order queued")
-        self.production.dispatch_next_order(connection, order["terminal_id"])
+        self.production.request_dispatch(connection, order["terminal_id"], "payment-paid")
+
+    def process_dispatch_batch(self, limit: int = 50) -> int:
+        """Dispatch only in response to durable domain events, never heartbeats."""
+        processed = 0
+        worker_id = f"dispatch-{uuid.uuid4()}"
+        for _ in range(max(1, min(limit, 200))):
+            with self.uow.transaction() as connection:
+                request = DispatchRepository(connection).claim(worker_id)
+                if request is None:
+                    break
+            try:
+                with self.uow.transaction() as connection:
+                    self.production.dispatch_next_order(connection, request["terminal_id"])
+                    DispatchRepository(connection).complete(request["terminal_id"], request["revision"])
+                processed += 1
+            except Exception as exc:
+                log.exception("terminal dispatch failed terminal=%s", request["terminal_id"])
+                with self.uow.transaction() as connection:
+                    DispatchRepository(connection).retry(request["terminal_id"], request["revision"], str(exc))
+        return processed
 
     def reconcile_payment_once(self) -> int:
         with self.uow.transaction() as connection:

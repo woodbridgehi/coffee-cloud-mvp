@@ -10,8 +10,9 @@ from .mqtt_gateway import MqttGatewayRepository
 from .system import SystemRepository
 from .admin_access import AdminAccessRepository
 from .workers import WorkerRepository
+from .dispatch import DispatchRepository
 
 __all__ = [
     "AdminAccessRepository", "CommandRepository", "DeviceMessageRepository", "IdentityRepository", "MqttGatewayRepository",
-    "OrderRepository", "PaymentRepository", "SystemRepository", "TerminalRepository", "WorkerRepository",
+    "DispatchRepository", "OrderRepository", "PaymentRepository", "SystemRepository", "TerminalRepository", "WorkerRepository",
 ]

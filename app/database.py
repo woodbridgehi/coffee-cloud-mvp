@@ -487,6 +487,25 @@ MIGRATIONS: tuple[tuple[int, str, str], ...] = (
                ) as counts
          where t.id = counts.terminal_id;
     """),
+    (8, "event-driven-terminal-dispatch", """
+        create table if not exists terminal_dispatch_request (
+            terminal_id bigint primary key references terminal(id),
+            reason text not null,
+            status text not null default 'PENDING' check(status in ('PENDING','PROCESSING','RETRY')),
+            requested_at timestamptz not null default now(),
+            revision bigint not null default 1,
+            attempt_count integer not null default 0,
+            next_attempt_at timestamptz not null default now(),
+            locked_by text,
+            locked_until timestamptz,
+            last_error text
+        );
+        create index if not exists ix_terminal_dispatch_request_ready
+            on terminal_dispatch_request(status,next_attempt_at,requested_at);
+        create unique index if not exists uq_production_job_active_terminal
+            on production_job(terminal_id)
+            where status in ('DISPATCHED','ACCEPTED','EXECUTING','HOLD','UNKNOWN');
+    """),
 )
 
 

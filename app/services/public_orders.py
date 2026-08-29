@@ -25,12 +25,12 @@ class PublicOrderService:
         uow: UnitOfWork,
         settings: Settings,
         *,
-        dispatch_next_order: Callable[[Any, int], dict[str, Any] | None],
+        request_dispatch: Callable[[Any, int, str], None],
         payment_provider: Callable[[str], Any],
     ) -> None:
         self.uow = uow
         self.settings = settings
-        self.dispatch_next_order = dispatch_next_order
+        self.request_dispatch = request_dispatch
         self.payment_provider = payment_provider
 
     @staticmethod
@@ -156,7 +156,7 @@ class PublicOrderService:
                     job_id=uuid.uuid4(), task_id=task_id, order_id=order_id, terminal_id=terminal["id"],
                     planned_duration_seconds=product.get("estimatedDurationSeconds"),
                 )
-                self.dispatch_next_order(connection, terminal["id"])
+                self.request_dispatch(connection, terminal["id"], "test-free-order")
             created = orders.find_with_terminal(order_id)
             assert created is not None
             response = self._payload(orders, payments, created)
