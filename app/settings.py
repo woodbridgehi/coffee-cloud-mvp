@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     database_url: str = Field(alias="DATABASE_URL")
+    db_pool_min_size: int = Field(default=2, alias="DB_POOL_MIN_SIZE", ge=1, le=64)
+    db_pool_max_size: int = Field(default=10, alias="DB_POOL_MAX_SIZE", ge=1, le=128)
+    db_pool_timeout_seconds: float = Field(default=10, alias="DB_POOL_TIMEOUT_SECONDS", ge=1, le=120)
     device_id: str = Field(default="coffee-bot-002", alias="DEVICE_ID")
     device_serial_number: str = Field(default="002", alias="DEVICE_SERIAL_NUMBER")
     device_instance_id: str = Field(default="instance-coffee-bot-002", alias="DEVICE_INSTANCE_ID")

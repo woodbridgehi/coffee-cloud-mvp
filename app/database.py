@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from typing import Iterator
 
 import psycopg
+from psycopg_pool import ConnectionPool
 from psycopg.rows import dict_row
 
 
@@ -478,15 +479,33 @@ MIGRATIONS: tuple[tuple[int, str, str], ...] = (
 
 
 class Database:
-    def __init__(self, database_url: str) -> None:
+    def __init__(
+        self,
+        database_url: str,
+        *,
+        min_size: int = 2,
+        max_size: int = 10,
+        timeout: float = 10,
+    ) -> None:
         self.database_url = database_url
+        if min_size > max_size:
+            raise ValueError("database pool min_size cannot exceed max_size")
+        self.pool = ConnectionPool(
+            conninfo=database_url,
+            kwargs={"row_factory": dict_row},
+            min_size=min_size,
+            max_size=max_size,
+            timeout=timeout,
+            open=False,
+        )
 
     @contextmanager
     def connect(self) -> Iterator[psycopg.Connection]:
-        with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
+        with self.pool.connection() as connection:
             yield connection
 
     def initialize(self) -> None:
+        self.pool.open(wait=True)
         with self.connect() as connection:
             connection.execute(SCHEMA_SQL)
             for version, name, sql in MIGRATIONS:
@@ -499,3 +518,6 @@ class Database:
     def ping(self) -> None:
         with self.connect() as connection:
             connection.execute("select 1").fetchone()
+
+    def close(self) -> None:
+        self.pool.close()

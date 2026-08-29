@@ -34,6 +34,8 @@ services:
     environment:
       DEVICE_API_BASE_URL: http://127.0.0.1:8788
       MQTT_COMMAND_CLAIM_SECONDS: "1"
+      MQTT_GATEWAY_WORKERS: "4"
+      MQTT_GATEWAY_QUEUE_CAPACITY: "10000"
       MQTT_GATEWAY_ID: coffee-mqtt-gateway-v1
     command: ["python", "-m", "app.mqtt_gateway"]
     healthcheck:

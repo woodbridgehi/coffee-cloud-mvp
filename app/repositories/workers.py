@@ -44,6 +44,23 @@ class WorkerRepository:
             (worker_id, event["id"]),
         ).fetchone()
 
+    def claim_business_events(self, worker_id: str, limit: int) -> list[dict[str, Any]]:
+        """Claim a batch while keeping row-level locking safe across workers."""
+        return self.connection.execute(
+            """with selected as (
+                   select id from business_outbox
+                    where status in ('PENDING','RETRY') and next_attempt_at<=now()
+                    order by created_at for update skip locked limit %s
+                 )
+                 update business_outbox as event
+                    set status='PROCESSING',locked_by=%s,
+                        locked_until=now()+interval '30 seconds'
+                   from selected
+                  where event.id=selected.id
+               returning event.*""",
+            (limit, worker_id),
+        ).fetchall()
+
     def mark_business_processed(self, event_id: Any) -> None:
         self.connection.execute(
             """update business_outbox set status='PROCESSED',processed_at=now(),

@@ -50,7 +50,12 @@ from .services.background_worker import BackgroundWorkerService
 SERVICE_VERSION = "0.4.0"
 logger = logging.getLogger("coffee-cloud-mvp")
 settings = get_settings()
-database = Database(settings.database_url)
+database = Database(
+    settings.database_url,
+    min_size=settings.db_pool_min_size,
+    max_size=settings.db_pool_max_size,
+    timeout=settings.db_pool_timeout_seconds,
+)
 mock_payment_provider = MockPaymentProvider()
 
 
@@ -163,6 +168,7 @@ async def lifespan(_: FastAPI):
     finally:
         domain_worker.stop()
         offline_monitor.stop()
+        database.close()
 
 
 app = FastAPI(

@@ -72,6 +72,14 @@ OfflineMonitor / DomainWorker（线程调度）
 
 这样可以在后续拆分独立 Worker 进程时复用 Service 和 Repository，而不需要重新复制 `main.py` 中的 SQL 和状态机逻辑。
 
+## 性能并发边界
+
+- `Database` 使用 psycopg 连接池，连接池大小由 `DB_POOL_MIN_SIZE`、`DB_POOL_MAX_SIZE` 和 `DB_POOL_TIMEOUT_SECONDS` 配置；事务边界仍由 `UnitOfWork` 管理。
+- Business Outbox 由 `BackgroundWorkerService` 一次领取一批事件，并使用 savepoint 隔离单条失败，避免一个坏事件回滚整批事件。
+- MQTT Gateway 按 `deviceId` 将上行消息分片到多个 Worker；同一设备保持在同一分片中，以保留消息顺序，不同设备可以并发处理。
+- MQTT Gateway 的内部 API 使用共享 Keep-Alive HTTP 客户端，命令发布独立于上行消息处理线程。
+- 设备进度事件仍应控制频率；高频进度不应不加限制地写入 PostgreSQL。扩容前应观察连接池等待、事务耗时、Gateway 队列长度和 Outbox 积压。
+
 ## 新功能开发规则
 
 1. 新接口先定义 Service 用例，再增加 Repository 方法，最后添加 Route。

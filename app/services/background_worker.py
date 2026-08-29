@@ -52,23 +52,22 @@ class BackgroundWorkerService:
     def process_business_outbox_batch(self, limit: int = 20) -> int:
         processed = 0
         worker_id = f"domain-{uuid.uuid4()}"
-        for _ in range(limit):
-            event_id: uuid.UUID | None = None
-            try:
-                with self.uow.transaction() as connection:
-                    event = WorkerRepository(connection).claim_business_event(worker_id)
-                    if event is None:
-                        break
-                    event_id = event["id"]
-                    if event["event_type"] == "payment.paid":
-                        self._process_paid_event(connection, event)
-                    WorkerRepository(connection).mark_business_processed(event_id)
-                    processed += 1
-            except Exception as exc:
-                log.exception("business outbox event failed id=%s", event_id)
-                if event_id is not None:
-                    with self.uow.transaction() as connection:
-                        WorkerRepository(connection).mark_business_retry(event_id, str(exc))
+        with self.uow.transaction() as connection:
+            events = WorkerRepository(connection).claim_business_events(worker_id, max(1, min(limit, 100)))
+            workers = WorkerRepository(connection)
+            for event in events:
+                event_id = event["id"]
+                try:
+                    # A savepoint isolates one bad event without losing the rest of the claimed batch.
+                    with connection.transaction():
+                        if event["event_type"] == "payment.paid":
+                            self._process_paid_event(connection, event)
+                        workers.mark_business_processed(event_id)
+                        processed += 1
+                except Exception as exc:
+                    log.exception("business outbox event failed id=%s", event_id)
+                    with connection.transaction():
+                        workers.mark_business_retry(event_id, str(exc))
         return processed
 
     def _process_paid_event(self, connection: Any, event: dict[str, Any]) -> None:

@@ -5,13 +5,13 @@ import logging
 import os
 import queue
 import ssl
+import threading
 import time
 import uuid
 from typing import Any
-from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
 
+import httpx
 import paho.mqtt.client as mqtt
 
 
@@ -25,31 +25,51 @@ MQTT_PORT = int(os.getenv("MQTT_PORT", "8883"))
 MQTT_USERNAME = os.environ["MQTT_USERNAME"]
 MQTT_PASSWORD = os.environ["MQTT_PASSWORD"]
 CLAIM_SECONDS = float(os.getenv("MQTT_COMMAND_CLAIM_SECONDS", "1"))
+QUEUE_CAPACITY = max(100, int(os.getenv("MQTT_GATEWAY_QUEUE_CAPACITY", "10000")))
+WORKER_COUNT = max(1, min(32, int(os.getenv("MQTT_GATEWAY_WORKERS", "4"))))
 
 
-def api(method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
-    headers = {"X-Gateway-Token": GATEWAY_TOKEN, "Accept": "application/json"}
-    body = None
-    if payload is not None:
-        headers["Content-Type"] = "application/json"
-        body = json.dumps(payload, ensure_ascii=False).encode()
-    request = Request(HTTP_BASE + path, data=body, headers=headers, method=method)
-    try:
-        with urlopen(request, timeout=8) as response:
-            raw = response.read()
+class GatewayApiClient:
+    """Thread-safe keep-alive HTTP client shared by gateway workers."""
+
+    def __init__(self) -> None:
+        self.client = httpx.Client(
+            base_url=HTTP_BASE,
+            headers={"X-Gateway-Token": GATEWAY_TOKEN, "Accept": "application/json"},
+            timeout=8.0,
+            limits=httpx.Limits(max_connections=max(16, WORKER_COUNT * 4), max_keepalive_connections=max(8, WORKER_COUNT * 2)),
+        )
+
+    def request(self, method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        try:
+            response = self.client.request(method, path, json=payload)
+            if response.status_code >= 400:
+                detail = response.text
+                if 400 <= response.status_code < 500 and response.status_code not in {401, 403, 408, 429}:
+                    raise ValueError(
+                        f"cloud rejected gateway operation: HTTP {response.status_code} {detail[:300]}"
+                    )
+                raise ConnectionError(f"cloud API HTTP {response.status_code}")
+            raw = response.content
             return json.loads(raw) if raw else {}
-    except HTTPError as exc:
-        detail = exc.read().decode(errors="replace")
-        if 400 <= exc.code < 500 and exc.code not in {401, 403, 408, 429}:
-            raise ValueError(f"cloud rejected gateway operation: HTTP {exc.code} {detail[:300]}") from exc
-        raise ConnectionError(f"cloud API HTTP {exc.code}") from exc
-    except URLError as exc:
-        raise ConnectionError(f"cloud API unavailable: {exc.reason}") from exc
+        except ValueError:
+            raise
+        except httpx.RequestError as exc:
+            raise ConnectionError(f"cloud API unavailable: {exc}") from exc
+
+    def close(self) -> None:
+        self.client.close()
 
 
 class Gateway:
     def __init__(self) -> None:
-        self.inbox: queue.Queue[tuple[mqtt.MQTTMessage, int]] = queue.Queue(maxsize=10000)
+        self.api_client = GatewayApiClient()
+        self.worker_count = WORKER_COUNT
+        per_worker_capacity = max(1, QUEUE_CAPACITY // self.worker_count)
+        self.inboxes = [queue.Queue[tuple[mqtt.MQTTMessage, int]](maxsize=per_worker_capacity) for _ in range(self.worker_count)]
+        self.stop_event = threading.Event()
+        self.worker_threads: list[threading.Thread] = []
+        self.command_thread: threading.Thread | None = None
         self.connected = False
         self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=GATEWAY_ID, protocol=mqtt.MQTTv5)
         self.client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
@@ -76,11 +96,17 @@ class Gateway:
         log.warning("MQTT gateway disconnected: %s", reason)
 
     def on_message(self, _client: mqtt.Client, _userdata: object, message: mqtt.MQTTMessage) -> None:
+        shard = self._shard_for(message)
         try:
-            self.inbox.put_nowait((message, 0))
+            self.inboxes[shard].put_nowait((message, 0))
         except queue.Full:
             log.error("MQTT gateway inbox full; disconnecting so QoS1 can redeliver")
             self.client.disconnect()
+
+    def _shard_for(self, message: mqtt.MQTTMessage) -> int:
+        parts = message.topic.split("/")
+        device_id = parts[2] if len(parts) >= 3 else message.topic
+        return hash(device_id) % self.worker_count
 
     def ack(self, message: mqtt.MQTTMessage) -> None:
         if message.qos:
@@ -93,11 +119,62 @@ class Gateway:
             raise ValueError("MQTT payload is not valid JSON") from exc
         if not isinstance(envelope, dict):
             raise ValueError("MQTT payload must be an object")
-        api("POST", "/api/v1/internal/mqtt/messages", {"topic": message.topic, "envelope": envelope})
+        self.api_client.request(
+            "POST", "/api/v1/internal/mqtt/messages", {"topic": message.topic, "envelope": envelope}
+        )
+
+    def _worker_loop(self, inbox: queue.Queue[tuple[mqtt.MQTTMessage, int]], worker_id: int) -> None:
+        log.info("MQTT uplink worker started id=%s", worker_id)
+        while not self.stop_event.is_set():
+            try:
+                message, attempt = inbox.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            try:
+                try:
+                    self.process(message)
+                    self.ack(message)
+                except ValueError as exc:
+                    log.error("non-retryable MQTT uplink rejected topic=%s: %s", message.topic, exc)
+                    self.ack(message)
+                except (ConnectionError, OSError) as exc:
+                    delay = min(30.0, 2 ** min(attempt, 5))
+                    log.warning("MQTT uplink retry in %.1fs worker=%s: %s", delay, worker_id, exc)
+                    if not self.stop_event.wait(delay):
+                        try:
+                            inbox.put((message, attempt + 1), timeout=1)
+                        except queue.Full:
+                            log.error("MQTT gateway retry queue full; disconnecting")
+                            self.client.disconnect()
+            finally:
+                inbox.task_done()
+
+    def _start_workers(self) -> None:
+        for index, inbox in enumerate(self.inboxes):
+            thread = threading.Thread(
+                target=self._worker_loop, args=(inbox, index), name=f"mqtt-uplink-{index}", daemon=True
+            )
+            self.worker_threads.append(thread)
+            thread.start()
+
+    def _command_loop(self) -> None:
+        next_claim = 0.0
+        while not self.stop_event.wait(0.05):
+            if not self.connected or time.monotonic() < next_claim:
+                continue
+            try:
+                self.publish_claimed_commands()
+                next_claim = time.monotonic() + CLAIM_SECONDS
+            except (ConnectionError, OSError) as exc:
+                log.warning("command outbox unavailable: %s", exc)
+                next_claim = time.monotonic() + 2
+            except ValueError as exc:
+                log.error("command outbox rejected: %s", exc)
+                next_claim = time.monotonic() + 5
 
     def publish_claimed_commands(self) -> None:
         query = urlencode({"gateway_id": GATEWAY_ID, "limit": 100})
-        response = api("GET", f"/api/v1/internal/device-commands/claim?{query}")
+        response = self.api_client.request("GET", f"/api/v1/internal/device-commands/claim?{query}")
         for command in response.get("commands") or []:
             outbox_id = command["outboxId"]
             try:
@@ -107,10 +184,12 @@ class Gateway:
                 info.wait_for_publish(timeout=8)
                 if not info.is_published():
                     raise ConnectionError("MQTT command PUBACK timed out")
-                api("POST", f"/api/v1/internal/device-commands/{outbox_id}/published", {"gatewayId": GATEWAY_ID})
+                self.api_client.request(
+                    "POST", f"/api/v1/internal/device-commands/{outbox_id}/published", {"gatewayId": GATEWAY_ID}
+                )
             except Exception as exc:
                 try:
-                    api("POST", f"/api/v1/internal/device-commands/{outbox_id}/retry", {
+                    self.api_client.request("POST", f"/api/v1/internal/device-commands/{outbox_id}/retry", {
                         "gatewayId": GATEWAY_ID, "error": f"{type(exc).__name__}: {exc}",
                     })
                 except Exception:
@@ -125,37 +204,21 @@ class Gateway:
             clean_start=mqtt.MQTT_CLEAN_START_FIRST_ONLY, properties=properties,
         )
         self.client.loop_start()
-        next_claim = 0.0
+        self._start_workers()
+        self.command_thread = threading.Thread(target=self._command_loop, name="mqtt-command-publisher", daemon=True)
+        self.command_thread.start()
         try:
-            while True:
-                try:
-                    message, attempt = self.inbox.get(timeout=0.05)
-                    try:
-                        self.process(message)
-                        self.ack(message)
-                    except ValueError as exc:
-                        log.error("non-retryable MQTT uplink rejected topic=%s: %s", message.topic, exc)
-                        self.ack(message)
-                    except (ConnectionError, OSError) as exc:
-                        delay = min(30.0, 2 ** min(attempt, 5))
-                        log.warning("MQTT uplink retry in %.1fs: %s", delay, exc)
-                        time.sleep(delay)
-                        self.inbox.put((message, attempt + 1))
-                except queue.Empty:
-                    pass
-                if self.connected and time.monotonic() >= next_claim:
-                    try:
-                        self.publish_claimed_commands()
-                        next_claim = time.monotonic() + CLAIM_SECONDS
-                    except (ConnectionError, OSError) as exc:
-                        log.warning("command outbox unavailable: %s", exc)
-                        next_claim = time.monotonic() + 2
-                    except ValueError as exc:
-                        log.error("command outbox rejected: %s", exc)
-                        next_claim = time.monotonic() + 5
+            while not self.stop_event.wait(1.0):
+                pass
         finally:
+            self.stop_event.set()
             self.client.disconnect()
             self.client.loop_stop()
+            for thread in self.worker_threads:
+                thread.join(timeout=2)
+            if self.command_thread:
+                self.command_thread.join(timeout=2)
+            self.api_client.close()
 
 
 if __name__ == "__main__":
