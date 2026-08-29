@@ -84,3 +84,12 @@ def test_gateway_source_has_no_single_device_runtime_configuration() -> None:
     assert 'os.environ["DEVICE_ID"]' not in source
     assert 'os.environ["DEVICE_TOKEN"]' not in source
     assert "v1/devices/+/up" in source
+
+
+def test_gateway_is_multi_device_and_uses_device_scoped_downlink_topics() -> None:
+    source = open("app/mqtt_gateway.py", encoding="utf-8").read()
+    assert '"v1/devices/+/up"' in source
+    assert '"v1/devices/+/presence"' in source
+    assert '"v1/devices/+/state"' in source
+    assert '"topic"]' in source
+    assert "v1/devices/{terminal['device_id']}/down" in open("app/main.py", encoding="utf-8").read()
