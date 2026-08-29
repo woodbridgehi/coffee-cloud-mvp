@@ -17,7 +17,7 @@ HTTP 应用代码采用 `Route → Application Service → Repository → Postgr
   → 支付事务写 Business Outbox，Worker 幂等创建制作任务
   → Command Outbox 经多设备 MQTT Gateway 发布 MAKE_DRINK
   → 终端整杯预占、按步骤扣减共享物料
-  → 终端可靠上报进度、成功或失败
+  → 终端可靠上报生命周期事件，并按变化/时间阈值上报制作进度
   → 手机订单页轮询显示实时状态
   → 运营台查看订单、设备和逐项物料余量
 ```
@@ -162,7 +162,7 @@ QUEUED → DISPATCHED → ACCEPTED → EXECUTING → SUCCEEDED
 ```
 
 - `ACCEPTED`：终端已校验配方版本并成功预占整杯物料。
-- `MAKING`：收到 `task.started`；`task.progress` 与步骤事件保存设备给出的 `stepName`、`stepProgress`、`overallProgress` 和剩余时间。手机端不自行推导步骤或重新计算随机时长。
+- `MAKING`：收到 `task.started`；设备以整杯进度变化至少 5% 或最长 5 秒为准上报 `task.progress`，Gateway 立即写 Redis 最新快照、Worker 批量刷新 `production_job`。手机端不自行推导步骤或重新计算随机时长。
 - `READY`：只由终端 `task.succeeded` 推进。
 - 客户仅能取消尚未派发的 `QUEUED` 订单。派发后不允许用网页强行取消真实动作。
 
@@ -180,6 +180,8 @@ QUEUED → DISPATCHED → ACCEPTED → EXECUTING → SUCCEEDED
 - `PAYMENT_DEFAULT_PROVIDER`：`mock`（仅测试）或 `alipay`。
 - `ALIPAY_GATEWAY/ALIPAY_APP_ID/ALIPAY_APP_PRIVATE_KEY_FILE/ALIPAY_PUBLIC_KEY_FILE`：支付宝环境与 RSA2 密钥配置；密钥文件不得提交。
 - `INTERNAL_GATEWAY_TOKEN`：API 与 MQTT Gateway 之间的独立随机凭证。
+- `TELEMETRY_REDIS_URL/TELEMETRY_ONLINE_TTL_SECONDS/TELEMETRY_FLUSH_BATCH_SIZE`：Redis 热状态层连接、在线租约和批量刷库大小；只用于最新遥测，不能替代订单事务。
+- `API_WORKERS`：Uvicorn API 进程数；VPS 当前使用 `2`，后台任务以 `SKIP LOCKED` 协调并发领取。
 - `EMQX_MANAGEMENT_URL/EMQX_DASHBOARD_USERNAME/EMQX_DASHBOARD_PASSWORD`：用于激活、轮换、吊销时同步每设备 MQTT user/ACL；只能指向 VPS 本机管理口。
 
 现网第一次升级到 `0.3.0` 时应在 VPS `.env` 增加独立密钥：
@@ -243,7 +245,7 @@ curl http://127.0.0.1:8788/health
 
 ## 9. MQTT 5.0 接入网关
 
-`coffee-mqtt-gateway` 是无单设备配置的独立进程，不承载扫码 Web/API，也不复制订单状态机。一个实例订阅所有设备上行 Topic：心跳、presence、state 及制作进度默认先写入项目专用 Redis 热状态层，并按批量合并刷新 PostgreSQL 的最新快照；`task.started/succeeded/failed`、命令结果和订单事件仍进入持久 `mqtt_inbox` 与领域状态机。设置 `TELEMETRY_HISTORY_MODE=audit` 可额外保留遥测历史。下行从 `command_outbox` 领取带租约的命令，Broker PUBACK 后再标记 `PUBLISHED`。QoS 1 上行启用 manual ACK，进程崩溃时由持久 MQTT session 重投。
+`coffee-mqtt-gateway` 是无单设备配置的独立进程，不承载扫码 Web/API，也不复制订单状态机。一个实例订阅所有设备上行 Topic：心跳、presence、state 及制作进度默认先写入项目专用 Redis 热状态层，并按批量合并刷新 PostgreSQL 的最新快照；设备端对普通进度采用“5% 或 5 秒”节流，但任务/步骤生命周期、命令结果和订单事件仍进入持久 `mqtt_inbox` 与领域状态机。设置 `TELEMETRY_HISTORY_MODE=audit` 可额外保留遥测历史。下行从 `command_outbox` 领取带租约的命令，Broker PUBACK 后再标记 `PUBLISHED`。QoS 1 上行启用 manual ACK，进程崩溃时由持久 MQTT session 重投。
 
 `coffee-telemetry-redis` 只绑定 VPS 回环地址的 6380 端口，保存在线 TTL、设备最新状态和最新制作进度；Redis 不参与订单、支付或命令事实判定，缓存不可用时 MQTT 接入自动回退为 PostgreSQL 更新。
 
