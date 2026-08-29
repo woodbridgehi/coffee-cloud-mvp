@@ -243,7 +243,9 @@ curl http://127.0.0.1:8788/health
 
 ## 9. MQTT 5.0 接入网关
 
-`coffee-mqtt-gateway` 是无单设备配置的独立进程，不承载扫码 Web/API，也不复制订单状态机。一个实例订阅所有设备上行 Topic：心跳、presence 和 state 默认只更新设备最新状态，业务 event/command_result 才进入持久 `mqtt_inbox` 和既有领域状态机；设置 `TELEMETRY_HISTORY_MODE=audit` 可额外保留遥测历史。下行从 `command_outbox` 领取带租约的命令，Broker PUBACK 后再标记 `PUBLISHED`。QoS 1 上行启用 manual ACK，进程崩溃时由持久 MQTT session 重投。
+`coffee-mqtt-gateway` 是无单设备配置的独立进程，不承载扫码 Web/API，也不复制订单状态机。一个实例订阅所有设备上行 Topic：心跳、presence、state 及制作进度默认先写入项目专用 Redis 热状态层，并按批量合并刷新 PostgreSQL 的最新快照；`task.started/succeeded/failed`、命令结果和订单事件仍进入持久 `mqtt_inbox` 与领域状态机。设置 `TELEMETRY_HISTORY_MODE=audit` 可额外保留遥测历史。下行从 `command_outbox` 领取带租约的命令，Broker PUBACK 后再标记 `PUBLISHED`。QoS 1 上行启用 manual ACK，进程崩溃时由持久 MQTT session 重投。
+
+`coffee-telemetry-redis` 只绑定 VPS 回环地址的 6380 端口，保存在线 TTL、设备最新状态和最新制作进度；Redis 不参与订单、支付或命令事实判定，缓存不可用时 MQTT 接入自动回退为 PostgreSQL 更新。
 
 ```bash
 docker compose build coffee-mqtt-gateway

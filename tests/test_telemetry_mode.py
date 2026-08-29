@@ -29,7 +29,7 @@ class FakeMqttRepository:
         self.calls.append(("state", (terminal_id, payload)))
 
 
-def service(heartbeat, request_dispatch=lambda *_: None):
+def service(heartbeat, request_dispatch=lambda *_: None, telemetry_cache=None):
     return MqttGatewayService(
         FakeUnitOfWork(),
         logger=logging.getLogger("test-telemetry-mode"),
@@ -39,6 +39,7 @@ def service(heartbeat, request_dispatch=lambda *_: None):
         task_ack=lambda *args, **kwargs: {"ok": True},
         command_result=lambda *args, **kwargs: {"ok": True},
         request_dispatch=request_dispatch,
+        telemetry_cache=telemetry_cache,
     )
 
 
@@ -80,6 +81,63 @@ def test_latest_heartbeat_delegates_without_history(monkeypatch) -> None:
 
     assert result["telemetryMode"] == "latest"
     assert heartbeat_calls[0][1] == {"persist_history": False}
+
+
+def test_latest_heartbeat_is_coalesced_in_redis_before_database(monkeypatch) -> None:
+    monkeypatch.setattr("app.services.mqtt_gateway.MqttGatewayRepository", FakeMqttRepository)
+    heartbeat_calls = []
+
+    class FakeTelemetryCache:
+        def terminal_id(self, _device_id: str):
+            return None
+
+        def remember_terminal(self, _device_id: str, _terminal_id: int) -> None:
+            pass
+
+        def heartbeat(self, device_id: str, terminal_id: int, payload: dict[str, object]) -> bool:
+            assert (device_id, terminal_id, payload["sequence"]) == ("coffee-bot-001", 7, 3)
+            return True
+
+    result = service(
+        lambda *args, **kwargs: heartbeat_calls.append((args, kwargs)),
+        telemetry_cache=FakeTelemetryCache(),
+    ).ingest({
+        "topic": "v1/devices/coffee-bot-001/up",
+        "envelope": {
+            "deviceId": "coffee-bot-001", "type": "heartbeat",
+            "payload": {"deviceId": "coffee-bot-001", "deviceStatus": "IDLE", "sequence": 3},
+        },
+    })
+
+    assert result["telemetryMode"] == "redis-latest"
+    assert heartbeat_calls == []
+
+
+def test_progress_event_is_coalesced_in_redis_before_event_inbox(monkeypatch) -> None:
+    monkeypatch.setattr("app.services.mqtt_gateway.MqttGatewayRepository", FakeMqttRepository)
+
+    class FakeTelemetryCache:
+        def terminal_id(self, _device_id: str):
+            return 7
+
+        def progress(self, device_id: str, terminal_id: int, event: dict[str, object]) -> bool:
+            assert (device_id, terminal_id, event["type"]) == ("coffee-bot-001", 7, "task.progress")
+            return True
+
+    result = service(
+        lambda *args, **kwargs: {"ok": True}, telemetry_cache=FakeTelemetryCache()
+    ).ingest({
+        "topic": "v1/devices/coffee-bot-001/up",
+        "envelope": {
+            "deviceId": "coffee-bot-001", "type": "event",
+            "payload": {
+                "eventId": "progress-1", "deviceId": "coffee-bot-001", "type": "task.progress",
+                "payload": {"taskId": "task-1", "overallProgress": 0.5, "stepProgress": 0.2},
+            },
+        },
+    })
+
+    assert result["telemetryMode"] == "redis-progress"
 
 
 def test_latest_heartbeat_updates_online_state_without_history(monkeypatch) -> None:

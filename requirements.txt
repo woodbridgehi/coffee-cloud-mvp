@@ -6,5 +6,6 @@ uvicorn[standard]==0.35.0
 paho-mqtt==2.1.0
 cryptography==45.0.6
 httpx==0.28.1
+redis==7.0.1
 qrcode==8.2
 pillow==11.3.0

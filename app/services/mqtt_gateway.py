@@ -6,6 +6,7 @@ from typing import Any, Callable
 from ..db import UnitOfWork
 from ..protocol import CommandResult, DeviceEvent, Heartbeat, canonical_digest
 from ..repositories import MqttGatewayRepository
+from ..telemetry import TelemetryCache
 from .errors import ServiceError
 
 
@@ -16,6 +17,7 @@ class MqttGatewayService:
         heartbeat: Callable[..., dict[str, Any]], event: Callable[..., dict[str, Any]],
         task_ack: Callable[..., dict[str, Any]], command_result: Callable[..., dict[str, Any]],
         request_dispatch: Callable[[Any, int, str], None],
+        telemetry_cache: TelemetryCache | None = None,
     ) -> None:
         self.uow = uow
         self.logger = logger
@@ -25,6 +27,18 @@ class MqttGatewayService:
         self.task_ack = task_ack
         self.command_result = command_result
         self.request_dispatch = request_dispatch
+        self.telemetry_cache = telemetry_cache
+
+    def _terminal_for_telemetry(self, device_id: str) -> dict[str, Any] | None:
+        if self.telemetry_cache:
+            terminal_id = self.telemetry_cache.terminal_id(device_id)
+            if terminal_id is not None:
+                return {"id": terminal_id, "device_id": device_id}
+        with self.uow.transaction() as connection:
+            terminal = MqttGatewayRepository(connection).terminal(device_id)
+        if terminal and self.telemetry_cache:
+            self.telemetry_cache.remember_terminal(device_id, terminal["id"])
+        return terminal
 
     def ingest(self, body: dict[str, Any]) -> dict[str, Any]:
         topic = str(body.get("topic") or "")
@@ -55,29 +69,44 @@ class MqttGatewayService:
         digest = canonical_digest(envelope)
         nested = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
         revision = nested.get("taskRevision") or payload.get("revision")
+        lossy_progress_event = message_type == "event" and str(payload.get("type") or "") in {
+            "task.progress", "step.started", "step.completed",
+        }
+        if lossy_progress_event and self.telemetry_cache:
+            terminal = self._terminal_for_telemetry(device_id)
+            if not terminal:
+                raise ServiceError(404, "device not registered")
+            if self.telemetry_cache.progress(device_id, terminal["id"], payload):
+                return {"ok": True, "duplicate": False, "telemetryMode": "redis-progress"}
         if is_telemetry and not self.retain_telemetry_history:
+            terminal = self._terminal_for_telemetry(device_id)
+            if not terminal:
+                raise ServiceError(404, "device not registered")
             if parts[3] == "presence":
+                if self.telemetry_cache:
+                    cached, was_online = self.telemetry_cache.presence(
+                        device_id, terminal["id"], bool(payload.get("online"))
+                    )
+                    if cached:
+                        if bool(payload.get("online")) and not was_online:
+                            with self.uow.transaction() as connection:
+                                self.request_dispatch(connection, terminal["id"], "mqtt-presence-online")
+                        return {"ok": True, "duplicate": False, "telemetryMode": "redis-latest"}
                 with self.uow.transaction() as connection:
                     repository = MqttGatewayRepository(connection)
-                    terminal = repository.terminal(device_id)
-                    if not terminal:
-                        raise ServiceError(404, "device not registered")
                     repository.presence(terminal["id"], bool(payload.get("online")))
                     if bool(payload.get("online")) and terminal.get("connection_status") != "online":
                         self.request_dispatch(connection, terminal["id"], "mqtt-presence-online")
                 return {"ok": True, "duplicate": False, "telemetryMode": "latest"}
             if parts[3] == "state":
+                if self.telemetry_cache and self.telemetry_cache.state(device_id, terminal["id"], payload):
+                    return {"ok": True, "duplicate": False, "telemetryMode": "redis-latest"}
                 with self.uow.transaction() as connection:
                     repository = MqttGatewayRepository(connection)
-                    terminal = repository.terminal(device_id)
-                    if not terminal:
-                        raise ServiceError(404, "device not registered")
                     repository.state(terminal["id"], payload)
                 return {"ok": True, "duplicate": False, "telemetryMode": "latest"}
-            with self.uow.transaction() as connection:
-                terminal = MqttGatewayRepository(connection).terminal(device_id)
-            if not terminal:
-                raise ServiceError(404, "device not registered")
+            if self.telemetry_cache and self.telemetry_cache.heartbeat(device_id, terminal["id"], payload):
+                return {"ok": True, "duplicate": False, "telemetryMode": "redis-latest"}
             result = self.heartbeat(device_id, Heartbeat.model_validate(payload), terminal, persist_history=False)
             return {"ok": True, "duplicate": False, "telemetryMode": "latest", "result": result}
         with self.uow.transaction() as connection:

@@ -45,6 +45,7 @@ from .services.public_orders import PublicOrderService
 from .services.admin_access import AdminAccessService
 from .services.production import ProductionService
 from .services.background_worker import BackgroundWorkerService
+from .telemetry import TelemetryCache
 
 
 SERVICE_VERSION = "0.4.0"
@@ -57,6 +58,11 @@ database = Database(
     timeout=settings.db_pool_timeout_seconds,
 )
 mock_payment_provider = MockPaymentProvider()
+telemetry_cache = TelemetryCache(
+    settings.telemetry_redis_url,
+    online_ttl_seconds=settings.telemetry_online_ttl_seconds,
+    logger=logger,
+)
 
 
 def payment_provider(name: str) -> PaymentProvider:
@@ -140,6 +146,7 @@ class DomainWorker:
         last_watchdog = 0.0
         while not self.stop_event.wait(settings.outbox_scan_seconds):
             try:
+                background_worker_service.flush_telemetry_batch()
                 background_worker_service.process_business_outbox_batch()
                 background_worker_service.process_dispatch_batch()
                 background_worker_service.reconcile_payment_once()
@@ -158,6 +165,7 @@ domain_worker = DomainWorker()
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     database.initialize()
+    telemetry_cache.start()
     device_identity_service.bootstrap_device()
     background_worker_service.reconcile_stored_command_events()
     background_worker_service.reconcile_stored_order_events()
@@ -169,6 +177,7 @@ async def lifespan(_: FastAPI):
     finally:
         domain_worker.stop()
         offline_monitor.stop()
+        telemetry_cache.close()
         database.close()
 
 
@@ -524,6 +533,7 @@ device_identity_service = DeviceIdentityService(
 production_service = ProductionService(settings, payment_provider=payment_provider)
 background_worker_service = BackgroundWorkerService(
     unit_of_work, settings, payment_provider=payment_provider, production=production_service,
+    telemetry_cache=telemetry_cache,
 )
 public_order_service = PublicOrderService(
     unit_of_work, settings,
@@ -564,6 +574,7 @@ mqtt_gateway_service = MqttGatewayService(
     task_ack=device_message_service.task_ack,
     command_result=device_message_service.command_result,
     request_dispatch=production_service.request_dispatch,
+    telemetry_cache=telemetry_cache,
 )
 
 

@@ -10,8 +10,9 @@ from ..order_logic import TERMINAL_ORDER_STATUSES
 from ..payment_providers import RefundRequest
 from ..payment_service import apply_paid_callback, transition_payment, transition_refund
 from ..protocol import utc_now
-from ..repositories import DispatchRepository, OrderRepository, PaymentRepository, WorkerRepository
+from ..repositories import DispatchRepository, OrderRepository, PaymentRepository, TelemetryRepository, WorkerRepository
 from ..settings import Settings
+from ..telemetry import TelemetryCache
 from .command_state import transition_command
 from .order_state import transition_order
 from .production import ProductionService
@@ -30,11 +31,27 @@ class BackgroundWorkerService:
         *,
         payment_provider: Callable[[str], Any],
         production: ProductionService,
+        telemetry_cache: TelemetryCache | None = None,
     ) -> None:
         self.uow = uow
         self.settings = settings
         self.payment_provider = payment_provider
         self.production = production
+        self.telemetry_cache = telemetry_cache
+
+    def flush_telemetry_batch(self) -> int:
+        if not self.telemetry_cache:
+            return 0
+        snapshots = self.telemetry_cache.claim_dirty(self.settings.telemetry_flush_batch_size)
+        if not snapshots:
+            return 0
+        try:
+            with self.uow.transaction() as connection:
+                TelemetryRepository(connection).apply_snapshots(snapshots)
+            return len(snapshots)
+        except Exception:
+            self.telemetry_cache.restore_dirty([device_id for device_id, _ in snapshots])
+            raise
 
     def offline_scan_once(self) -> None:
         cutoff = utc_now() - timedelta(seconds=self.settings.offline_threshold_seconds)

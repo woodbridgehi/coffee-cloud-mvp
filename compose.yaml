@@ -6,6 +6,8 @@ services:
     network_mode: host
     env_file:
       - .env
+    environment:
+      API_WORKERS: "2"
     restart: unless-stopped
     init: true
     read_only: true
@@ -54,3 +56,23 @@ services:
       options:
         max-size: 10m
         max-file: "3"
+
+  coffee-telemetry-redis:
+    image: redis:7-alpine
+    container_name: coffee-telemetry-redis
+    network_mode: host
+    command: ["redis-server", "--bind", "127.0.0.1", "--port", "6380", "--protected-mode", "yes", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - telemetry-redis-data:/data
+    restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+volumes:
+  telemetry-redis-data:

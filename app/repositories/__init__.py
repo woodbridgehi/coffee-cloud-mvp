@@ -11,8 +11,9 @@ from .system import SystemRepository
 from .admin_access import AdminAccessRepository
 from .workers import WorkerRepository
 from .dispatch import DispatchRepository
+from .telemetry import TelemetryRepository
 
 __all__ = [
     "AdminAccessRepository", "CommandRepository", "DeviceMessageRepository", "IdentityRepository", "MqttGatewayRepository",
-    "DispatchRepository", "OrderRepository", "PaymentRepository", "SystemRepository", "TerminalRepository", "WorkerRepository",
+    "DispatchRepository", "OrderRepository", "PaymentRepository", "SystemRepository", "TelemetryRepository", "TerminalRepository", "WorkerRepository",
 ]
