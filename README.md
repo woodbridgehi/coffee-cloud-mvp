@@ -41,7 +41,8 @@ HTTP 应用代码采用 `Route → Application Service → Repository → Postgr
 - 订单状态：下单成功后自动进入 `/order/status#order=...&token=...`。敏感令牌位于 URL fragment，不会发送给 Web 服务器。
 - 设备运营台：`https://coffee-api.woodbridge.top/admin`
 - OpenAPI：`https://coffee-api.woodbridge.top/docs`
-- 健康检查：`https://coffee-api.woodbridge.top/health`
+- 存活检查：`https://coffee-api.woodbridge.top/health`（不访问数据库）
+- 就绪检查：`https://coffee-api.woodbridge.top/ready`（检查数据库，5 秒防抖缓存）
 
 运营台使用 `ADMIN_TOKEN` 登录，Token 只保存在当前页面内存。页面显示历史/在线设备、进行中订单、最近订单；选择设备后查询实时共享物料的 `available / capacity / unit / status`。
 

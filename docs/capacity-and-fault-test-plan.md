@@ -32,6 +32,8 @@
 
 ## HTTP 基线工具
 
+`/health` 是不访问数据库的进程存活基线；数据库链路应单独用 `/ready` 验证，避免把探针本身变成数据库压力源。
+
 ```bash
 uv run --with-requirements requirements.txt scripts/load_test.py \
   --base-url http://127.0.0.1:8788 --path /health \

@@ -356,8 +356,13 @@ GatewayAuth = Annotated[None, Depends(require_gateway)]
 
 
 @app.get("/health")
-def health() -> dict[str, Any]:
+async def health() -> dict[str, Any]:
     return system_service.health()
+
+
+@app.get("/ready")
+def readiness() -> dict[str, Any]:
+    return system_service.readiness()
 
 
 @app.get("/metrics", response_class=PlainTextResponse, include_in_schema=False)
@@ -378,7 +383,7 @@ def metrics() -> str:
 
 @app.get("/")
 def root() -> dict[str, Any]:
-    return {"service": "coffee-cloud-mvp", "version": SERVICE_VERSION, "health": "/health"}
+    return {"service": "coffee-cloud-mvp", "version": SERVICE_VERSION, "health": "/health", "readiness": "/ready"}
 
 
 @app.get("/order", response_class=FileResponse, include_in_schema=False)
