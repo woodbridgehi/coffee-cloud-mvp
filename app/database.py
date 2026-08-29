@@ -25,6 +25,7 @@ create table if not exists terminal (
     software_version text,
     capability_version text,
     inventory_version bigint,
+    heartbeat_count bigint not null default 0,
     reported_status jsonb not null default '{}'::jsonb,
     last_error_summary jsonb not null default '{}'::jsonb,
     created_at timestamptz not null default now(),
@@ -474,6 +475,17 @@ MIGRATIONS: tuple[tuple[int, str, str], ...] = (
         alter table terminal add column if not exists timezone text;
         alter table terminal add column if not exists profile_source text;
         alter table terminal add column if not exists profile_completed_at timestamptz;
+    """),
+    (7, "latest-telemetry-mode", """
+        alter table terminal add column if not exists heartbeat_count bigint not null default 0;
+        update terminal as t
+           set heartbeat_count = counts.total
+          from (
+                select terminal_id, count(*)::bigint as total
+                  from heartbeat_inbox
+                 group by terminal_id
+               ) as counts
+         where t.id = counts.terminal_id;
     """),
 )
 

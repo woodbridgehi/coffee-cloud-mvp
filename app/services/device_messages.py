@@ -35,7 +35,14 @@ class DeviceMessageService:
         self.reconcile_order_ack = reconcile_order_ack
         self.order_url = order_url
 
-    def heartbeat(self, device_id: str, payload: Heartbeat, identity: dict[str, Any]) -> dict[str, Any]:
+    def heartbeat(
+        self,
+        device_id: str,
+        payload: Heartbeat,
+        identity: dict[str, Any],
+        *,
+        persist_history: bool = False,
+    ) -> dict[str, Any]:
         if payload.deviceId != device_id:
             raise ServiceError(400, "payload deviceId mismatch")
         body = payload.model_dump(mode="json", exclude_none=True)
@@ -45,7 +52,7 @@ class DeviceMessageService:
         disposition = "ACCEPTED"
         with self.uow.transaction() as connection:
             messages = DeviceMessageRepository(connection)
-            existing = messages.heartbeat(identity["id"], message_id)
+            existing = messages.heartbeat(identity["id"], message_id) if persist_history else None
             if existing:
                 if existing["payload_digest"].strip() != digest:
                     raise ServiceError(409, "messageId payload conflict")
@@ -63,14 +70,15 @@ class DeviceMessageService:
             )
             if out_of_order:
                 disposition = "OUT_OF_ORDER"
-            try:
-                messages.insert_heartbeat(
-                    terminal_id=identity["id"], message_id=message_id, digest=digest, body=body,
-                    boot_id=payload.bootId, sequence=payload.sequence, occurred_at=payload.sentAt,
-                    received_at=received_at, disposition=disposition,
-                )
-            except UniqueViolation as exc:
-                raise ServiceError(409, "bootId/sequence conflict") from exc
+            if persist_history:
+                try:
+                    messages.insert_heartbeat(
+                        terminal_id=identity["id"], message_id=message_id, digest=digest, body=body,
+                        boot_id=payload.bootId, sequence=payload.sequence, occurred_at=payload.sentAt,
+                        received_at=received_at, disposition=disposition,
+                    )
+                except UniqueViolation as exc:
+                    raise ServiceError(409, "bootId/sequence conflict") from exc
             connected_at = identity.get("last_connected_at") or received_at
             if identity.get("connection_status") != "online" or current_boot != payload.bootId:
                 connected_at = received_at

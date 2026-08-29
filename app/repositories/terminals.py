@@ -39,7 +39,6 @@ class TerminalRepository:
     def list_with_counts(self) -> list[dict[str, Any]]:
         return self.connection.execute(
             """select t.*,
-                      (select count(*) from heartbeat_inbox h where h.terminal_id=t.id) as heartbeat_count,
                       (select count(*) from terminal_event e where e.terminal_id=t.id) as event_count,
                       (select count(*) from terminal_command c where c.terminal_id=t.id) as command_count,
                       (select count(*) from sales_order o where o.terminal_id=t.id
@@ -50,7 +49,6 @@ class TerminalRepository:
     def find_with_counts(self, identifier: str) -> dict[str, Any] | None:
         return self.connection.execute(
             """select t.*,
-                      (select count(*) from heartbeat_inbox h where h.terminal_id=t.id) as heartbeat_count,
                       (select count(*) from terminal_event e where e.terminal_id=t.id) as event_count,
                       (select count(*) from terminal_command c where c.terminal_id=t.id) as command_count,
                       (select count(*) from sales_order o where o.terminal_id=t.id

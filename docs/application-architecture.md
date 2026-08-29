@@ -78,6 +78,7 @@ OfflineMonitor / DomainWorker（线程调度）
 - Business Outbox 由 `BackgroundWorkerService` 一次领取一批事件，并使用 savepoint 隔离单条失败，避免一个坏事件回滚整批事件。
 - MQTT Gateway 按 `deviceId` 将上行消息分片到多个 Worker；同一设备保持在同一分片中，以保留消息顺序，不同设备可以并发处理。
 - MQTT Gateway 的内部 API 使用共享 Keep-Alive HTTP 客户端，命令发布独立于上行消息处理线程。
+- 心跳、presence 和 state 默认使用 `latest` 模式，只更新 `terminal` 最新状态与计数，不新增历史 Inbox；设置 `TELEMETRY_HISTORY_MODE=audit` 才保留这些遥测消息的历史记录。
 - 设备进度事件仍应控制频率；高频进度不应不加限制地写入 PostgreSQL。扩容前应观察连接池等待、事务耗时、Gateway 队列长度和 Outbox 积压。
 
 ## 新功能开发规则

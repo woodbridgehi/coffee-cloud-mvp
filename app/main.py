@@ -557,6 +557,7 @@ command_service = CommandService(
 mqtt_gateway_service = MqttGatewayService(
     unit_of_work,
     logger=logger,
+    retain_telemetry_history=settings.telemetry_history_mode == "audit",
     heartbeat=device_message_service.heartbeat,
     event=device_message_service.event,
     task_ack=device_message_service.task_ack,

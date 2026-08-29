@@ -35,13 +35,13 @@ class DeviceMessageRepository:
         if connected_at is None:
             self.connection.execute(
                 """update terminal set connection_status='online',last_seen_at=%s,
-                     last_heartbeat_at=%s,updated_at=%s where id=%s""",
+                     last_heartbeat_at=%s,heartbeat_count=heartbeat_count+1,updated_at=%s where id=%s""",
                 (received_at, received_at, received_at, terminal_id),
             )
             return
         self.connection.execute(
             """update terminal set connection_status='online',last_seen_at=%s,
-                 last_heartbeat_at=%s,last_connected_at=%s,updated_at=%s where id=%s""",
+             last_heartbeat_at=%s,last_connected_at=%s,heartbeat_count=heartbeat_count+1,updated_at=%s where id=%s""",
             (received_at, received_at, connected_at, received_at, terminal_id),
         )
 
@@ -52,6 +52,7 @@ class DeviceMessageRepository:
         self.connection.execute(
             """update terminal set connection_status='online',last_seen_at=%s,
                  last_heartbeat_at=%s,last_connected_at=%s,active_boot_id=%s,last_sequence=%s,
+                 heartbeat_count=heartbeat_count+1,
                  instance_id=coalesce(%s,instance_id),store_id=coalesce(%s,store_id),
                  software_version=%s,capability_version=%s,inventory_version=%s,
                  reported_status=%s,updated_at=%s where id=%s""",

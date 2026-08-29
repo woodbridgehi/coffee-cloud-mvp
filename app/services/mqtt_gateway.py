@@ -12,11 +12,13 @@ from .errors import ServiceError
 class MqttGatewayService:
     def __init__(
         self, uow: UnitOfWork, *, logger: logging.Logger,
+        retain_telemetry_history: bool = False,
         heartbeat: Callable[..., dict[str, Any]], event: Callable[..., dict[str, Any]],
         task_ack: Callable[..., dict[str, Any]], command_result: Callable[..., dict[str, Any]],
     ) -> None:
         self.uow = uow
         self.logger = logger
+        self.retain_telemetry_history = retain_telemetry_history
         self.heartbeat = heartbeat
         self.event = event
         self.task_ack = task_ack
@@ -43,6 +45,7 @@ class MqttGatewayService:
                 MqttGatewayRepository(connection).security_event(device_id, detail)
             raise ServiceError(403, "MQTT device identity mismatch")
         message_type = str(envelope.get("type") or parts[3])
+        is_telemetry = parts[3] in {"presence", "state"} or message_type == "heartbeat"
         message_id = str(
             envelope.get("messageId") or payload.get("eventId") or payload.get("messageId")
             or f"{parts[3]}:{canonical_digest(payload)}"
@@ -50,6 +53,29 @@ class MqttGatewayService:
         digest = canonical_digest(envelope)
         nested = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
         revision = nested.get("taskRevision") or payload.get("revision")
+        if is_telemetry and not self.retain_telemetry_history:
+            if parts[3] == "presence":
+                with self.uow.transaction() as connection:
+                    repository = MqttGatewayRepository(connection)
+                    terminal = repository.terminal(device_id)
+                    if not terminal:
+                        raise ServiceError(404, "device not registered")
+                    repository.presence(terminal["id"], bool(payload.get("online")))
+                return {"ok": True, "duplicate": False, "telemetryMode": "latest"}
+            if parts[3] == "state":
+                with self.uow.transaction() as connection:
+                    repository = MqttGatewayRepository(connection)
+                    terminal = repository.terminal(device_id)
+                    if not terminal:
+                        raise ServiceError(404, "device not registered")
+                    repository.state(terminal["id"], payload)
+                return {"ok": True, "duplicate": False, "telemetryMode": "latest"}
+            with self.uow.transaction() as connection:
+                terminal = MqttGatewayRepository(connection).terminal(device_id)
+            if not terminal:
+                raise ServiceError(404, "device not registered")
+            result = self.heartbeat(device_id, Heartbeat.model_validate(payload), terminal, persist_history=False)
+            return {"ok": True, "duplicate": False, "telemetryMode": "latest", "result": result}
         with self.uow.transaction() as connection:
             repository = MqttGatewayRepository(connection)
             terminal = repository.terminal(device_id)
@@ -75,7 +101,10 @@ class MqttGatewayService:
                     MqttGatewayRepository(connection).state(terminal["id"], payload)
                 result = {"ok": True}
             elif message_type == "heartbeat":
-                result = self.heartbeat(device_id, Heartbeat.model_validate(payload), terminal)
+                result = self.heartbeat(
+                    device_id, Heartbeat.model_validate(payload), terminal,
+                    persist_history=self.retain_telemetry_history,
+                )
             elif message_type == "event":
                 result = self.event(device_id, DeviceEvent.model_validate(payload), terminal)
             elif message_type == "command_result":
