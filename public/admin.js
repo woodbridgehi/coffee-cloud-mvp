@@ -818,7 +818,7 @@
     const query = state.filters.deviceQuery.trim().toLowerCase();
     const mode = state.filters.deviceConn;
     return state.devices.filter(device => {
-      const hay = [device.deviceId, device.serialNumber, device.instanceId, device.storeId].join(' ').toLowerCase();
+      const hay = [device.deviceId, device.deviceName, device.serialNumber, device.instanceId, device.storeId, device.storeName, device.cityCode].join(' ').toLowerCase();
       const matchesQuery = !query || hay.includes(query);
       const matchesConn = mode === 'all'
         || (mode === 'online' && device.online)
@@ -854,8 +854,8 @@
           el('div', { class: 'cell-strong mono' }, device.deviceId),
           el('div', { class: 'cell-sub' }, `序列号 ${device.serialNumber || '—'}`)),
         el('td', null,
-          el('div', null, device.storeId || '—'),
-          el('div', { class: 'cell-sub' }, device.instanceId || '—')),
+          el('div', null, device.storeName || device.storeId || '—'),
+          el('div', { class: 'cell-sub' }, `${device.storeId || '无门店 ID'} · ${device.profileComplete ? '资料已完成' : '待首次安装'}`)),
         el('td', null, lifecycleBadge(device.lifecycleStatus)),
         el('td', null, el('span', { class: 'num' }, String(device.activeOrderCount ?? 0))),
         el('td', null,
@@ -912,7 +912,7 @@
     const head = el('div', { class: 'card-head' },
       el('div', null,
         el('h3', { class: 'mono', style: 'font-size:14px' }, deviceId),
-        el('div', { class: 'muted', style: 'font-size:12px' }, `序列号 ${detail.serialNumber || '—'} · ${detail.storeId || '无门店'}`)),
+        el('div', { class: 'muted', style: 'font-size:12px' }, `${detail.deviceName || '未命名设备'} · 序列号 ${detail.serialNumber || '—'} · ${detail.storeName || detail.storeId || '待门店安装'}`)),
       el('div', { style: 'display:flex;gap:6px;flex-wrap:wrap' },
         badge(detail.online ? 'green' : detail.hasEverConnected ? 'red' : 'gray', detail.online ? '在线' : detail.hasEverConnected ? '离线' : '从未上线'),
         lifecycleBadge(detail.lifecycleStatus)));
@@ -922,6 +922,10 @@
     const basic = el('div', { class: 'detail-sec' },
       el('h4', null, '基本信息'),
       el('div', { class: 'kv-grid' },
+        kv('设备名称', detail.deviceName || '待首次安装'),
+        kv('门店', detail.storeName || '待首次安装'),
+        kv('地区 / 时区', detail.cityCode && detail.timezone ? `${detail.cityCode} · ${detail.timezone}` : '待首次安装'),
+        kv('资料状态', detail.profileComplete ? `已完成 · ${detail.profileSource || '—'}` : '待设备首次安装'),
         kv('实例', detail.instanceId),
         kv('软件版本', detail.softwareVersion),
         kv('活跃启动 ID', detail.activeBootId, true),
@@ -1125,8 +1129,8 @@
   /* ----- 登记新设备 ----- */
 
   function openRegisterModal() {
-    const deviceIdInput = el('input', { class: 'input mono', placeholder: '例如 coffee-bot-003', autocomplete: 'off' });
-    const serialInput = el('input', { class: 'input', placeholder: '例如 CB-2026-003', autocomplete: 'off' });
+    const deviceIdInput = el('input', { class: 'input mono', placeholder: 'coffee-bot-003（3–6 位编号）', autocomplete: 'off', pattern: '^coffee-bot-[0-9]{3,6}$' });
+    const serialInput = el('input', { class: 'input mono', placeholder: 'CB-2026-003', autocomplete: 'off', pattern: '^CB-[0-9]{4}-[0-9]{3,6}$' });
     const instanceInput = el('input', { class: 'input', placeholder: '可选', autocomplete: 'off' });
     const storeInput = el('input', { class: 'input', placeholder: '可选', autocomplete: 'off' });
     const error = el('p', { class: 'form-error', role: 'alert' });
@@ -1135,7 +1139,7 @@
       title: '登记新设备',
       wide: true,
       body: [
-        el('p', { class: 'field-hint' }, '登记后生成一次性激活码，交给设备端完成激活。deviceId 与序列号必填且唯一。'),
+        el('p', { class: 'field-hint' }, '先预登记受约束的设备 ID 与出厂序列号，再把一次性激活码交给设备端。门店资料在设备首次安装时补齐；deviceId 格式为 coffee-bot-003，序列号格式为 CB-2026-003。'),
         el('div', { class: 'kv-grid' },
           el('div', { class: 'field' }, el('span', { class: 'field-label' }, 'deviceId *'), deviceIdInput),
           el('div', { class: 'field' }, el('span', { class: 'field-label' }, '序列号 *'), serialInput),
@@ -1151,8 +1155,8 @@
     submit.addEventListener('click', async () => {
       const deviceId = deviceIdInput.value.trim();
       const serialNumber = serialInput.value.trim();
-      if (!deviceId || !serialNumber) {
-        error.textContent = 'deviceId 和序列号为必填项';
+      if (!/^coffee-bot-[0-9]{3,6}$/.test(deviceId) || !/^CB-[0-9]{4}-[0-9]{3,6}$/.test(serialNumber)) {
+        error.textContent = '请填写受约束的 deviceId（coffee-bot-003）和序列号（CB-2026-003）';
         return;
       }
       submit.disabled = true;

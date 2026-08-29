@@ -465,6 +465,15 @@ MIGRATIONS: tuple[tuple[int, str, str], ...] = (
         create index if not exists ix_audit_log_created on audit_log(created_at desc);
         create index if not exists ix_audit_log_resource on audit_log(resource_type,resource_id,created_at desc);
     """),
+    (6, "terminal-deployment-profile", """
+        alter table terminal add column if not exists device_name text;
+        alter table terminal add column if not exists store_name text;
+        alter table terminal add column if not exists store_description text;
+        alter table terminal add column if not exists city_code text;
+        alter table terminal add column if not exists timezone text;
+        alter table terminal add column if not exists profile_source text;
+        alter table terminal add column if not exists profile_completed_at timestamptz;
+    """),
 )
 
 

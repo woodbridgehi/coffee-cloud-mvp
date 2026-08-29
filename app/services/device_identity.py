@@ -7,7 +7,7 @@ from datetime import timedelta
 from typing import Any, Callable
 
 from ..db import UnitOfWork
-from ..protocol import canonical_digest, utc_now
+from ..protocol import DeviceOnboardingProfile, canonical_digest, utc_now
 from ..repositories import IdentityRepository, TerminalRepository
 from ..security import hash_token, tokens_equal
 from .errors import ServiceError
@@ -70,12 +70,17 @@ class DeviceIdentityService:
             "warning": "activationCode is returned once and must not be logged",
         }
 
-    def activate(self, device_id: str, activation_code: str, device_token: str) -> dict[str, Any]:
+    def activate(
+        self, device_id: str, activation_code: str, device_token: str,
+        profile: DeviceOnboardingProfile | None = None, serial_number: str | None = None,
+    ) -> dict[str, Any]:
         code_hash = hash_token(activation_code)
         token_hash = hash_token(device_token)
         now = utc_now()
         with self.uow.transaction() as connection:
             terminal = self._terminal(TerminalRepository(connection), device_id, for_update=True)
+            if serial_number is not None and terminal["serial_number"] != serial_number:
+                raise ServiceError(409, "device serial number does not match pre-registration")
             repository = IdentityRepository(connection)
             activation = repository.activation_by_code(terminal["id"], code_hash)
             if activation is None:
@@ -90,7 +95,10 @@ class DeviceIdentityService:
             if activation["status"] == "CONSUMED":
                 credential = repository.credential_by_id(activation["consumed_credential_id"])
                 if credential and tokens_equal(credential["token_hash"].strip(), token_hash):
-                    return {"deviceId": terminal["device_id"], **self.credential_payload(credential, duplicate=True)}
+                    return {
+                        "deviceId": terminal["device_id"], **self.credential_payload(credential, duplicate=True),
+                        "profile": self.profile_payload(terminal),
+                    }
                 raise ServiceError(409, "activation code already consumed")
             if activation["status"] != "PENDING" or activation["expires_at"] <= now:
                 if activation["status"] == "PENDING":
@@ -107,9 +115,23 @@ class DeviceIdentityService:
             )
             repository.consume_activation(activation["id"], credential["id"], now)
             repository.activate_terminal(terminal["id"], now)
+            if profile is not None:
+                terminal = TerminalRepository(connection).complete_onboarding_profile(
+                    terminal["id"], profile.model_dump()
+                )
         return {
             "deviceId": terminal["device_id"], **self.credential_payload(credential),
+            "profile": self.profile_payload(terminal),
             "mqttCredential": self.issue_mqtt_credential(terminal),
+        }
+
+    @staticmethod
+    def profile_payload(terminal: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "deviceName": terminal.get("device_name"), "storeId": terminal.get("store_id"),
+            "storeName": terminal.get("store_name"), "storeDescription": terminal.get("store_description"),
+            "cityCode": terminal.get("city_code"), "timezone": terminal.get("timezone"),
+            "source": terminal.get("profile_source"),
         }
 
     def issue_mqtt_credential(self, terminal: dict[str, Any]) -> dict[str, Any]:

@@ -27,6 +27,7 @@ from .command_state import (
 )
 from .protocol import (
     ActivationCodeRequest, ActivationRequest, AdminDeviceCreateRequest, AdminOperatorCreateRequest,
+    CITY_OPTIONS,
     AdminOperatorUpdateRequest, AdminTokenCreateRequest, CommandCreateRequest, CommandResult,
     CredentialRotationRequest, DeviceEvent, Heartbeat, PaymentCreateRequest, PublicOrderCreateRequest,
     RefundCreateRequest, Snapshot, TaskAck, DeviceLifecycleUpdateRequest,
@@ -368,9 +369,23 @@ def create_activation_code(
     return result
 
 
+@app.get("/api/v1/device-onboarding/options", tags=["device-identity"])
+def onboarding_options() -> dict[str, Any]:
+    return {
+        "cities": [
+            {"code": code, "name": value["name"], "timezone": value["timezone"]}
+            for code, value in CITY_OPTIONS.items()
+        ],
+        "deviceNumber": {"minLength": 3, "maxLength": 6, "deviceIdPrefix": "coffee-bot-"},
+        "serialNumber": {"prefix": "CB-", "yearMin": 2025, "yearMax": 2035},
+    }
+
+
 @app.post("/api/v1/device-activations", tags=["device-identity"])
 def activate_device(payload: ActivationRequest) -> dict[str, Any]:
-    return device_identity_service.activate(payload.deviceId, payload.activationCode, payload.deviceToken)
+    return device_identity_service.activate(
+        payload.deviceId, payload.activationCode, payload.deviceToken, payload.profile, payload.serialNumber
+    )
 
 
 @app.post("/api/v1/devices/{device_id}/mqtt-credentials/rotate", tags=["device-identity"])

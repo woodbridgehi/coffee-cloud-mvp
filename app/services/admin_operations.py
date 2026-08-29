@@ -25,6 +25,11 @@ class AdminOperationsService:
         return {
             "deviceId": row["device_id"], "serialNumber": row["serial_number"],
             "instanceId": row["instance_id"], "storeId": row["store_id"],
+            "deviceName": row.get("device_name"), "storeName": row.get("store_name"),
+            "storeDescription": row.get("store_description"), "cityCode": row.get("city_code"),
+            "timezone": row.get("timezone"), "profileSource": row.get("profile_source"),
+            "profileCompletedAt": iso(row.get("profile_completed_at")),
+            "profileComplete": bool(row.get("profile_completed_at")),
             "lifecycleStatus": row["lifecycle_status"], "online": online,
             "connectionStatus": "online" if online else "offline",
             "hasEverConnected": bool(row["last_connected_at"] or row["last_seen_at"]),

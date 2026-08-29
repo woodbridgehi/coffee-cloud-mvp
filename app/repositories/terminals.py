@@ -67,6 +67,26 @@ class TerminalRepository:
             (device_id, serial_number, instance_id, store_id),
         ).fetchone()
 
+    def complete_onboarding_profile(self, terminal_id: int, profile: dict[str, Any]) -> dict[str, Any]:
+        """Fill deployment metadata exactly once; administrator-provided values always win."""
+        return self.connection.execute(
+            """update terminal set
+                   device_name=coalesce(device_name,%s),
+                   store_id=coalesce(store_id,%s),
+                   store_name=coalesce(store_name,%s),
+                   store_description=coalesce(store_description,%s),
+                   city_code=coalesce(city_code,%s),
+                   timezone=coalesce(timezone,%s),
+                   profile_source=coalesce(profile_source,'DEVICE_ONBOARDING'),
+                   profile_completed_at=coalesce(profile_completed_at,now()),
+                   updated_at=now()
+                 where id=%s returning *""",
+            (
+                profile["deviceName"], profile["storeId"], profile["storeName"],
+                profile["storeDescription"], profile["cityCode"], profile["timezone"], terminal_id,
+            ),
+        ).fetchone()
+
     def update_lifecycle(self, terminal_id: int, status: str) -> dict[str, Any]:
         return self.connection.execute(
             "update terminal set lifecycle_status=%s,updated_at=now() where id=%s returning *",
