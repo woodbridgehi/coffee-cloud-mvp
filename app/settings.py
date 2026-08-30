@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     audit_retention_days: int = Field(default=365, alias="AUDIT_RETENTION_DAYS", ge=30, le=3650)
     command_publish_lease_seconds: int = Field(default=30, alias="COMMAND_PUBLISH_LEASE_SECONDS", ge=5, le=300)
     command_ack_timeout_seconds: int = Field(default=30, alias="COMMAND_ACK_TIMEOUT_SECONDS", ge=5, le=3600)
+    production_wait_timeout_seconds: int = Field(default=900, alias="PRODUCTION_WAIT_TIMEOUT_SECONDS", ge=30, le=86400)
     command_start_timeout_seconds: int = Field(default=60, alias="COMMAND_START_TIMEOUT_SECONDS", ge=5, le=3600)
     production_timeout_grace_seconds: int = Field(default=120, alias="PRODUCTION_TIMEOUT_GRACE_SECONDS", ge=0, le=86400)
     emqx_management_url: str | None = Field(default=None, alias="EMQX_MANAGEMENT_URL")

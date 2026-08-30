@@ -67,7 +67,7 @@ class DeviceMessageRepository:
     def commands_after(self, terminal_id: int, cursor: int, limit: int) -> list[dict[str, Any]]:
         return self.connection.execute(
             """select * from terminal_command where terminal_id=%s and id>%s
-                 order by id limit %s for update""",
+                 order by id limit %s""",
             (terminal_id, cursor, limit),
         ).fetchall()
 
@@ -91,13 +91,15 @@ class DeviceMessageRepository:
     def insert_event(
         self, *, terminal_id: int, event_id: str, boot_id: str | None, sequence: int | None,
         event_type: str, occurred_at: Any, digest: str, body: dict[str, Any],
-    ) -> None:
-        self.connection.execute(
+    ) -> bool:
+        row = self.connection.execute(
             """insert into terminal_event(
                    terminal_id,event_id,boot_id,sequence,event_type,occurred_at,payload_digest,payload_json)
-                 values(%s,%s,%s,%s,%s,%s,%s,%s)""",
+                 values(%s,%s,%s,%s,%s,%s,%s,%s)
+                 on conflict(terminal_id,event_id) do nothing returning id""",
             (terminal_id, event_id, boot_id, sequence, event_type, occurred_at, digest, Jsonb(body)),
-        )
+        ).fetchone()
+        return row is not None
 
     def command(self, terminal_id: int, message_id: str, *, for_update: bool = False) -> dict[str, Any] | None:
         suffix = " for update" if for_update else ""

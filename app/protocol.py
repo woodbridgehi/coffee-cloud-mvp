@@ -56,6 +56,14 @@ class DeviceEvent(BaseModel):
     type: str = Field(min_length=1, max_length=160)
     payload: dict[str, Any] = Field(default_factory=dict)
 
+    @field_validator("payload")
+    @classmethod
+    def require_json_finite(cls, value: dict[str, Any]) -> dict[str, Any]:
+        # JSONB rejects NaN/Infinity. Reject before opening an ingestion
+        # transaction, including values nested in arbitrary event details.
+        json.dumps(value, allow_nan=False)
+        return value
+
 
 DEVICE_ID_PATTERN = r"^coffee-bot-[0-9]{3,6}$"
 SERIAL_NUMBER_PATTERN = r"^CB-[0-9]{4}-[0-9]{3,6}$"
@@ -155,7 +163,7 @@ class TaskAck(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     messageId: str = Field(min_length=1, max_length=160)
-    accepted: bool
+    accepted: bool = Field(strict=True)
     reason: str | None = Field(default=None, max_length=500)
 
 
@@ -171,6 +179,15 @@ class PublicOrderCreateRequest(BaseModel):
     recipeVersion: str = Field(min_length=1, max_length=64)
     quantity: Literal[1] = 1
     paymentMode: Literal["ONLINE", "TEST_FREE"] = "ONLINE"
+
+
+class OrderAdjudicationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    taskId: str = Field(min_length=1, max_length=160)
+    expectedRevision: int = Field(ge=0, strict=True)
+    outcome: Literal["SUCCEEDED", "FAILED", "CANCELLED"]
+    reason: str = Field(min_length=1, max_length=1000)
 
 
 class PaymentCreateRequest(BaseModel):

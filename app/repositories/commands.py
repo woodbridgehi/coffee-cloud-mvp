@@ -6,28 +6,90 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
+# Only these states may ever drive physical production: UNKNOWN (needs
+# reconciliation), ACKED/EXECUTING (already at the device) and the terminal
+# states must never be re-published, and neither may a command whose delivery
+# deadline has passed (the expiry scan owns it from then on).
+DELIVERABLE_COMMAND_STATES = ("CREATED", "DELIVERING")
+
 
 class CommandRepository:
     def __init__(self, connection: Any) -> None:
         self.connection = connection
 
     def claim(self, gateway_id: str, limit: int, lease_seconds: int) -> list[dict[str, Any]]:
-        rows = self.connection.execute(
-            """select o.* from command_outbox o
-                 where ((o.status in ('PENDING','RETRY') and o.next_attempt_at<=now())
+        """Claim deliverable outbox rows using the command -> outbox lock order.
+
+        The candidate query is read-only and bounded. Each candidate is then
+        locked with FOR UPDATE SKIP LOCKED (command first, then outbox) and
+        re-checked: status, delivery deadline and publish lease must all still
+        qualify before the row becomes PUBLISHING, so a claim never blocks on
+        rows another transaction holds and never publishes a command that an
+        event or the expiry scan advanced in the meantime.
+        """
+        candidates = self.connection.execute(
+            """select o.id, o.command_id from command_outbox o
+                 join terminal_command c on c.id=o.command_id
+                where ((o.status in ('PENDING','RETRY') and o.next_attempt_at<=now())
                     or (o.status='PUBLISHING' and o.locked_until<now()))
-                 order by o.created_at for update skip locked limit %s""", (limit,)
+                  and c.status = any(%s)
+                  and (c.expires_at is null or c.expires_at>now())
+                order by o.created_at, o.id limit %s""",
+            (list(DELIVERABLE_COMMAND_STATES), limit),
         ).fetchall()
-        return [self.connection.execute(
-            """update command_outbox set status='PUBLISHING',attempt_count=attempt_count+1,
-                 locked_by=%s,locked_until=now()+(%s::text||' seconds')::interval where id=%s returning *""",
-            (gateway_id, lease_seconds, row["id"]),
-        ).fetchone() for row in rows]
+        claimed: list[dict[str, Any]] = []
+        for candidate in candidates:
+            command = self.connection.execute(
+                """select id from terminal_command where id=%s and status = any(%s)
+                     and (expires_at is null or expires_at>now())
+                   for update skip locked""",
+                (candidate["command_id"], list(DELIVERABLE_COMMAND_STATES)),
+            ).fetchone()
+            if command is None:
+                continue
+            outbox = self.connection.execute(
+                """select id from command_outbox where id=%s
+                     and ((status in ('PENDING','RETRY') and next_attempt_at<=now())
+                       or (status='PUBLISHING' and locked_until<now()))
+                   for update skip locked""",
+                (candidate["id"],),
+            ).fetchone()
+            if outbox is None:
+                continue
+            row = self.connection.execute(
+                """update command_outbox set status='PUBLISHING',attempt_count=attempt_count+1,
+                     locked_by=%s,locked_until=now()+(%s::text||' seconds')::interval
+                   where id=%s returning *""",
+                (gateway_id, lease_seconds, candidate["id"]),
+            ).fetchone()
+            if row is not None:
+                claimed.append(row)
+        return claimed
+
+    def find_outbox(self, outbox_id: Any) -> dict[str, Any] | None:
+        """Unlocked locate used to establish the command -> outbox lock order."""
+        return self.connection.execute(
+            "select * from command_outbox where id=%s", (outbox_id,)
+        ).fetchone()
 
     def outbox(self, outbox_id: Any) -> dict[str, Any] | None:
         return self.connection.execute(
             "select * from command_outbox where id=%s for update", (outbox_id,)
         ).fetchone()
+
+    def outbox_for_command(self, command_id: int) -> dict[str, Any] | None:
+        return self.connection.execute(
+            "select * from command_outbox where command_id=%s for update", (command_id,)
+        ).fetchone()
+
+    def terminalize_outbox(self, outbox_id: Any, status: str) -> None:
+        """Make an outbox row permanently unpublishable (expiry/cancellation)."""
+        self.connection.execute(
+            """update command_outbox set status=%s,locked_by=null,
+                 locked_until=null,next_attempt_at=now()+interval '1 hour'
+               where id=%s""",
+            (status, outbox_id),
+        )
 
     def mark_published(self, outbox_id: Any) -> None:
         self.connection.execute(
@@ -51,7 +113,7 @@ class CommandRepository:
         suffix = " for update" if for_update else ""
         return self.connection.execute(
             """select * from terminal_command
-                 where terminal_id=%s and payload_json->>'taskId'=%s
+                 where terminal_id=%s and payload_json->>'taskId'=%s and command_type='MAKE_DRINK'
                  order by id desc limit 1""" + suffix,
             (terminal_id, task_id),
         ).fetchone()

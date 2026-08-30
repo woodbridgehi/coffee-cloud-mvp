@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-import uuid
 from typing import Any, Callable
 
 from psycopg.errors import UniqueViolation
 
-from ..command_state import ACKED, CREATED, DELIVERING, EXECUTING, EXPIRED, PUBLISHED, TERMINAL_STATES, result_state
+from ..command_state import CREATED, DELIVERING, PUBLISHED, result_state
 from ..db import UnitOfWork
 from ..protocol import CommandResult, DeviceEvent, Heartbeat, canonical_digest, utc_now
-from ..repositories import DeviceMessageRepository
+from ..repositories import CommandRepository, DeviceMessageRepository
 from ..telemetry import TelemetryCache
 from .errors import ServiceError
 from .presenters import iso
@@ -115,14 +114,18 @@ class DeviceMessageService:
             cursor = 0
         with self.uow.transaction() as connection:
             rows = DeviceMessageRepository(connection).commands_after(identity["id"], cursor, limit)
-            deliverable: list[dict[str, Any]] = []
-            for row in rows:
-                cursor = row["id"]
-                if row["expires_at"] and row["expires_at"] <= utc_now() and row["status"] not in TERMINAL_STATES:
-                    updated, _ = self.transition_command(
-                        connection, row, EXPIRED, "cloud", reason="command expired before delivery"
-                    )
-                    self.expire_order_for_command(connection, updated)
+        deliverable: list[dict[str, Any]] = []
+        for candidate in rows:
+            cursor = candidate["id"]
+            with self.uow.transaction() as connection:
+                if candidate["expires_at"] and candidate["expires_at"] <= utc_now():
+                    # No command locks precede the order-first coordinator.
+                    self.expire_order_for_command(connection, candidate)
+                    continue
+                row = CommandRepository(connection).by_db_id(candidate["id"])
+                if not row or (row["expires_at"] and row["expires_at"] <= utc_now()):
+                    # Deadline crossed while locking. Do not reverse-lock its
+                    # order; the monitor will expire this command safely.
                     continue
                 if row["status"] == CREATED:
                     row, _ = self.transition_command(
@@ -161,24 +164,28 @@ class DeviceMessageService:
             if existing:
                 if existing["payload_digest"].strip() != digest:
                     raise ServiceError(409, "eventId payload conflict")
-                command_transition = self.reconcile_command_event(
-                    connection, identity["id"], body, payload.type
-                )
                 return {
-                    "ok": True, "duplicate": True, "commandTransition": command_transition,
+                    "ok": True, "duplicate": True, "commandTransition": None,
                     "orderTransition": {"duplicate": True},
                 }
-            messages.insert_event(
+            inserted = messages.insert_event(
                 terminal_id=identity["id"], event_id=payload.eventId,
                 boot_id=payload.bootId, sequence=payload.sequence, event_type=payload.type,
                 occurred_at=payload.occurredAt, digest=digest, body=body,
             )
-            command_transition = self.reconcile_command_event(
-                connection, identity["id"], body, payload.type
-            )
+            if inserted is False:
+                # A concurrent transaction may have committed this event after
+                # the initial read. ON CONFLICT waits for it without aborting
+                # our transaction; compare its committed digest before returning.
+                existing = messages.event(identity["id"], payload.eventId)
+                if not existing or existing["payload_digest"].strip() != digest:
+                    raise ServiceError(409, "eventId payload conflict")
+                return {"ok": True, "duplicate": True, "commandTransition": None,
+                        "orderTransition": {"duplicate": True}}
             order_transition = self.reconcile_order_event(
                 connection, identity["id"], body, payload.type
             )
+            command_transition = (order_transition or {}).get("commandTransition")
         return {
             "ok": True, "duplicate": False, "commandTransition": command_transition,
             "orderTransition": order_transition,
@@ -186,27 +193,12 @@ class DeviceMessageService:
 
     def task_ack(self, identity: dict[str, Any], task_id: str, body: dict[str, Any]) -> dict[str, Any]:
         with self.uow.transaction() as connection:
-            command = DeviceMessageRepository(connection).command(
-                identity["id"], str(body.get("messageId") or ""), for_update=True
-            )
-            if command is None or command["payload_json"].get("taskId") != task_id:
-                raise ServiceError(404, "task command not found")
-            target = ACKED if body.get("accepted") else "REJECTED"
-            if target == ACKED and command["status"] in {ACKED, EXECUTING, *TERMINAL_STATES}:
-                return {
-                    "ok": True, "duplicate": True, "stale": command["status"] != ACKED,
-                    "taskId": task_id, "deviceId": identity["device_id"],
-                    "commandStatus": command["status"], "revision": command["revision"],
-                }
-            updated, duplicate = self.transition_command(
-                connection, command, target, "device-ack",
-                reason=body.get("reason") or body.get("reasonCode"), payload=body,
-            )
-            self.reconcile_order_ack(connection, identity["id"], task_id, body)
+            result = self.reconcile_order_ack(connection, identity["id"], task_id, body) or {}
+            command = result.get("commandTransition") or {}
         return {
-            "ok": True, "duplicate": duplicate, "stale": False,
+            "ok": True, "duplicate": bool(result.get("duplicate")), "stale": bool(result.get("stale")),
             "taskId": task_id, "deviceId": identity["device_id"],
-            "commandStatus": updated["status"], "revision": updated["revision"],
+            "commandStatus": command.get("status"), "revision": command.get("revision"),
         }
 
     def command_result(
@@ -220,6 +212,8 @@ class DeviceMessageService:
             )
             if command is None:
                 raise ServiceError(404, "command not found")
+            if command["command_type"] == "MAKE_DRINK":
+                raise ServiceError(409, "MAKE_DRINK requires task acknowledgement or lifecycle events")
             updated, duplicate = self.transition_command(
                 connection, command, target, "device-result", reason=payload.status, payload=body
             )

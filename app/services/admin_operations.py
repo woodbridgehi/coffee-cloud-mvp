@@ -153,6 +153,7 @@ class AdminOperationsService:
                     "paymentMode": row["payment_mode"], "paymentStatus": row["payment_status"],
                     "totalAmountMinor": row["total_amount_minor"], "currency": row["currency"],
                     "productionStatus": row["production_status"],
+                    "taskId": row["task_id"], "productionRevision": row.get("production_revision"),
                     "progress": row["progress"], "currentStepName": row["current_step_name"],
                     "failureCode": row["failure_code"], "failureMessage": row["failure_message"],
                     "manualReviewRequired": bool(row["manual_review_required"]),

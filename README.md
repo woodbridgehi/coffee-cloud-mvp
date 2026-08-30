@@ -4,6 +4,8 @@
 
 HTTP 应用代码采用 `Route → Application Service → Repository → PostgreSQL` 分层：路由只处理协议适配，Service 负责业务规则和事务，Repository 集中 SQL。模块职责、事务边界和扩展规则见 [应用分层架构](docs/application-architecture.md)。
 
+2026-08-30 本地整改：统一订单/制作任务/命令状态校验，增加 `PAUSED/RETRY_WAIT` 非终态及带权限、版本、幂等和同事务审计的 HOLD 人工结案。具体协议、迁移前检查和未完成边界见 [制作状态一致性](docs/production-consistency.md)。本批尚未部署 VPS；MQTT 持久接收、Redis dirty 租约及 Worker 有界并发等后续整改仍未完成。
+
 公网支付由 `PUBLIC_PAYMENT_MODE` 控制。现网在没有支付宝沙箱密钥前必须保持 `TEST_FREE`；设置为 `ONLINE` 后，服务端会拒绝任何绕过支付的测试订单。支付宝沙箱与正式环境共用 `AlipayProvider`，只通过 gateway、appId 和密钥文件切换。
 
 ## 1. 已实现的运营闭环
@@ -32,7 +34,7 @@ HTTP 应用代码采用 `Route → Application Service → Repository → Postgr
 - 状态页使用独立的不可猜测订单访问令牌，通过请求头传输；令牌不写入 URL 查询参数或服务日志。
 - 每台设备同时只派发一个制作任务；其余订单保持 `QUEUED`。
 - 设备 ACK 是物料预占成功的事实，设备事件是制作状态和实际扣料的事实。
-- 未在时限内送达设备的命令会进入 `EXPIRED`，不会无限停留在 `DISPATCHED`。
+- 只有确定从未投递的超时命令才进入 `EXPIRED` 并创建必要退款；已领取/存在投递证据但结果未知的命令进入 `UNKNOWN`、订单 `HOLD`，不能推断未制作并自动退款。
 - 终端 outbox 至少一次重投；云端事件 Inbox 和状态迁移保证重复事件不重复制作或扣料。
 
 ## 2. 页面入口

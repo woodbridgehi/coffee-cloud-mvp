@@ -8,7 +8,7 @@ class TerminalRepository:
         self.connection = connection
 
     def find(self, identifier: str, *, for_update: bool = False) -> dict[str, Any] | None:
-        suffix = " for update" if for_update else ""
+        suffix = " for no key update" if for_update else ""
         return self.connection.execute(
             f"""select * from terminal
                   where device_id=%s or serial_number=%s
@@ -23,6 +23,9 @@ class TerminalRepository:
             (terminal_id, snapshot_type),
         ).fetchone()
         return row["payload_json"] if row else None
+
+    def by_id(self, terminal_id: int) -> dict[str, Any] | None:
+        return self.connection.execute("select * from terminal where id=%s", (terminal_id,)).fetchone()
 
     def snapshot_row(self, terminal_id: int, snapshot_type: str) -> dict[str, Any] | None:
         return self.connection.execute(

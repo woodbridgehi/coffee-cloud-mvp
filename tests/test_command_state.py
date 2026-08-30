@@ -10,6 +10,7 @@ from app.command_state import (
     ("current", "target"),
     [
         (CREATED, DELIVERING),
+        (CREATED, SUCCEEDED),  # authenticated completion can precede PUBACK receipt
         (DELIVERING, ACKED),
         (DELIVERING, EXECUTING),
         (DELIVERING, SUCCEEDED),
@@ -29,7 +30,7 @@ def test_duplicate_transition_is_idempotent() -> None:
 
 @pytest.mark.parametrize(
     ("current", "target"),
-    [(CREATED, SUCCEEDED), (SUCCEEDED, EXECUTING), (FAILED, SUCCEEDED)],
+    [(ACKED, DELIVERING), (SUCCEEDED, EXECUTING), (FAILED, SUCCEEDED)],
 )
 def test_illegal_or_terminal_regression_is_rejected(current: str, target: str) -> None:
     assert not decide_transition(current, target).allowed

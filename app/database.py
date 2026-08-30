@@ -534,6 +534,42 @@ MIGRATIONS: tuple[tuple[int, str, str], ...] = (
         create trigger notify_order_transition_update after insert on order_transition
             for each row execute function coffee_notify_order_update();
     """),
+    # Migration 10: every order tracks the single payment that funds it (nullable
+    # for compatibility); historical paid orders are backfilled from the earliest
+    # paid_at (then id) among payments that actually received money.
+    (10, "sales-order-primary-payment", """
+        alter table sales_order add column if not exists paid_payment_id uuid references payment(id);
+        create index if not exists ix_sales_order_paid_payment
+            on sales_order(paid_payment_id) where paid_payment_id is not null;
+        with earliest_paid as (
+            select distinct on (order_id) order_id, id
+              from payment
+             where paid_at is not null
+             order by order_id, paid_at, id
+        )
+        update sales_order as o
+           set paid_payment_id = earliest_paid.id
+          from earliest_paid
+         where o.id = earliest_paid.order_id
+           and o.paid_payment_id is null;
+    """),
+    (11, "production-wait-states", """
+        drop index if exists uq_production_job_active_terminal;
+        create unique index uq_production_job_active_terminal on production_job(terminal_id)
+            where status in ('DISPATCHED','ACCEPTED','EXECUTING','PAUSED','RETRY_WAIT','HOLD','UNKNOWN');
+    """),
+    (12, "production-adjudication", """
+        create table if not exists order_adjudication (
+            id bigserial primary key,
+            order_id uuid not null references sales_order(id),
+            task_id text not null,
+            idempotency_key varchar(160) not null,
+            request_digest char(64) not null,
+            response_json jsonb not null,
+            created_at timestamptz not null default now(),
+            unique(order_id,idempotency_key)
+        );
+    """),
 )
 
 

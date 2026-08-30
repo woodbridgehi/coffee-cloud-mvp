@@ -7,6 +7,7 @@ from typing import Any, Callable
 
 from ..db import UnitOfWork
 from ..order_logic import public_menu
+from ..payment_service import apply_paid_callback, transition_payment
 from ..protocol import PublicOrderCreateRequest, canonical_digest, utc_now
 from ..repositories import OrderRepository, PaymentRepository, TerminalRepository
 from ..security import derive_order_access_token, hash_token, tokens_equal
@@ -16,6 +17,7 @@ from ..live_progress import merge_progress
 from .errors import ServiceError
 from .order_state import transition_order
 from .presenters import iso, payment_payload
+from .refund_intents import REFUNDABLE_PAYMENT_STATUSES, ensure_automatic_refund_intent
 
 
 log = logging.getLogger("coffee-cloud-mvp.public-orders")
@@ -57,7 +59,7 @@ class PublicOrderService:
     def _payload(orders: OrderRepository, payments: PaymentRepository, order: dict[str, Any]) -> dict[str, Any]:
         projected = "job_json" in order
         job = order.get("job_json") if projected else orders.job(order["id"])
-        payment = order.get("payment_json") if projected else payments.latest_for_order(order["id"])
+        payment = order.get("payment_json") if projected else payments.display_for_order(order["id"])
         transitions = order.get("transitions_json") if projected else orders.transitions(order["id"])
         return {
             "orderId": str(order["id"]), "orderNo": order["order_no"],
@@ -188,30 +190,88 @@ class PublicOrderService:
         return self.with_live_progress(snapshot) if include_progress else snapshot
 
     def cancel(self, order_id: uuid.UUID, access_token: str | None) -> dict[str, Any]:
-        payment_to_close: dict[str, Any] | None = None
+        intents_to_close: list[dict[str, Any]] = []
+        repeat_cancel = False
         with self.uow.transaction() as connection:
             orders = OrderRepository(connection)
             payments = PaymentRepository(connection)
             order = self._authenticate(orders, order_id, access_token, for_update=True)
-            if order["status"] not in {"CREATED", "AWAITING_PAYMENT", "QUEUED"}:
-                raise ServiceError(409, "only unpaid or queued orders can be cancelled safely")
-            if order["status"] in {"CREATED", "AWAITING_PAYMENT"}:
-                payment_to_close = payments.latest_open_for_order(order_id, for_update=True)
-            transition_order(connection, order, "CANCELLED", "customer", reason="cancelled before dispatch")
-            orders.cancel_job(order_id)
-        if payment_to_close:
+            if order["status"] == "CANCELLED":
+                # Repeat cancellation returns the current state and never refunds twice.
+                repeat_cancel = True
+            if not repeat_cancel:
+                if order["status"] not in {"CREATED", "AWAITING_PAYMENT", "QUEUED"}:
+                    raise ServiceError(409, "only unpaid or queued orders can be cancelled safely")
+                intents_to_close = payments.open_intents_for_order(order_id, for_update=True)
+                if order["status"] == "QUEUED" and order["payment_status"] in REFUNDABLE_PAYMENT_STATUSES:
+                    # Paid queued order: ensure the remaining money is refunded
+                    # inside the same transaction. An already fully refunded or
+                    # in-flight-covered budget is a successful no-op and must not
+                    # block the cancellation.
+                    payment_id = order.get("paid_payment_id")
+                    if not payment_id:
+                        fallback = payments.paid_for_order(order_id)
+                        payment_id = fallback["id"] if fallback else None
+                    if payment_id:
+                        ensure_automatic_refund_intent(
+                            connection, payment_id=payment_id,
+                            idempotency_key=f"order:{order_id}:cancelled-order-refund",
+                            reason="order cancelled before dispatch", actor="customer-cancel",
+                        )
+                transition_order(connection, order, "CANCELLED", "customer", reason="cancelled before dispatch")
+                orders.cancel_job(order_id)
+        if repeat_cancel:
+            return self.get(order_id, access_token)
+        # Closing open intents talks to the channel outside any database transaction.
+        closed: list[tuple[dict[str, Any], Any]] = []
+        for intent in intents_to_close:
             try:
-                result = self.payment_provider(payment_to_close["provider"]).close_payment(
-                    payment_to_close["merchant_payment_no"]
+                result = self.payment_provider(intent["provider"]).close_payment(
+                    intent["merchant_payment_no"]
                 )
-                with self.uow.transaction() as connection:
-                    payments = PaymentRepository(connection)
-                    current = payments.find(payment_to_close["id"], for_update=True)
-                    if current and current["status"] in {"CREATED", "PENDING"}:
-                        from ..payment_service import transition_payment
-
-                        transition_payment(connection, current, "CLOSED", actor="customer-cancel", payload=result.raw)
-                        OrderRepository(connection).update_payment_status(order_id, "CLOSED")
+                closed.append((intent, result))
             except Exception as exc:
-                log.warning("payment close deferred after order cancellation payment=%s: %s", payment_to_close["id"], exc)
+                log.warning(
+                    "payment close deferred after order cancellation payment=%s: %s", intent["id"], exc
+                )
+        if closed:
+            with self.uow.transaction() as connection:
+                orders = OrderRepository(connection)
+                payments = PaymentRepository(connection)
+                # Same financial lock order: the order row first, then payment rows.
+                order = orders.find(order_id, for_update=True)
+                if order is not None:
+                    for intent, result in closed:
+                        current = payments.find(intent["id"], for_update=True)
+                        if current and current["status"] in {"CREATED", "PENDING"}:
+                            if getattr(result, "status", None) == "CLOSED":
+                                transition_payment(
+                                    connection, current, "CLOSED", actor="customer-cancel",
+                                    payload=getattr(result, "raw", None) or {},
+                                )
+                            elif getattr(result, "status", None) == "PAID":
+                                # Verified channel fact: record the money via the
+                                # regular callback compensation path.
+                                apply_paid_callback(
+                                    connection, provider=intent["provider"],
+                                    event_id=f"close-paid:{intent['merchant_payment_no']}",
+                                    values={
+                                        "merchant_payment_no": intent["merchant_payment_no"],
+                                        "amount_minor": str(current["amount_minor"]),
+                                        "provider_trade_no": getattr(result, "provider_trade_no", "") or "",
+                                    },
+                                )
+                            else:
+                                # UNKNOWN/PENDING/FAILED close results stay undecided;
+                                # the reconciliation worker owns them.
+                                payments.schedule_reconciliation(
+                                    current["id"], self.settings.payment_reconcile_seconds
+                                )
+                    # Re-read: a PAID close result may have moved the projection
+                    # to REFUNDING inside the loop above.
+                    order = orders.find(order_id, for_update=True)
+                    if not payments.open_intents_for_order(order_id) and order["payment_status"] in {
+                        "NOT_STARTED", "PENDING"
+                    }:
+                        orders.update_payment_status(order_id, "CLOSED")
         return self.get(order_id, access_token)

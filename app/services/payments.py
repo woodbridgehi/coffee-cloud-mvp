@@ -6,10 +6,8 @@ import uuid
 from typing import Any, Callable
 
 from ..db import UnitOfWork
-from ..payment_providers import PaymentRequest, RefundRequest
-from ..payment_service import (
-    apply_paid_callback, callback_event_id, transition_payment, transition_refund,
-)
+from ..payment_providers import PaymentRequest
+from ..payment_service import apply_paid_callback, callback_event_id, transition_payment
 from ..protocol import PaymentCreateRequest, RefundCreateRequest, canonical_digest, utc_now
 from ..repositories import OrderRepository, PaymentRepository
 from ..security import hash_token, tokens_equal
@@ -17,6 +15,7 @@ from ..settings import Settings
 from .errors import ServiceError
 from .order_state import transition_order
 from .presenters import payment_payload
+from .refund_intents import create_refund_intent
 
 
 log = logging.getLogger("coffee-cloud-mvp.payments")
@@ -71,6 +70,7 @@ class PaymentApplicationService:
             raise ServiceError(503, "mock payment provider is disabled")
         digest = canonical_digest(payload.model_dump(mode="json"))
         existing: dict[str, Any] | None = None
+        reused = False
         with self.uow.transaction() as connection:
             orders = OrderRepository(connection)
             payments = PaymentRepository(connection)
@@ -79,23 +79,35 @@ class PaymentApplicationService:
                 raise ServiceError(409, "test-free order does not require payment")
             existing = payments.find_idempotent(order_id, idempotency_key)
             if existing:
+                # Same-key semantics unchanged: digest conflict, or duplicate reply.
                 if existing["request_digest"].strip() != digest:
                     raise ServiceError(409, "Idempotency-Key payload conflict")
                 if existing["status"] != "CREATED":
                     return {**payment_payload(existing), "duplicate": True}
                 payment = existing
             else:
-                if order["payment_status"] in {"PAID", "REFUNDING", "REFUNDED"}:
+                if order["payment_status"] in {"PAID", "REFUNDING", "PARTIALLY_REFUNDED", "REFUNDED"}:
                     raise ServiceError(409, "order payment is already complete")
-                payment = payments.insert(
-                    payment_id=uuid.uuid4(), order=order, provider=provider_name,
-                    merchant_no=f"C{utc_now().strftime('%Y%m%d%H%M%S')}{secrets.token_hex(5).upper()}",
-                    idempotency_key=idempotency_key, request_digest=digest,
-                )
-                payments.insert_created_event(payment["id"], payload.model_dump(mode="json"))
-                if order["status"] == "CREATED":
-                    transition_order(connection, order, "AWAITING_PAYMENT", "payment-service", reason="payment created")
-                orders.update_payment_status(order_id, "PENDING")
+                if order["status"] not in {"CREATED", "AWAITING_PAYMENT"}:
+                    raise ServiceError(409, "order can no longer accept a new payment")
+                open_intent = payments.latest_open_for_order(order_id, for_update=True)
+                if open_intent is not None:
+                    # A different key must not open a second merchant payment for the
+                    # same order: reuse the active intent, or reject a provider change.
+                    if open_intent["provider"] != provider_name:
+                        raise ServiceError(409, "order already has an active payment intent with another provider")
+                    payment = open_intent
+                    reused = True
+                else:
+                    payment = payments.insert(
+                        payment_id=uuid.uuid4(), order=order, provider=provider_name,
+                        merchant_no=f"C{utc_now().strftime('%Y%m%d%H%M%S')}{secrets.token_hex(5).upper()}",
+                        idempotency_key=idempotency_key, request_digest=digest,
+                    )
+                    payments.insert_created_event(payment["id"], payload.model_dump(mode="json"))
+                    if order["status"] == "CREATED":
+                        transition_order(connection, order, "AWAITING_PAYMENT", "payment-service", reason="payment created")
+                    orders.update_payment_status(order_id, "PENDING")
 
         provider = self.provider_factory(provider_name)
         request_value = PaymentRequest(
@@ -120,25 +132,28 @@ class PaymentApplicationService:
 
         with self.uow.transaction() as connection:
             payments = PaymentRepository(connection)
-            current = payments.find(payment["id"], for_update=True)
-            assert current is not None
-            current = payments.save_provider_result(current["id"], result)
             if result.status == "PAID":
+                # apply_paid_callback owns the order->payment lock order and the
+                # primary/extra payment rules; never pre-lock the payment row here.
                 current, _ = apply_paid_callback(
                     connection, provider=provider_name,
-                    event_id=f"query-paid:{current['merchant_payment_no']}",
+                    event_id=f"query-paid:{payment['merchant_payment_no']}",
                     values={
-                        "merchant_payment_no": current["merchant_payment_no"],
-                        "amount_minor": str(current["amount_minor"]),
+                        "merchant_payment_no": payment["merchant_payment_no"],
+                        "amount_minor": str(payment["amount_minor"]),
                         "provider_trade_no": result.provider_trade_no or "",
                     },
                 )
-            elif current["status"] == "CREATED":
-                current, _ = transition_payment(
-                    connection, current, "PENDING", actor="payment-provider", payload=result.raw
-                )
-                payments.schedule_reconciliation(current["id"], self.settings.payment_reconcile_seconds)
-        return {**payment_payload(current), "duplicate": existing is not None}
+            else:
+                current = payments.find(payment["id"], for_update=True)
+                assert current is not None
+                current = payments.save_provider_result(current["id"], result)
+                if current["status"] == "CREATED":
+                    current, _ = transition_payment(
+                        connection, current, "PENDING", actor="payment-provider", payload=result.raw
+                    )
+                    payments.schedule_reconciliation(current["id"], self.settings.payment_reconcile_seconds)
+        return {**payment_payload(current), "duplicate": existing is not None or reused}
 
     def get(self, payment_id: uuid.UUID, access_token: str | None) -> dict[str, Any]:
         with self.uow.transaction() as connection:
@@ -203,86 +218,32 @@ class PaymentApplicationService:
     def refund(
         self, payment_id: uuid.UUID, payload: RefundCreateRequest, idempotency_key: str | None
     ) -> dict[str, Any]:
+        """Record a manual refund intent only; the background worker submits it to the channel.
+
+        The API answers with the pending state (or the idempotent existing record,
+        including a FAILED one, which is never resubmitted) and never races the
+        worker on the same channel request.
+        """
         if not idempotency_key or len(idempotency_key) > 160:
             raise ServiceError(400, "Idempotency-Key is required and must be <= 160 characters")
         digest = canonical_digest(payload.model_dump(mode="json"))
-        existing: dict[str, Any] | None = None
         with self.uow.transaction() as connection:
             payments = PaymentRepository(connection)
-            payment = payments.find(payment_id, for_update=True)
+            orders = OrderRepository(connection)
+            # Unlocked first pass only to locate the owning order.
+            payment = payments.find(payment_id)
             if not payment:
                 raise ServiceError(404, "payment not found")
-            if payment["status"] not in {"PAID", "REFUNDING", "PARTIALLY_REFUNDED"}:
-                raise ServiceError(409, "payment is not refundable")
-            existing = payments.find_refund_idempotent(payment_id, idempotency_key)
-            if existing:
-                if existing["request_digest"].strip() != digest:
-                    raise ServiceError(409, "Idempotency-Key payload conflict")
-                if existing["status"] in {"PROCESSING", "SUCCEEDED"}:
-                    return {"refundId": str(existing["id"]), "status": existing["status"], "duplicate": True}
-                refund = existing
-            else:
-                amount = payload.amountMinor or payment["amount_minor"]
-                if amount + payments.refunded_total(payment_id) > payment["amount_minor"]:
-                    raise ServiceError(409, "refund amount exceeds unrefunded payment amount")
-                refund = payments.insert_refund(
-                    refund_id=uuid.uuid4(), payment=payment,
-                    merchant_refund_no=f"R{uuid.uuid4().hex[:24].upper()}",
-                    idempotency_key=idempotency_key, request_digest=digest,
-                    amount_minor=amount, reason=payload.reason,
-                )
-                transition_payment(
-                    connection, payment, "REFUNDING", actor="refund-service",
-                    payload={"refundId": str(refund["id"])},
-                )
-                refund, _ = transition_refund(connection, refund, "PROCESSING")
-                payments.schedule_refund(refund["id"])
-
-        provider = self.provider_factory(payment["provider"])
-        try:
-            result = provider.refund(RefundRequest(
-                merchant_payment_no=payment["merchant_payment_no"],
-                merchant_refund_no=refund["merchant_refund_no"], amount_minor=refund["amount_minor"],
-                reason=refund["reason"], provider_trade_no=payment["provider_trade_no"],
-            ))
-            target = "SUCCEEDED" if result.status == "REFUNDED" else "PROCESSING"
-        except Exception as exc:
-            log.warning("refund outcome unknown refund=%s: %s", refund["id"], exc)
-            result = None
-            target = "UNKNOWN"
-        with self.uow.transaction() as connection:
-            payments = PaymentRepository(connection)
-            current = payments.find_refund(refund["id"], for_update=True)
-            assert current is not None
-            current, _ = transition_refund(
-                connection, current, target,
-                payload=result.raw if result else {"error": "provider outcome unknown"},
+            # Financial lock order: the order row first, then the payment row.
+            if orders.find(payment["order_id"], for_update=True) is None:
+                raise ServiceError(404, "order not found")
+            intent = create_refund_intent(
+                connection, payment_id=payment_id,
+                idempotency_key=idempotency_key, request_digest=digest,
+                amount_minor=payload.amountMinor, reason=payload.reason,
+                actor="refund-service",
             )
-            if target == "UNKNOWN":
-                payments.schedule_refund(current["id"], increment_attempt=True)
-            elif target == "PROCESSING":
-                payments.schedule_processing_refund(current["id"])
-            elif target == "SUCCEEDED":
-                current_payment = payments.find(payment_id, for_update=True)
-                assert current_payment is not None
-                payment_target = (
-                    "REFUNDED" if payments.refunded_total(payment_id) >= current_payment["amount_minor"]
-                    else "PARTIALLY_REFUNDED"
-                )
-                transition_payment(
-                    connection, current_payment, payment_target, actor="refund-provider",
-                    payload=result.raw if result else {},
-                )
-                if payment_target == "REFUNDED":
-                    orders = OrderRepository(connection)
-                    order = orders.find_with_terminal(current_payment["order_id"], for_update=True)
-                    assert order is not None
-                    orders.update_payment_status(order["id"], "REFUNDED")
-                    if order["status"] == "FAILED":
-                        transition_order(
-                            connection, order, "REFUNDED", "refund-provider", reason="full refund completed"
-                        )
         return {
-            "refundId": str(current["id"]), "paymentId": str(payment_id),
-            "status": current["status"], "duplicate": existing is not None,
+            "refundId": str(intent.refund["id"]), "paymentId": str(payment_id),
+            "status": intent.refund["status"], "duplicate": not intent.created,
         }

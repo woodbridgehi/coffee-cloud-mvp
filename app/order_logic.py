@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 
-ACTIVE_ORDER_STATUSES = frozenset({"QUEUED", "DISPATCHED", "ACCEPTED", "MAKING"})
+ACTIVE_ORDER_STATUSES = frozenset({"QUEUED", "DISPATCHED", "ACCEPTED", "MAKING", "HOLD"})
 TERMINAL_ORDER_STATUSES = frozenset({"READY", "FAILED", "CANCELLED", "EXPIRED", "REFUNDED"})
 
 

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import json
 import io
 import threading
 import time
@@ -23,7 +22,7 @@ import qrcode
 from .database import Database
 from .protocol import (
     ActivationCodeRequest, ActivationRequest, AdminDeviceCreateRequest, AdminOperatorCreateRequest,
-    CITY_OPTIONS,
+    CITY_OPTIONS, OrderAdjudicationRequest,
     AdminOperatorUpdateRequest, AdminTokenCreateRequest, CommandCreateRequest, CommandResult,
     CredentialRotationRequest, DeviceEvent, Heartbeat, PaymentCreateRequest, PublicOrderCreateRequest,
     RefundCreateRequest, Snapshot, TaskAck, DeviceLifecycleUpdateRequest,
@@ -45,6 +44,7 @@ from .services.payments import PaymentApplicationService
 from .services.public_orders import PublicOrderService
 from .services.admin_access import AdminAccessService
 from .services.production import ProductionService
+from .services.adjudications import OrderAdjudicationService
 from .services.background_worker import BackgroundWorkerService
 from .telemetry import TelemetryCache
 from .order_events import OrderEventBroker
@@ -640,6 +640,7 @@ device_identity_service = DeviceIdentityService(
     unit_of_work, settings=settings, provisioner_factory=emqx_provisioner, logger=logger
 )
 production_service = ProductionService(settings, payment_provider=payment_provider)
+order_adjudication_service = OrderAdjudicationService(unit_of_work, production_service)
 background_worker_service = BackgroundWorkerService(
     unit_of_work, settings, payment_provider=payment_provider, production=production_service,
     telemetry_cache=telemetry_cache,
@@ -835,6 +836,14 @@ def admin_orders(
 @app.get("/api/v1/admin/session", tags=["admin-access"])
 def admin_session(principal: AdminAuth) -> dict[str, Any]:
     return admin_access_service.session(principal)
+
+
+@app.post("/api/v1/admin/orders/{order_id}/adjudication", tags=["admin-operations"])
+def adjudicate_order(
+    order_id: uuid.UUID, payload: OrderAdjudicationRequest, principal: AdminAuth,
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=160)],
+) -> dict[str, Any]:
+    return order_adjudication_service.adjudicate(order_id, payload, idempotency_key, principal)
 
 
 @app.get("/api/v1/admin/dashboard", tags=["admin-operations"])

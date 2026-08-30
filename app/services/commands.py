@@ -61,11 +61,24 @@ class CommandService:
     def published(self, outbox_id: uuid.UUID, gateway_id: str) -> dict[str, Any]:
         with self.uow.transaction() as connection:
             repository = CommandRepository(connection)
-            outbox = repository.outbox(outbox_id)
-            if not outbox:
+            located = repository.find_outbox(outbox_id)
+            if not located:
                 raise ServiceError(404, "command outbox item not found")
+            # Publish confirmation locks command -> outbox: the unlocked locate
+            # above only finds the owning command row, which is locked first.
+            command = (
+                repository.by_db_id(located["command_id"])
+                if located["command_id"] is not None else None
+            )
+            outbox = repository.outbox(outbox_id)
             if outbox["status"] == "PUBLISHED":
                 return {"ok": True, "duplicate": True}
+            if outbox["status"] == "EXPIRED":
+                # Late confirmation after expiry terminalized the outbox:
+                # record the delivery evidence but never revive command/order.
+                if command is not None:
+                    repository.set_published_at(command["id"])
+                return {"ok": True, "duplicate": True, "late": True}
             if outbox["status"] != "PUBLISHING" or outbox["locked_by"] != gateway_id:
                 raise ServiceError(409, "command publish lease mismatch")
             repository.mark_published(outbox_id)
@@ -81,9 +94,9 @@ class CommandService:
     def retry(self, outbox_id: uuid.UUID, gateway_id: str, error: str) -> dict[str, Any]:
         with self.uow.transaction() as connection:
             repository = CommandRepository(connection)
-            row = repository.outbox(outbox_id)
-            if not row:
+            if not repository.find_outbox(outbox_id):
                 raise ServiceError(404, "command outbox item not found")
+            row = repository.outbox(outbox_id)
             if row["status"] == "PUBLISHED":
                 return {"ok": True, "duplicate": True}
             if row["locked_by"] != gateway_id:

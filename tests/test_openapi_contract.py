@@ -25,6 +25,7 @@ def test_openapi_exposes_identity_and_formal_command_contracts() -> None:
     assert "/api/v1/public/orders/{order_id}" in paths
     assert "/api/v1/admin/devices/{identifier}/inventory" in paths
     assert "/api/v1/admin/orders" in paths
+    assert "/api/v1/admin/orders/{order_id}/adjudication" in paths
     assert "/api/v1/orders/{order_id}/payments" in paths
     assert "/api/v1/payments/{payment_id}" in paths
     assert "/api/v1/payments/callback/alipay" in paths
@@ -51,6 +52,9 @@ def test_rotation_and_formal_command_require_idempotency_header() -> None:
     refund_parameters = schema["paths"]["/api/v1/payments/{payment_id}/refund"]["post"]["parameters"]
     assert any(item["name"] == "Idempotency-Key" for item in payment_parameters)
     assert any(item["name"] == "Idempotency-Key" for item in refund_parameters)
+    adjudication = schema["paths"]["/api/v1/admin/orders/{order_id}/adjudication"]["post"]
+    assert any(item["name"] == "Idempotency-Key" and item["required"] for item in adjudication["parameters"])
+    assert adjudication["security"] == [{"adminBearer": []}]
 
 
 def test_real_terminal_event_task_id_is_read_from_nested_payload() -> None:

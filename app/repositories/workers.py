@@ -25,9 +25,16 @@ class WorkerRepository:
         )
 
     def expired_commands(self) -> list[dict[str, Any]]:
+        """Read-only, bounded and deterministic expiry candidates.
+
+        Locking happens per command inside the expiry entry under the domain
+        lock order (order -> job -> command -> outbox); this scan must never
+        hold command locks itself.
+        """
         return self.connection.execute(
             """select * from terminal_command where status='CREATED'
-                 and expires_at is not null and expires_at <= now() for update skip locked"""
+                 and expires_at is not null and expires_at <= now()
+                order by id limit 200"""
         ).fetchall()
 
     def claim_business_event(self, worker_id: str) -> dict[str, Any] | None:
@@ -107,7 +114,7 @@ class WorkerRepository:
             (refund_id,),
         )
 
-    def watchdog_rows(self, ack_timeout: int, start_timeout: int, grace_seconds: int) -> list[dict[str, Any]]:
+    def watchdog_rows(self, ack_timeout: int, start_timeout: int, grace_seconds: int, wait_timeout: int = 900) -> list[dict[str, Any]]:
         return self.connection.execute(
             """select c.*,j.id as job_id,j.order_id,j.status as job_status,j.planned_duration_seconds,
                       j.started_at as job_started_at
@@ -115,10 +122,11 @@ class WorkerRepository:
                 where (c.status in ('DELIVERING','PUBLISHED') and coalesce(c.published_at,c.delivered_at) is not null
                        and coalesce(c.published_at,c.delivered_at) < now()-(%s::text||' seconds')::interval)
                    or (c.status='ACKED' and c.acked_at < now()-(%s::text||' seconds')::interval)
-                   or (c.status='EXECUTING' and j.started_at is not null
-                       and j.started_at + ((coalesce(j.planned_duration_seconds,300)+%s)::text||' seconds')::interval < now())
-                for update skip locked""",
-            (ack_timeout, start_timeout, grace_seconds),
+                   or (c.status='EXECUTING' and j.status='EXECUTING'
+                       and j.updated_at + ((coalesce(j.remaining_seconds,j.planned_duration_seconds,300)+%s)::text||' seconds')::interval < now())
+                   or (j.status in ('PAUSED','RETRY_WAIT') and j.updated_at < now()-(%s::text||' seconds')::interval)
+                order by j.order_id limit 200""",
+            (ack_timeout, start_timeout, grace_seconds, wait_timeout),
         ).fetchall()
 
     def mark_job_hold(self, job_id: Any) -> None:

@@ -14,19 +14,38 @@ class OrderRepository:
     def _lock_suffix(for_update: bool) -> str:
         return " for update" if for_update else ""
 
+    @staticmethod
+    def _order_lock_suffix(for_update: bool) -> str:
+        # Joined projections must never lock the terminal/device row as a side effect.
+        return " for update of o" if for_update else ""
+
     def find_with_terminal(self, order_id: uuid.UUID, *, for_update: bool = False) -> dict[str, Any] | None:
         return self.connection.execute(
             f"""select o.*,t.device_id,t.store_id from sales_order o
-                  join terminal t on t.id=o.terminal_id where o.id=%s{self._lock_suffix(for_update)}""",
+                  join terminal t on t.id=o.terminal_id where o.id=%s{self._order_lock_suffix(for_update)}""",
             (order_id,),
         ).fetchone()
+
+    def find(self, order_id: uuid.UUID, *, for_update: bool = False) -> dict[str, Any] | None:
+        return self.connection.execute(
+            f"select * from sales_order where id=%s{self._lock_suffix(for_update)}", (order_id,)
+        ).fetchone()
+
+    def set_paid_payment_id(self, order_id: uuid.UUID, payment_id: uuid.UUID) -> None:
+        """Record the order's primary payment exactly once, under the order lock."""
+        self.connection.execute(
+            """update sales_order set paid_payment_id=%s,updated_at=now()
+                 where id=%s and paid_payment_id is null""",
+            (payment_id, order_id),
+        )
 
     def public_view(self, order_id: uuid.UUID) -> dict[str, Any] | None:
         """Load the complete public status projection in one database statement."""
         return self.connection.execute(
             """select o.*,t.device_id,t.store_id,to_jsonb(j) as job_json,
                       (select to_jsonb(p) from payment p where p.order_id=o.id
-                        order by p.created_at desc limit 1) as payment_json,
+                        order by (o.paid_payment_id is not distinct from p.id) desc,
+                                 p.created_at desc limit 1) as payment_json,
                       (select coalesce(jsonb_agg(to_jsonb(history) order by history.revision),'[]'::jsonb)
                          from order_transition history where history.order_id=o.id) as transitions_json,
                       case when o.status='QUEUED' then
@@ -124,7 +143,7 @@ class OrderRepository:
         ).fetchone()
 
     def job_for_task(self, terminal_id: int, task_id: str, *, for_update: bool = False) -> dict[str, Any] | None:
-        suffix = " for update" if for_update else ""
+        suffix = " for update of j" if for_update else ""
         return self.connection.execute(
             """select j.*,o.status as order_status,o.id as sales_order_id
                  from production_job j join sales_order o on o.id=j.order_id
@@ -137,6 +156,14 @@ class OrderRepository:
             """update production_job set status='EXPIRED',revision=revision+1,
                  failure_json=%s,completed_at=now(),updated_at=now() where id=%s""",
             (Jsonb(failure), job_id),
+        )
+
+    def update_job_hold(self, job_id: uuid.UUID, *, hold_reason: str, failure: dict[str, Any] | None = None) -> None:
+        self.connection.execute(
+            """update production_job set status='HOLD',hold_reason=%s,
+                 manual_review_required=true,failure_json=coalesce(%s,failure_json),
+                 revision=revision+1,updated_at=now() where id=%s""",
+            (hold_reason, Jsonb(failure) if failure else None, job_id),
         )
 
     def update_job_acknowledged(self, job_id: uuid.UUID, *, accepted: bool, payload: dict[str, Any]) -> None:
@@ -176,22 +203,31 @@ class OrderRepository:
         self.connection.execute(
             """update production_job set status=%s,progress=%s,step_progress=%s,
                  planned_duration_seconds=coalesce(%s,planned_duration_seconds),
-                 step_durations=coalesce(%s::jsonb,step_durations),failure_json=coalesce(%s,failure_json),
+                 step_durations=coalesce(%s::jsonb,step_durations),
+                 failure_json=case when %s in ('EXECUTING','SUCCEEDED') then null else coalesce(%s,failure_json) end,
                  elapsed_seconds=coalesce(%s,elapsed_seconds),remaining_seconds=coalesce(%s,remaining_seconds),
                  last_device_revision=greatest(last_device_revision,coalesce(%s,last_device_revision)),
                  revision=revision+1,accepted_at=%s,started_at=%s,completed_at=%s,updated_at=now() where id=%s""",
-            (status, progress, step_progress, planned, Jsonb(steps) if steps is not None else None,
+            (status, progress, step_progress, planned, Jsonb(steps) if steps is not None else None, status,
              Jsonb(failure) if failure else None, elapsed, remaining, device_revision,
              accepted_at, started_at, completed_at, job_id),
         )
 
     def terminal_for_update(self, terminal_id: int) -> dict[str, Any] | None:
-        return self.connection.execute("select * from terminal where id=%s for update", (terminal_id,)).fetchone()
+        return self.connection.execute("select * from terminal where id=%s for no key update", (terminal_id,)).fetchone()
+
+    def clear_job_hold(self, job_id: uuid.UUID) -> None:
+        self.connection.execute(
+            "update production_job set hold_reason=null,manual_review_required=false where id=%s", (job_id,)
+        )
+
+    def lock_job(self, job_id: uuid.UUID) -> dict[str, Any] | None:
+        return self.connection.execute("select * from production_job where id=%s for update", (job_id,)).fetchone()
 
     def active_job_exists(self, terminal_id: int) -> bool:
         return self.connection.execute(
             """select 1 from production_job where terminal_id=%s
-                 and status in ('DISPATCHED','ACCEPTED','EXECUTING','HOLD','UNKNOWN') limit 1""",
+                 and status in ('DISPATCHED','ACCEPTED','EXECUTING','PAUSED','RETRY_WAIT','HOLD','UNKNOWN') limit 1""",
             (terminal_id,),
         ).fetchone() is not None
 
@@ -200,7 +236,7 @@ class OrderRepository:
             """select j.*,o.recipe_id,o.recipe_version,o.status as order_status
                  from production_job j join sales_order o on o.id=j.order_id
                 where j.terminal_id=%s and j.status='QUEUED' and o.status='QUEUED'
-                order by j.created_at for update skip locked limit 1""",
+                order by j.created_at,j.id limit 1""",
             (terminal_id,),
         ).fetchone()
 
@@ -260,7 +296,7 @@ class OrderRepository:
             (status, order_id),
         )
 
-    def update_failure(self, order_id: uuid.UUID, code: str, message: str) -> None:
+    def update_failure(self, order_id: uuid.UUID, code: str | None, message: str | None) -> None:
         self.connection.execute(
             "update sales_order set failure_code=%s,failure_message=%s,updated_at=now() where id=%s",
             (code, message, order_id),
@@ -281,7 +317,7 @@ class OrderRepository:
         params.append(limit)
         return self.connection.execute(
             f"""select o.*,t.device_id,t.store_id,j.task_id,j.status as production_status,
-                       j.progress,j.step_progress,j.last_device_revision,
+                       j.progress,j.step_progress,j.last_device_revision,j.revision as production_revision,
                        j.current_step_name,j.manual_review_required,j.hold_reason
                   from sales_order o join terminal t on t.id=o.terminal_id
                   left join production_job j on j.order_id=o.id

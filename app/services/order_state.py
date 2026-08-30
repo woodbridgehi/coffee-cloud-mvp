@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..order_logic import TERMINAL_ORDER_STATUSES
+from ..production_state import order_transition_allowed
 from ..protocol import utc_now
 from ..repositories import OrderRepository
 
@@ -19,9 +19,7 @@ def transition_order(
     """Persist one order transition inside the caller-owned transaction."""
     if order["status"] == target:
         return order
-    if order["status"] in TERMINAL_ORDER_STATUSES and not (
-        order["status"] == "FAILED" and target == "REFUNDED"
-    ):
+    if not order_transition_allowed(order["status"], target):
         return order
     repository = OrderRepository(connection)
     revision = repository.next_transition_revision(order["id"])

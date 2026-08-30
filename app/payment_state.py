@@ -1,3 +1,9 @@
+"""Pure payment/refund state decisions.
+
+This module must stay dependency-free: only state constants and decision
+functions. Persistence lives in PaymentRepository and the service helpers in
+``app.payment_transitions`` (re-exported by ``app.payment_service``).
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -17,6 +23,10 @@ PAYMENT_TRANSITIONS: dict[str, frozenset[str]] = {
     PAYMENT_CREATED: frozenset({PAYMENT_PENDING, PAYMENT_PAID, PAYMENT_CLOSED, PAYMENT_FAILED}),
     PAYMENT_PENDING: frozenset({PAYMENT_PAID, PAYMENT_CLOSED, PAYMENT_FAILED}),
     PAYMENT_PAID: frozenset({PAYMENT_REFUNDING, PAYMENT_PARTIALLY_REFUNDED, PAYMENT_REFUNDED}),
+    # REFUNDING may legally settle back to PAID only through the refund
+    # settlement path (every in-flight refund ended FAILED with nothing
+    # succeeded); replayed payment callbacks never take that road. Payments
+    # that already refunded money (partially or fully) never return to PAID.
     PAYMENT_REFUNDING: frozenset({PAYMENT_PAID, PAYMENT_PARTIALLY_REFUNDED, PAYMENT_REFUNDED, PAYMENT_FAILED}),
     PAYMENT_PARTIALLY_REFUNDED: frozenset({PAYMENT_REFUNDING, PAYMENT_REFUNDED}),
 }
