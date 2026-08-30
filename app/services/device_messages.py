@@ -9,6 +9,7 @@ from ..command_state import ACKED, CREATED, DELIVERING, EXECUTING, EXPIRED, PUBL
 from ..db import UnitOfWork
 from ..protocol import CommandResult, DeviceEvent, Heartbeat, canonical_digest, utc_now
 from ..repositories import DeviceMessageRepository
+from ..telemetry import TelemetryCache
 from .errors import ServiceError
 from .presenters import iso
 
@@ -25,6 +26,7 @@ class DeviceMessageService:
         reconcile_order_event: Callable[[Any, int, dict[str, Any], str], dict[str, Any] | None],
         reconcile_order_ack: Callable[[Any, int, str, dict[str, Any]], dict[str, Any] | None],
         order_url: Callable[[str], str],
+        telemetry_cache: TelemetryCache | None = None,
     ) -> None:
         self.uow = uow
         self.request_dispatch = request_dispatch
@@ -34,6 +36,7 @@ class DeviceMessageService:
         self.reconcile_order_event = reconcile_order_event
         self.reconcile_order_ack = reconcile_order_ack
         self.order_url = order_url
+        self.telemetry_cache = telemetry_cache
 
     def heartbeat(
         self,
@@ -144,6 +147,13 @@ class DeviceMessageService:
         if payload.deviceId != device_id:
             raise ServiceError(400, "payload deviceId mismatch")
         body = payload.model_dump(mode="json")
+        if payload.type == "task.progress":
+            try:
+                cached = self.telemetry_cache and self.telemetry_cache.progress(device_id, identity["id"], body)
+            except ValueError as exc:
+                raise ServiceError(422, str(exc)) from exc
+            return {"ok": True, "telemetryMode": "redis-progress" if cached else "progress-unavailable",
+                    "dropped": not bool(cached)}
         digest = canonical_digest(body)
         with self.uow.transaction() as connection:
             messages = DeviceMessageRepository(connection)

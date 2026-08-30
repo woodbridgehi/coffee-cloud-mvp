@@ -30,7 +30,7 @@ class RecordingConnection:
         return Cursor()
 
 
-def test_progress_batch_parameters_match_update_placeholders() -> None:
+def test_legacy_progress_payload_is_not_flushed_to_production_job() -> None:
     connection = RecordingConnection()
     TelemetryRepository(connection).apply_snapshots([(
         "coffee-bot-001",
@@ -46,8 +46,8 @@ def test_progress_batch_parameters_match_update_placeholders() -> None:
         },
     )])
 
-    _, progress_params = connection.calls[1]
-    assert progress_params[7:] == (7, "task-1", 12, 12)
+    assert len(connection.calls) == 1  # Terminal projection only, never production_job.
+    assert "production_job" not in str(connection.calls[0][0])
 
 
 def test_dispatch_claim_recovers_expired_processing_lease() -> None:

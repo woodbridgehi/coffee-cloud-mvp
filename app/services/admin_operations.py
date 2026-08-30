@@ -6,6 +6,8 @@ from typing import Any, Callable
 from ..db import UnitOfWork
 from ..protocol import AdminDeviceCreateRequest, utc_now
 from ..repositories import OrderRepository, TerminalRepository
+from ..telemetry import TelemetryCache
+from ..live_progress import merge_progress
 from .errors import ServiceError
 from .presenters import iso
 
@@ -14,10 +16,12 @@ class AdminOperationsService:
     def __init__(
         self, uow: UnitOfWork, *, offline_threshold_seconds: int,
         refresh_offline_status: Callable[[], None],
+        telemetry_cache: TelemetryCache | None = None,
     ) -> None:
         self.uow = uow
         self.offline_threshold_seconds = offline_threshold_seconds
         self.refresh_offline_status = refresh_offline_status
+        self.telemetry_cache = telemetry_cache
 
     def device_payload(self, row: dict[str, Any]) -> dict[str, Any]:
         cutoff = utc_now() - timedelta(seconds=self.offline_threshold_seconds)
@@ -128,6 +132,18 @@ class AdminOperationsService:
             rows = OrderRepository(connection).list_admin(
                 device_id=device_id, order_status=order_status, limit=limit
             )
+        if self.telemetry_cache:
+            active = [row for row in rows if row["status"] == "MAKING" and row["production_status"] == "EXECUTING"]
+            latest = self.telemetry_cache.latest_progress_many([(row["device_id"], row["task_id"]) for row in active])
+            for row in active:
+                snapshot = {"deviceId": row["device_id"], "status": row["status"], "production": {
+                    "taskId": row["task_id"], "status": row["production_status"],
+                    "overallProgress": row["progress"], "stepProgress": row["step_progress"],
+                    "progress": row["progress"], "currentStepName": row["current_step_name"],
+                    "deviceRevision": row["last_device_revision"],
+                }}
+                job = merge_progress(snapshot, latest.get((row["device_id"], row["task_id"])))['production']
+                row["progress"], row["current_step_name"] = job["progress"], job["currentStepName"]
         return {
             "orders": [
                 {

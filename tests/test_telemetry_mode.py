@@ -153,6 +153,32 @@ def test_progress_event_is_coalesced_in_redis_before_event_inbox(monkeypatch) ->
     assert result["telemetryMode"] == "redis-progress"
 
 
+def test_progress_does_not_enter_durable_inbox_when_redis_fails(monkeypatch) -> None:
+    FakeMqttRepository.calls = []
+    monkeypatch.setattr("app.services.mqtt_gateway.MqttGatewayRepository", FakeMqttRepository)
+
+    class UnavailableCache:
+        def terminal_id(self, _device_id):
+            return 7
+
+        def progress(self, *_args):
+            return False
+
+    def forbidden_event(*_args, **_kwargs):
+        raise AssertionError("Redis outage must not re-enable SQL progress history")
+
+    result = service(lambda *_: None, telemetry_cache=UnavailableCache(), event=forbidden_event).ingest({
+        "topic": "v1/devices/coffee-bot-001/up", "envelope": {
+            "deviceId": "coffee-bot-001", "type": "event", "payload": {
+                "deviceId": "coffee-bot-001", "type": "task.progress", "eventId": "p1",
+                "payload": {"taskId": "task-1", "taskRevision": 2, "overallProgress": 0.5},
+            },
+        },
+    })
+    assert result["dropped"] is True
+    assert FakeMqttRepository.calls == []
+
+
 def test_step_lifecycle_event_bypasses_lossy_telemetry_cache(monkeypatch) -> None:
     FakeMqttRepository.calls = []
     monkeypatch.setattr("app.services.mqtt_gateway.MqttGatewayRepository", FakeMqttRepository)

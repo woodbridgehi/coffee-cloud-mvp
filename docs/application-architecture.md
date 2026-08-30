@@ -35,7 +35,9 @@ Service 使用 `UnitOfWork.transaction()` 开启事务，并在事务内创建�
 - `AdminAccessService` → `AdminAccessRepository`，负责运营员、角色权限、可撤销令牌与审计日志
 - `ProductionService` → `CommandRepository`、`OrderRepository`、`PaymentRepository`，负责制作任务、设备事件、订单状态和自动退款意图
 - `BackgroundWorkerService` → `WorkerRepository`、`ProductionService`、`OrderRepository`、`PaymentRepository`，负责离线扫描、Business Outbox、支付对账、退款重试、历史清理和 watchdog
-- `OrderEventBroker` → PostgreSQL `LISTEN/NOTIFY`，在事务提交后将订单变化推送到对应 SSE 连接
+- `OrderEventBroker` → PostgreSQL `LISTEN/NOTIFY` + Redis Pub/Sub 双监听，分别分发订单事实变更和瞬时进度
+- `order_stream` → 事务通知重新查询 SQL；进度通知只读 Redis；首次连接订阅后补读两侧快照
+- `live_progress` → 设备/任务匹配、revision 比较与终态优先；Lua 原子更新快照并发布通知
 
 外部支付和 EMQX 管理 API 由 Service 调用。数据库事务不能跨越耗时网络调用：先保存待处理状态并提交，调用外部系统，再在新事务中保存结果。这样可避免长事务和数据库行锁长期占用。
 
@@ -79,8 +81,8 @@ OfflineMonitor / Telemetry / Domain / Payment（独立线程调度）
 - Business Outbox 由 `BackgroundWorkerService` 一次领取一批事件，并使用 savepoint 隔离单条失败，避免一个坏事件回滚整批事件。
 - MQTT Gateway 按 `deviceId` 将上行消息分片到多个 Worker；同一设备保持在同一分片中，以保留消息顺序，不同设备可以并发处理。
 - MQTT Gateway 的内部 API 使用共享 Keep-Alive HTTP 客户端，命令发布独立于上行消息处理线程。
-- 心跳、presence、state 和 `task.progress` 默认使用 `latest` 模式；Redis pipeline 合并一个 Gateway 批次，Worker 通过集合式 SQL 刷新 PostgreSQL。`step.started/step.completed` 等生命周期事件始终进入持久 Inbox。
-- 顾客订单状态通过 PostgreSQL 事务通知驱动 SSE，不按客户端数量固定轮询数据库。
+- 心跳、presence、state 默认使用 `latest` 模式，Worker 通过集合 SQL 刷新设备快照。`task.progress` 使用独立 Redis 键与 Pub/Sub，不入 dirty 队列、不刷数据库；旧 hash 中的 progressPayload 也不再刷库。
+- `step.started/step.completed`、完成、失败等事实事件仍进入持久 Inbox 并更新 PostgreSQL。SSE 通过双通道通知更新，进度通知不查询数据库。管理订单列表通过 Redis pipeline 合并实时进度。
 - 扩容前应观察 `/metrics` 中的连接池、Redis dirty backlog、SSE 连接数和 Worker 健康文件，并执行容量与故障验收计划。
 
 ## 新功能开发规则

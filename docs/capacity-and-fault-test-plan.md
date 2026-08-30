@@ -6,6 +6,7 @@
 - 活跃设备每 5 秒最多一条 `task.progress`。
 - 生命周期、命令结果、失败与库存事实事件不合并。
 - 顾客进度页面使用 SSE，不进行固定周期订单轮询。
+- `task.progress` 只写 Redis 最新任务键及 Pub/Sub；订阅端处理进度不查 PostgreSQL。任务/步骤生命周期仍落库。
 
 ## 分档步骤
 
@@ -23,6 +24,8 @@
 - 关键事件端到端 P95 小于 500ms，P99 小于 1s。
 - HTTP API P95 小于 300ms，错误率低于 0.1%。
 - SSE 更新延迟 P95 小于 500ms，断线后 5 秒内恢复。
+- 纯进度压测期间 `production_job` revision/updated_at、事件历史行数和 SQL 读取量不应随进度增长。
+- Redis Pub/Sub 连接被断开后自动重订阅并补读快照；晚到进度不得改变已完成订单。
 - MQTT QoS 1 事实事件零丢失、允许幂等重复。
 - PostgreSQL 活跃连接低于上限 60%，CPU 持续低于 70%。
 - Redis dirty backlog 稳态低于 500，故障恢复后 30 秒内清空。

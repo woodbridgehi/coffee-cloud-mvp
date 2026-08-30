@@ -90,6 +90,9 @@ class ProductionService:
     def reconcile_order_event(
         self, connection: Any, terminal_id: int, body: dict[str, Any], event_type: str
     ) -> dict[str, Any] | None:
+        if event_type == "task.progress":
+            # Also blocks old inbox replays from restoring the former SQL hot path.
+            return {"status": "EPHEMERAL_PROGRESS"}
         task_id = self.event_task_id(body)
         if not task_id:
             return None
@@ -101,7 +104,7 @@ class ProductionService:
         device_revision = event_payload.get("taskRevision")
         if isinstance(device_revision, int) and device_revision < int(row.get("last_device_revision") or 0):
             return {"orderId": str(row["sales_order_id"]), "status": "STALE", "duplicate": True}
-        if event_type in {"task.progress", "step.started", "step.completed"}:
+        if event_type in {"step.started", "step.completed"}:
             if row["status"] in {"SUCCEEDED", "FAILED", "REJECTED", "CANCELLED", "EXPIRED", "HOLD"}:
                 return {"orderId": str(row["sales_order_id"]), "status": "STALE_TERMINAL", "duplicate": True}
             progress, step_progress = device_progress(

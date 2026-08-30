@@ -11,6 +11,8 @@ from typing import Any, Iterator
 from redis import Redis
 from redis.exceptions import RedisError
 
+from .live_progress import PROGRESS_CHANNEL, PROGRESS_TTL_SECONDS, STORE_PROGRESS_LUA, progress_key, validate_progress
+
 
 class TelemetryCache:
     """Best-effort hot state cache; PostgreSQL remains the source of truth for orders."""
@@ -33,12 +35,11 @@ class TelemetryCache:
             return
         try:
             client = Redis.from_url(self.url, decode_responses=True, socket_connect_timeout=0.5, socket_timeout=0.5)
-            client.ping()
             self.client = client
+            client.ping()
             self.logger.info("telemetry Redis hot-state cache connected")
         except RedisError as exc:
-            self.client = None
-            self.logger.warning("telemetry Redis unavailable; using PostgreSQL fallback: %s", exc)
+            self.logger.warning("telemetry Redis unavailable; client will retry (progress never falls back to SQL): %s", exc)
 
     def close(self) -> None:
         if self.client:
@@ -104,6 +105,7 @@ class TelemetryCache:
             state_key = self._state_key(device_id)
             pipe = self.client.pipeline(transaction=False)
             pipe.hset(state_key, mapping=values)
+            pipe.hdel(state_key, "progressPayload")
             pipe.hincrby(state_key, "_revision", 1)
             result = pipe.execute()
             revision = int(result[-1])
@@ -121,24 +123,31 @@ class TelemetryCache:
             return
         buffer: dict[str, dict[str, str]] = {}
         self._local.write_buffer = buffer
+        self._local.progress_buffer = {}
         try:
             yield
-            if not buffer:
+            progress_buffer = self._local.progress_buffer
+            if not buffer and not progress_buffer:
                 return
             pipe = self.client.pipeline(transaction=False)
             dirty_scores: dict[str, int] = {}
             score = time.time_ns()
             for offset, (device_id, values) in enumerate(buffer.items()):
                 pipe.hset(self._state_key(device_id), mapping=values)
+                pipe.hdel(self._state_key(device_id), "progressPayload")
                 pipe.hincrby(self._state_key(device_id), "_revision", 1)
                 dirty_scores[device_id] = score + offset
-            pipe.zadd(self._dirty_key(), dirty_scores)
+            if dirty_scores:
+                pipe.zadd(self._dirty_key(), dirty_scores)
+            for key, event in progress_buffer.items():
+                self._queue_progress(pipe, key, event)
             pipe.execute()
         except RedisError as exc:
             self.logger.warning("telemetry batch cache write failed: %s", exc)
             raise
         finally:
             del self._local.write_buffer
+            del self._local.progress_buffer
 
     def heartbeat(self, device_id: str, terminal_id: int, payload: dict[str, Any]) -> bool:
         timestamp = self._now()
@@ -167,11 +176,52 @@ class TelemetryCache:
         })
 
     def progress(self, device_id: str, terminal_id: int, event: dict[str, Any]) -> bool:
-        """Coalesce lossy production progress while preserving terminal lifecycle events."""
-        return self._write(device_id, {
-            "terminalId": str(terminal_id), "lastSeenAt": self._now(),
-            "progressPayload": json.dumps(event, separators=(",", ":")),
-        })
+        """Store progress independently: no device dirty mark and no SQL flush."""
+        payload = validate_progress(event)
+        if not self.client:
+            return False
+        key = progress_key(device_id, payload["taskId"])
+        buffer = getattr(self._local, "progress_buffer", None)
+        if buffer is not None:
+            previous = buffer.get(key)
+            if previous is None or previous["payload"]["taskRevision"] < payload["taskRevision"]:
+                buffer[key] = event
+            return True
+        try:
+            pipe = self.client.pipeline(transaction=False)
+            self._queue_progress(pipe, key, event)
+            pipe.execute()
+            return True
+        except RedisError as exc:
+            self.logger.warning("ephemeral progress unavailable (no SQL fallback): %s", exc)
+            return False
+
+    @staticmethod
+    def _queue_progress(pipe: Any, key: str, event: dict[str, Any]) -> None:
+        pipe.eval(STORE_PROGRESS_LUA, 1, key, event["payload"]["taskRevision"],
+                  json.dumps(event, separators=(",", ":")), PROGRESS_TTL_SECONDS, PROGRESS_CHANNEL)
+
+    def latest_progress(self, device_id: str, task_id: str) -> dict[str, Any] | None:
+        if not self.client:
+            return None
+        try:
+            raw = self.client.hget(progress_key(device_id, task_id), "event")
+            return json.loads(raw) if raw else None
+        except (RedisError, ValueError) as exc:
+            self.logger.warning("progress snapshot unavailable: %s", exc)
+            return None
+
+    def latest_progress_many(self, tasks: list[tuple[str, str]]) -> dict[tuple[str, str], dict[str, Any]]:
+        if not self.client or not tasks:
+            return {}
+        try:
+            pipe = self.client.pipeline(transaction=False)
+            for device_id, task_id in tasks:
+                pipe.hget(progress_key(device_id, task_id), "event")
+            return {task: json.loads(raw) for task, raw in zip(tasks, pipe.execute()) if raw}
+        except (RedisError, ValueError) as exc:
+            self.logger.warning("progress batch read unavailable: %s", exc)
+            return {}
 
     def presence(self, device_id: str, terminal_id: int, online: bool) -> tuple[bool, bool]:
         if not self.client:

@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 import json
 import io
-import asyncio
 import threading
 import time
 import uuid
@@ -49,6 +48,7 @@ from .services.production import ProductionService
 from .services.background_worker import BackgroundWorkerService
 from .telemetry import TelemetryCache
 from .order_events import OrderEventBroker
+from .order_stream import order_stream
 
 
 SERVICE_VERSION = "0.4.0"
@@ -66,7 +66,7 @@ telemetry_cache = TelemetryCache(
     online_ttl_seconds=settings.telemetry_online_ttl_seconds,
     logger=logger,
 )
-order_event_broker = OrderEventBroker(settings.database_url, logger=logger)
+order_event_broker = OrderEventBroker(settings.database_url, redis_url=settings.telemetry_redis_url, logger=logger)
 
 
 def payment_provider(name: str) -> PaymentProvider:
@@ -370,6 +370,8 @@ def metrics() -> str:
     lines = [
         "# TYPE coffee_order_sse_subscribers gauge",
         f"coffee_order_sse_subscribers {order_event_broker.subscriber_count()}",
+        f"coffee_sse_postgres_connected {int(order_event_broker.postgres_connected.is_set())}",
+        f"coffee_sse_redis_connected {int(order_event_broker.redis_connected.is_set())}",
         "# TYPE coffee_telemetry_dirty_devices gauge",
         f"coffee_telemetry_dirty_devices {telemetry_cache.dirty_count()}",
         "# TYPE coffee_telemetry_redis_enabled gauge",
@@ -646,6 +648,7 @@ public_order_service = PublicOrderService(
     unit_of_work, settings,
     request_dispatch=production_service.request_dispatch,
     payment_provider=payment_provider,
+    telemetry_cache=telemetry_cache,
 )
 payment_application_service = PaymentApplicationService(
     unit_of_work, settings,
@@ -656,6 +659,7 @@ admin_operations_service = AdminOperationsService(
     unit_of_work,
     offline_threshold_seconds=settings.offline_threshold_seconds,
     refresh_offline_status=offline_monitor.scan_once,
+    telemetry_cache=telemetry_cache,
 )
 device_message_service = DeviceMessageService(
     unit_of_work,
@@ -666,6 +670,7 @@ device_message_service = DeviceMessageService(
     reconcile_order_event=production_service.reconcile_order_event,
     reconcile_order_ack=production_service.reconcile_order_ack,
     order_url=order_url,
+    telemetry_cache=telemetry_cache,
 )
 command_service = CommandService(
     unit_of_work,
@@ -771,31 +776,10 @@ async def stream_public_order(
 ) -> StreamingResponse:
     # Authenticate before response headers are sent. The generator re-reads
     # after subscribing so an update cannot fall into a query/subscribe gap.
-    await run_in_threadpool(public_order_service.get, order_id, access_token)
-
-    async def events():
-        queue = order_event_broker.subscribe(str(order_id), asyncio.get_running_loop())
-        try:
-            initial = await run_in_threadpool(public_order_service.get, order_id, access_token)
-            yield f"event: order\ndata: {json.dumps(initial, default=str, separators=(',', ':'))}\n\n"
-            while True:
-                try:
-                    await asyncio.wait_for(queue.get(), timeout=15)
-                except TimeoutError:
-                    yield ": keepalive\n\n"
-                    continue
-                await asyncio.sleep(0.05)
-                while not queue.empty():
-                    queue.get_nowait()
-                payload = await run_in_threadpool(public_order_service.get, order_id, access_token)
-                yield f"event: order\ndata: {json.dumps(payload, default=str, separators=(',', ':'))}\n\n"
-                if payload["status"] in {"READY", "FAILED", "CANCELLED", "EXPIRED", "REFUNDED"}:
-                    return
-        finally:
-            order_event_broker.unsubscribe(str(order_id), queue)
+    await run_in_threadpool(public_order_service.get, order_id, access_token, include_progress=False)
 
     return StreamingResponse(
-        events(), media_type="text/event-stream",
+        order_stream(order_event_broker, public_order_service, order_id, access_token), media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
     )
 

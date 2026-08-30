@@ -18,7 +18,7 @@ HTTP 应用代码采用 `Route → Application Service → Repository → Postgr
   → Command Outbox 经多设备 MQTT Gateway 发布 MAKE_DRINK
   → 终端整杯预占、按步骤扣减共享物料
   → 终端可靠上报生命周期事件，并按变化/时间阈值上报制作进度
-  → PostgreSQL 事务通知驱动 SSE，手机订单页实时显示状态
+  → PostgreSQL 事务通知 + Redis 进度通知双通道驱动 SSE，手机订单页实时显示状态
   → 运营台查看订单、设备和逐项物料余量
 ```
 
@@ -165,7 +165,7 @@ QUEUED → DISPATCHED → ACCEPTED → EXECUTING → SUCCEEDED
 ```
 
 - `ACCEPTED`：终端已校验配方版本并成功预占整杯物料。
-- `MAKING`：收到 `task.started`；设备以整杯进度变化至少 5% 或最长 5 秒为准上报 `task.progress`，Gateway 立即写 Redis 最新快照、Worker 批量刷新 `production_job`。手机端不自行推导步骤或重新计算随机时长。
+- `MAKING`：收到 `task.started`；设备以整杯进度变化至少 5% 或最长 5 秒为准上报 `task.progress`。Gateway 将进度仅写 Redis，并通过 Pub/Sub 通知 SSE；不会刷入 `production_job`。手机端不自行推导步骤或重新计算随机时长。
 - `READY`：只由终端 `task.succeeded` 推进。
 - 客户仅能取消尚未派发的 `QUEUED` 订单。派发后不允许用网页强行取消真实动作。
 
@@ -248,11 +248,11 @@ curl http://127.0.0.1:8788/health
 
 ## 9. MQTT 5.0 接入网关
 
-`coffee-mqtt-gateway` 是无单设备配置的独立进程，不承载扫码 Web/API，也不复制订单状态机。一个实例订阅所有设备上行 Topic：心跳、presence、state 及 `task.progress` 默认先写入项目专用 Redis 热状态层，并按批量合并刷新 PostgreSQL 的最新快照；网关会将这类可覆盖遥测按最多 100 条或 100ms 聚成一个 HTTP 内部请求。订单、任务/步骤生命周期、命令结果和订单事件绕过微批，立即进入持久 `mqtt_inbox` 与领域状态机。设备端对普通进度采用“5% 或 5 秒”节流；设置 `TELEMETRY_HISTORY_MODE=audit` 可额外保留遥测历史。下行从 `command_outbox` 领取带租约的命令，Broker PUBACK 后再标记 `PUBLISHED`。QoS 1 上行启用 manual ACK，进程崩溃时由持久 MQTT session 重投。
+`coffee-mqtt-gateway` 是无单设备配置的独立进程，不承载扫码 Web/API，也不复制订单状态机。心跳、presence、state 经 Redis 合并后批量刷新 PostgreSQL 的设备快照；`task.progress` 使用独立 Redis 任务键，只保存最新值并原子发布 Pub/Sub 通知，不标记 dirty、不写 SQL。网关仍按最多 100 条或 100ms 聚合可覆盖遥测请求。订单、任务/步骤生命周期、命令结果绕过微批，立即进入持久 Inbox 与领域状态机。设备端按“5% 或 5 秒”上报进度，必须携带非负整数 `taskRevision`。`TELEMETRY_HISTORY_MODE=audit` 保留心跳/state 等历史，但不改变 `task.progress` 的 Redis-only 策略。下行仍使用命令租约和 Broker PUBACK；QoS 1 上行启用 manual ACK。
 
-`coffee-cloud-mvp` 的两个 Uvicorn worker 只处理 API 与订单 SSE；PostgreSQL 在订单事务提交后通过 `NOTIFY` 唤醒对应 SSE 连接，顾客制作页面不再固定轮询。`coffee-domain-worker` 是唯一的后台进程，内部将 Redis 遥测落库、领域派单、支付退款拆成三个互不阻塞的工作循环，并另行执行离线扫描和历史清理。
+`coffee-cloud-mvp` 的每个 Uvicorn worker 各维护一个 PostgreSQL LISTEN 连接和一个 Redis Pub/Sub 连接。订单/支付/生命周期通知刷新 SQL 快照；进度通知只读 Redis，不查询 SQL。浏览器初次连接/重连时先鉴权，再订阅并合并 PostgreSQL 状态与 Redis 进度。`coffee-domain-worker` 只刷设备状态，不再刷制作进度；领域派单、支付退款仍相互隔离。管理端订单列表也以单个 Redis pipeline 叠加最新进度。
 
-`coffee-telemetry-redis` 只绑定 VPS 回环地址的 6380 端口，保存在线 TTL、设备最新状态和最新制作进度；Redis 不参与订单、支付或命令事实判定，缓存不可用时 MQTT 接入自动回退为 PostgreSQL 更新。
+`coffee-telemetry-redis` 只绑定 VPS 回环地址 6380。进度按“设备 + 任务”隔离，TTL 为 1 小时，版本递增才接受；订单终态/暂停状态不会被迟到进度覆盖。Redis 不参与订单、支付或命令事实判定。Redis 不可用时瞬时进度丢弃并等待下一次上报，绝不回退高频 SQL；设备状态仍保留 SQL 降级。Redis/PG 监听重连会补读当前快照，详见 [双通道 SSE](docs/dual-channel-sse.md)。
 
 数据库 migration 由一次性 `coffee-db-migrate` 工具执行，API 和 Worker 不在并发启动时修改 schema：
 

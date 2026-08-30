@@ -11,6 +11,8 @@ from ..protocol import PublicOrderCreateRequest, canonical_digest, utc_now
 from ..repositories import OrderRepository, PaymentRepository, TerminalRepository
 from ..security import derive_order_access_token, hash_token, tokens_equal
 from ..settings import Settings
+from ..telemetry import TelemetryCache
+from ..live_progress import merge_progress
 from .errors import ServiceError
 from .order_state import transition_order
 from .presenters import iso, payment_payload
@@ -27,11 +29,13 @@ class PublicOrderService:
         *,
         request_dispatch: Callable[[Any, int, str], None],
         payment_provider: Callable[[str], Any],
+        telemetry_cache: TelemetryCache | None = None,
     ) -> None:
         self.uow = uow
         self.settings = settings
         self.request_dispatch = request_dispatch
         self.payment_provider = payment_provider
+        self.telemetry_cache = telemetry_cache
 
     @staticmethod
     def _terminal(repository: TerminalRepository, identifier: str, *, for_update: bool = False) -> dict[str, Any]:
@@ -68,6 +72,7 @@ class PublicOrderService:
                 if order["failure_code"] else None,
             "production": {
                 "taskId": job["task_id"], "status": job["status"],
+                "deviceRevision": int(job.get("last_device_revision") or 0),
                 "progress": job["progress"], "overallProgress": job["progress"],
                 "stepProgress": job["step_progress"], "currentStepId": job["current_step_id"],
                 "currentStepName": job["current_step_name"],
@@ -164,7 +169,13 @@ class PublicOrderService:
             response = self._payload(orders, payments, created)
         return {**response, "accessToken": access_token}
 
-    def get(self, order_id: uuid.UUID, access_token: str | None) -> dict[str, Any]:
+    def with_live_progress(self, snapshot: dict[str, Any]) -> dict[str, Any]:
+        job = snapshot.get("production")
+        if not self.telemetry_cache or not job or snapshot.get("status") != "MAKING" or job.get("status") != "EXECUTING":
+            return snapshot
+        return merge_progress(snapshot, self.telemetry_cache.latest_progress(snapshot["deviceId"], job["taskId"]))
+
+    def get(self, order_id: uuid.UUID, access_token: str | None, *, include_progress: bool = True) -> dict[str, Any]:
         with self.uow.transaction() as connection:
             orders = OrderRepository(connection)
             if not access_token:
@@ -172,7 +183,9 @@ class PublicOrderService:
             order = orders.public_view(order_id)
             if order is None or not tokens_equal(order["access_token_hash"].strip(), hash_token(access_token)):
                 raise ServiceError(404, "order not found")
-            return self._payload(orders, PaymentRepository(connection), order)
+            snapshot = self._payload(orders, PaymentRepository(connection), order)
+        # Release the SQL connection before any Redis I/O.
+        return self.with_live_progress(snapshot) if include_progress else snapshot
 
     def cancel(self, order_id: uuid.UUID, access_token: str | None) -> dict[str, Any]:
         payment_to_close: dict[str, Any] | None = None

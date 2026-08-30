@@ -72,12 +72,17 @@ class MqttGatewayService:
         lossy_progress_event = message_type == "event" and str(payload.get("type") or "") in {
             "task.progress",
         }
-        if lossy_progress_event and self.telemetry_cache:
+        if lossy_progress_event:
             terminal = self._terminal_for_telemetry(device_id)
             if not terminal:
                 raise ServiceError(404, "device not registered")
-            if self.telemetry_cache.progress(device_id, terminal["id"], payload):
+            try:
+                cached = self.telemetry_cache and self.telemetry_cache.progress(device_id, terminal["id"], payload)
+            except ValueError as exc:
+                raise ServiceError(422, str(exc)) from exc
+            if cached:
                 return {"ok": True, "duplicate": False, "telemetryMode": "redis-progress"}
+            return {"ok": True, "telemetryMode": "progress-unavailable", "dropped": True}
         if is_telemetry and not self.retain_telemetry_history:
             terminal = self._terminal_for_telemetry(device_id)
             if not terminal:
