@@ -8,7 +8,7 @@ import ssl
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlencode
 
 import httpx
@@ -39,6 +39,21 @@ TELEMETRY_BATCH_WAIT_SECONDS = max(0.01, min(1.0, float(os.getenv("MQTT_TELEMETR
 HEALTH_FILE = Path(os.getenv("GATEWAY_HEALTH_FILE", "/tmp/mqtt-gateway.json"))
 SUPERVISOR_INTERVAL_SECONDS = float(os.getenv("MQTT_SUPERVISOR_INTERVAL_SECONDS", "0.5"))
 RECONNECT_BACKOFF_MAX_SECONDS = 60.0
+SUBSCRIBE_TIMEOUT_SECONDS = max(1.0, min(60.0, float(os.getenv("MQTT_SUBSCRIBE_TIMEOUT_SECONDS", "10"))))
+
+
+class SessionMqttClient(mqtt.Client):
+    """Fence before Paho clears packets/changes sockets, including auto-retry.
+
+    on_pre_connect alone is too late: Paho has already cleared _out_packet.
+    This hook does not hold an application lock over blocking socket I/O.
+    """
+    before_reconnect: Callable[[], None] | None = None
+
+    def reconnect(self) -> mqtt.MQTTErrorCode:
+        if self.before_reconnect is not None:
+            self.before_reconnect()
+        return super().reconnect()
 
 
 class GatewayApiClient:
@@ -107,11 +122,14 @@ class Gateway:
         self.supervisor_thread: threading.Thread | None = None
         self._generation = 0
         self._connection_valid = False
-        self._generation_lock = threading.Lock()
+        # Paho ACK may synchronously call on_disconnect on a write error when
+        # its loop is absent. Re-entry must be allowed; no join under this lock.
+        self._generation_lock = threading.RLock()
         self.backpressure_disconnects = 0
         self._connected = threading.Event()
         self._subscribed = threading.Event()
         self._pending_subscribe_mids: set[int] = set()
+        self._subscribe_deadline = 0.0
         self._shutdown_lock = threading.Lock()
         self._shutdown_done = False
         self._reconnect_lock = threading.Lock()
@@ -122,7 +140,7 @@ class Gateway:
     # Client construction / wiring
     # ------------------------------------------------------------------
     def _default_client(self) -> mqtt.Client:
-        client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=GATEWAY_ID, protocol=mqtt.MQTTv5)
+        client = SessionMqttClient(mqtt.CallbackAPIVersion.VERSION2, client_id=GATEWAY_ID, protocol=mqtt.MQTTv5)
         client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
         client.tls_set(cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLS_CLIENT)
         return client
@@ -134,6 +152,9 @@ class Gateway:
         client.on_disconnect = self.on_disconnect
         client.on_message = self.on_message
         client.on_subscribe = self._on_subscribe
+        client.on_pre_connect = self._on_pre_connect
+        if isinstance(client, SessionMqttClient):
+            client.before_reconnect = self._invalidate_connection
 
     # ------------------------------------------------------------------
     # Connection state
@@ -151,6 +172,10 @@ class Gateway:
         self._generation = value
 
     def on_connect(self, client: mqtt.Client, _userdata: object, flags: Any, reason: Any, _properties: Any) -> None:
+        self._invalidate_connection()
+        if self.stop_event.is_set():
+            self._disconnect()
+            return
         if reason.is_failure:
             log.error("MQTT CONNECT rejected for id=%s: %s", GATEWAY_ID, reason)
             return
@@ -159,6 +184,12 @@ class Gateway:
             log.warning(
                 "MQTT session not present for id=%s; broker may have dropped queued QoS1 uplinks", GATEWAY_ID
             )
+        with self._generation_lock:
+            self._generation += 1
+            # ACKs for resumed-session traffic are allowed before SUBACK;
+            # publication/readiness is separately gated on all subscriptions.
+            self._connection_valid = True
+            self._subscribe_deadline = time.monotonic() + SUBSCRIBE_TIMEOUT_SECONDS
         for topic, qos in (("v1/devices/+/up", 1), ("v1/devices/+/presence", 1), ("v1/devices/+/state", 1)):
             result, mid = client.subscribe(topic, qos=qos)
             if result != mqtt.MQTT_ERR_SUCCESS:
@@ -166,32 +197,55 @@ class Gateway:
                     "subscribe failed for %s: %s; dropping connection for supervisor recovery",
                     topic, mqtt.error_string(result),
                 )
-                client.disconnect()
+                self._disconnect()
                 return
-            self._pending_subscribe_mids.add(mid)
-        with self._generation_lock:
-            self._generation += 1
-            self._connection_valid = True
-        self._connected.set()
+            with self._generation_lock:
+                self._pending_subscribe_mids.add(mid)
         log.info(
-            "multi-device MQTT gateway connected id=%s generation=%s sessionPresent=%s",
+            "MQTT CONNACK received; awaiting subscriptions id=%s generation=%s sessionPresent=%s",
             GATEWAY_ID, self._generation, session_present,
         )
 
     def on_disconnect(self, _client: mqtt.Client, _userdata: object, _flags: Any, reason: Any, _properties: Any) -> None:
-        self._connected.clear()
-        self._subscribed.clear()
-        with self._generation_lock:
-            # The generation number stays for diagnostics, but from this
-            # moment it no longer authorises any ACK on this connection.
-            self._connection_valid = False
+        self._invalidate_connection()
         log.warning("MQTT gateway disconnected id=%s: %s", GATEWAY_ID, reason)
 
-    def _on_subscribe(self, _client: mqtt.Client, _userdata: object, mid: int, _reasons: Any, _properties: Any) -> None:
-        """Track SUBACKs: only a confirmed subscription guarantees delivery."""
-        self._pending_subscribe_mids.discard(mid)
-        if not self._pending_subscribe_mids:
-            self._subscribed.set()
+    def _invalidate_connection(self) -> None:
+        with self._generation_lock:
+            self._connection_valid = False
+            self._connected.clear()
+            self._subscribed.clear()
+            self._pending_subscribe_mids.clear()
+            self._subscribe_deadline = 0.0
+
+    def _on_pre_connect(self, _client: mqtt.Client, _userdata: object) -> None:
+        self._invalidate_connection()
+
+    def _disconnect(self) -> None:
+        self._invalidate_connection()
+        self.client.disconnect()
+
+    def _on_subscribe(self, _client: mqtt.Client, _userdata: object, mid: int, reasons: Any, _properties: Any) -> None:
+        with self._generation_lock:
+            if not self._connection_valid or mid not in self._pending_subscribe_mids or self.stop_event.is_set():
+                return
+            failed = len(reasons) != 1 or any(reason.is_failure or reason.value != 1 for reason in reasons)
+            if not failed:
+                self._pending_subscribe_mids.remove(mid)
+                if not self._pending_subscribe_mids:
+                    self._subscribe_deadline = 0.0
+                    self._subscribed.set()
+                    self._connected.set()
+        if failed:
+            log.error("required QoS1 subscription rejected/downgraded mid=%s reasons=%s", mid, reasons)
+            self._disconnect()
+
+    def _check_subscription_timeout(self) -> None:
+        with self._generation_lock:
+            expired = self._subscribe_deadline and time.monotonic() >= self._subscribe_deadline
+        if expired:
+            log.error("MQTT SUBACK timed out; reconnecting")
+            self._disconnect()
 
     def wait_subscribed(self, timeout: float) -> bool:
         return self._subscribed.wait(timeout)
@@ -202,12 +256,11 @@ class Gateway:
             self.inboxes[shard].put_nowait((message, 0, self._generation))
         except queue.Full:
             self.backpressure_disconnects += 1
-            with self._generation_lock:
-                self._connection_valid = False
             log.error("MQTT gateway inbox full; disconnecting so QoS1 can redeliver")
-            self.client.disconnect()
+            self._disconnect()
         except Exception:
             log.exception("unexpected error dispatching MQTT message topic=%s", message.topic)
+            self._disconnect()  # unacknowledged message must be redelivered
 
     def _shard_for(self, message: mqtt.MQTTMessage) -> int:
         parts = message.topic.split("/")
@@ -217,7 +270,7 @@ class Gateway:
     def ack(self, message: mqtt.MQTTMessage, generation: int) -> None:
         with self._generation_lock:
             # Serialise the validity check with the ACK send itself: a
-            # concurrent reconnect (on_connect/on_disconnect) cannot slip
+            # concurrent reconnect fence/on_disconnect cannot slip
             # between "check" and "send" and smuggle a stale MID onto a
             # new connection. Invalidating on disconnect makes even a
             # matching generation number powerless once the socket is gone.
@@ -234,23 +287,22 @@ class Gateway:
     # Connection supervision
     # ------------------------------------------------------------------
     def _loop_thread(self) -> threading.Thread | None:
-        name = f"paho-mqtt-client-{GATEWAY_ID}"
-        for thread in threading.enumerate():
-            if thread.name == name and thread.is_alive():
-                return thread
-        return None
+        thread = getattr(self.client, "_thread", None)
+        return thread if thread is not None and thread.is_alive() else None
 
     def _supervise(self) -> None:
         failures = 0
         next_retry_at = 0.0
         while not self.stop_event.wait(SUPERVISOR_INTERVAL_SECONDS):
+            self._check_subscription_timeout()
             if self._loop_thread() is not None:
                 # The network loop is alive: either healthy or retrying on
                 # its own (initial connect, transient socket failures).
                 # A live loop is the source of truth; a stale `connected`
                 # flag from a crashed loop must never mask recovery.
-                failures = 0
-                next_retry_at = 0.0
+                if self.connected:
+                    failures = 0
+                    next_retry_at = 0.0
                 continue
             if time.monotonic() < next_retry_at:
                 continue
@@ -267,6 +319,7 @@ class Gateway:
         with self._reconnect_lock:
             if self.stop_event.is_set():
                 return
+            self._invalidate_connection()
             log.warning("MQTT network loop is dead; supervisor restoring connection id=%s", GATEWAY_ID)
             try:
                 self.client.loop_stop()
@@ -280,7 +333,7 @@ class Gateway:
             if self.stop_event.is_set():
                 log.warning("shutdown raced the reconnect; discarding restored connection")
                 try:
-                    self.client.disconnect()
+                    self._disconnect()
                 except Exception:  # pragma: no cover - paho defensive
                     pass
                 return
@@ -344,7 +397,7 @@ class Gateway:
                 inbox.put((message, attempt + 1, generation), timeout=1)
             except queue.Full:
                 log.error("MQTT gateway retry queue full; disconnecting")
-                self.client.disconnect()
+                self._disconnect()
                 return
 
     def _process_one(
@@ -452,12 +505,13 @@ class Gateway:
                 return
             self._shutdown_done = True
         self.stop_event.set()
+        self._invalidate_connection()
         # Take the reconnect lock so a supervisor reconnect in flight either
         # observes stop_event and tears its fresh connection down, or we tear
         # it down here; shutdown returns with no new connection or loop left.
         with self._reconnect_lock:
             try:
-                self.client.disconnect()
+                self._disconnect()
             except Exception:  # pragma: no cover - paho defensive
                 pass
             try:
@@ -501,6 +555,7 @@ class Gateway:
         payload = {
             "updatedAt": time.time(),
             "connected": self.connected,
+            "subscribed": self._subscribed.is_set(),
             "workersAlive": bool(self.worker_threads) and all(thread.is_alive() for thread in self.worker_threads),
             "commandWorkerAlive": bool(self.command_thread and self.command_thread.is_alive()),
             "supervisorAlive": bool(self.supervisor_thread and self.supervisor_thread.is_alive()),
@@ -529,6 +584,8 @@ class Gateway:
                 next_claim = time.monotonic() + 5
 
     def publish_claimed_commands(self) -> None:
+        if not self.connected:
+            return
         query = urlencode({"gateway_id": GATEWAY_ID, "limit": 100})
         response = self.api_client.request("GET", f"/api/v1/internal/device-commands/claim?{query}")
         for command in response.get("commands") or []:

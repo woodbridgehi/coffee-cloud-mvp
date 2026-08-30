@@ -15,7 +15,10 @@ def main() -> None:
     if time.time() - float(payload["updatedAt"]) > 20:
         raise SystemExit(1)
     if kind == "gateway":
-        healthy = payload.get("connected") and payload.get("workersAlive") and payload.get("commandWorkerAlive")
+        healthy = (
+            payload.get("connected") and payload.get("subscribed") and payload.get("workersAlive")
+            and payload.get("commandWorkerAlive") and payload.get("supervisorAlive")
+        )
     elif kind == "domain":
         workers = payload.get("workers") or {}
         now = time.time()

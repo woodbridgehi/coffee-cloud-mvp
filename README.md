@@ -261,8 +261,11 @@ curl http://127.0.0.1:8788/health
 - 网关 Client ID 必须稳定：默认 `coffee-mqtt-gateway-v1`，由 `MQTT_GATEWAY_ID` 覆盖。Client ID 即 Broker 会话身份，随机默认会在每次重启时丢弃会话与排队的 QoS 1 上行。**多实例部署时每个网关进程必须配置各自唯一且稳定的 ID**（如 `coffee-mqtt-gateway-v2`），同 ID 互踢会导致会话抖动。
 - MQTT 5 会话为持久会话：`clean_start=False` + 会话有效期 7 天（`MQTT_SESSION_EXPIRY_SECONDS`，默认 604800）。网关重启/重建对象后，离线期间排队的 QoS 1 上行会被重投。CONNACK 返回 `sessionPresent=false` 时会记录警告：Broker 可能已丢弃会话状态（首次连接除外），不能把 MQTT QoS 1 等同于应用层恰好一次。
 - 连接监督：Paho 网络循环在主动 `disconnect()`（背压队列满、订阅失败）后自行终止且不会重连；网关唯一的监督线程检测到循环死亡后执行 `loop_stop → reconnect → loop_start`，带指数退避（上限 60s）。初次连接失败与意外断线由 Paho 循环内建重试处理，监督器不与存活循环竞争。网络回调只记录状态，绝不在线程内 join/重连。
-- 连接代次（generation）ACK 隔离：每条上行消息携带收到它的连接代次，且代次有效性由锁串行化——断开瞬间代次即失效（仅代次号相等不再授权 ACK），代次切换与 ACK 发送不会交错，旧连接 MID 不可能在新连接上被确认。过期/失效代次消息照常处理但跳过 ACK，由持久会话后续重投，业务幂等由云端 Inbox 保证。订阅仅在 SUBACK 确认后才视为可用（`wait_subscribed`）。
+- 连接代次（generation）ACK 隔离：主动断开、关闭和进入 Paho `reconnect()` 前均撤销旧代次权限；覆盖监督器和 Paho 自动重连。撤销与 ACK 调用由可重入锁串行化，允许 Paho 写失败同步触发断线回调；不在该锁内执行线程 join 或阻塞连接。过期消息仍可处理但不 ACK，后续依赖持久会话重投与业务幂等。此项不是端到端不丢消息的承诺，设备持久 Inbox 仍待 B1.2。
+- 订阅就绪：每次连接清理旧 MID；全部必需订阅收到成功的 QoS1 SUBACK 才设置 `connected/subscribed`，允许下行领取并通过健康检查。拒绝、QoS0 降级或缺失确认均不就绪；`MQTT_SUBSCRIBE_TIMEOUT_SECONDS` 默认 10 秒、限制 1–60 秒，超时断开后退避恢复。已有持久会话在 SUBACK 前重投的上行仍可处理和确认。
 - 关键线程退出（上行 worker、命令发布线程、监督线程）会使健康文件置为失败并以非零码退出进程，交给容器 `restart: unless-stopped` 受控恢复，而不是永远假存活。监督器与 shutdown 通过重连锁协调：重连返回后复查关闭状态，关闭完成时不残留新连接或网络线程。`shutdown()` 幂等并保留 Broker 会话。
+
+本地直接复核修复及测试边界见 [B1.1 修复记录](docs/mqtt-lifecycle-review-2026-08-30.md)；不代表已部署 VPS。
 
 `coffee-cloud-mvp` 的每个 Uvicorn worker 各维护一个 PostgreSQL LISTEN 连接和一个 Redis Pub/Sub 连接。订单/支付/生命周期通知刷新 SQL 快照；进度通知只读 Redis，不查询 SQL。浏览器初次连接/重连时先鉴权，再订阅并合并 PostgreSQL 状态与 Redis 进度。`coffee-domain-worker` 只刷设备状态，不再刷制作进度；领域派单、支付退款仍相互隔离。管理端订单列表也以单个 Redis pipeline 叠加最新进度。
 
