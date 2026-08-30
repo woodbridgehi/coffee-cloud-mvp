@@ -4,7 +4,7 @@
 
 HTTP 应用代码采用 `Route → Application Service → Repository → PostgreSQL` 分层：路由只处理协议适配，Service 负责业务规则和事务，Repository 集中 SQL。模块职责、事务边界和扩展规则见 [应用分层架构](docs/application-architecture.md)。
 
-2026-08-30 本地整改：统一订单/制作任务/命令状态校验，增加 `PAUSED/RETRY_WAIT` 非终态及带权限、版本、幂等和同事务审计的 HOLD 人工结案。具体协议、迁移前检查和未完成边界见 [制作状态一致性](docs/production-consistency.md)。本批尚未部署 VPS；MQTT 持久接收、Redis dirty 租约及 Worker 有界并发等后续整改仍未完成。
+2026-08-30 A1/A2 已提交并部署 VPS，数据库升级到迁移 12：统一订单/制作任务/命令状态校验，增加 `PAUSED/RETRY_WAIT` 非终态及带权限、版本、幂等和同事务审计的 HOLD 人工结案。见 [制作状态一致性](docs/production-consistency.md)、[发布与回滚记录](docs/releases/2026-08-30-a1-a2.md)。MQTT 持久接收、Redis dirty 租约及 Worker 有界并发等尚未实施，下一步按 [后续优化路线与执行手册](docs/optimization-roadmap-2026-08-30.md) 分批推进。
 
 公网支付由 `PUBLIC_PAYMENT_MODE` 控制。现网在没有支付宝沙箱密钥前必须保持 `TEST_FREE`；设置为 `ONLINE` 后，服务端会拒绝任何绕过支付的测试订单。支付宝沙箱与正式环境共用 `AlipayProvider`，只通过 gateway、appId 和密钥文件切换。
 
@@ -239,7 +239,7 @@ curl http://127.0.0.1:8788/health
 近期应做：
 
 1. 配置支付宝沙箱密钥并完成真实扫码、回调、主动查询和退款验收，再把现网 `PUBLIC_PAYMENT_MODE` 切到 `ONLINE`。
-2. 增加运营员账号/RBAC、人工 HOLD 处置页和完整审计，替换共享管理员 Token。
+2. 已有运营员账号/RBAC 与人工 HOLD 裁决 API；继续完善管理操作原子审计和资源配额，处置页如需建设应单独安排。
 3. 增加云端库存交易投影与补料工单，而不只保存设备快照。
 4. 增加公网接口速率限制、WAF 规则和订单滥用监控。
 5. 完成 100/500/1000 设备连接、重连风暴与 Outbox 延迟压测。
