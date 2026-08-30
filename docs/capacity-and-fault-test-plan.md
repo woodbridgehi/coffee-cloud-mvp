@@ -41,3 +41,4 @@ uv run --with-requirements requirements.txt scripts/load_test.py \
 ```
 
 该工具只用于 API 基线，不等价于完整设备测试。完整测试必须同时覆盖 MQTT、SSE、数据库和故障注入。
+压测器应运行在另一台机器；如果和被测 API 共用小型 VPS，单进程 Python 压测器可能先占满 CPU，产生虚假的高延迟。服务端本机极限基线可另用低开销的 `wrk`/`k6` 复核。

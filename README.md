@@ -43,6 +43,7 @@ HTTP 应用代码采用 `Route → Application Service → Repository → Postgr
 - OpenAPI：`https://coffee-api.woodbridge.top/docs`
 - 存活检查：`https://coffee-api.woodbridge.top/health`（不访问数据库）
 - 就绪检查：`https://coffee-api.woodbridge.top/ready`（检查数据库，5 秒防抖缓存）
+- Redis 宿主机参数：部署 `deploy/sysctl/99-coffee-redis.conf` 后执行 `sysctl --system`，避免 AOF/RDB fork 因内存提交策略失败。
 
 运营台使用 `ADMIN_TOKEN` 登录，Token 只保存在当前页面内存。页面显示历史/在线设备、进行中订单、最近订单；选择设备后查询实时共享物料的 `available / capacity / unit / status`。
 
