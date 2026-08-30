@@ -265,7 +265,7 @@ curl http://127.0.0.1:8788/health
 - 订阅就绪：每次连接清理旧 MID；全部必需订阅收到成功的 QoS1 SUBACK 才设置 `connected/subscribed`，允许下行领取并通过健康检查。拒绝、QoS0 降级或缺失确认均不就绪；`MQTT_SUBSCRIBE_TIMEOUT_SECONDS` 默认 10 秒、限制 1–60 秒，超时断开后退避恢复。已有持久会话在 SUBACK 前重投的上行仍可处理和确认。
 - 关键线程退出（上行 worker、命令发布线程、监督线程）会使健康文件置为失败并以非零码退出进程，交给容器 `restart: unless-stopped` 受控恢复，而不是永远假存活。监督器与 shutdown 通过重连锁协调：重连返回后复查关闭状态，关闭完成时不残留新连接或网络线程。`shutdown()` 幂等并保留 Broker 会话。
 
-本地直接复核修复及测试边界见 [B1.1 修复记录](docs/mqtt-lifecycle-review-2026-08-30.md)；不代表已部署 VPS。
+直接复核修复及测试边界见 [B1.1 修复记录](docs/mqtt-lifecycle-review-2026-08-30.md)。后端代码 `8baf0ae` 已部署 VPS，数据库保持 migration 12，详见 [发布记录](docs/releases/2026-08-30-b11.md)。
 
 `coffee-cloud-mvp` 的每个 Uvicorn worker 各维护一个 PostgreSQL LISTEN 连接和一个 Redis Pub/Sub 连接。订单/支付/生命周期通知刷新 SQL 快照；进度通知只读 Redis，不查询 SQL。浏览器初次连接/重连时先鉴权，再订阅并合并 PostgreSQL 状态与 Redis 进度。`coffee-domain-worker` 只刷设备状态，不再刷制作进度；领域派单、支付退款仍相互隔离。管理端订单列表也以单个 Redis pipeline 叠加最新进度。
 
