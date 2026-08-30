@@ -106,7 +106,12 @@ class Gateway:
         self.command_thread: threading.Thread | None = None
         self.supervisor_thread: threading.Thread | None = None
         self._generation = 0
+        self._connection_valid = False
+        self._generation_lock = threading.Lock()
+        self.backpressure_disconnects = 0
         self._connected = threading.Event()
+        self._subscribed = threading.Event()
+        self._pending_subscribe_mids: set[int] = set()
         self._shutdown_lock = threading.Lock()
         self._shutdown_done = False
         self._reconnect_lock = threading.Lock()
@@ -128,6 +133,7 @@ class Gateway:
         client.on_connect = self.on_connect
         client.on_disconnect = self.on_disconnect
         client.on_message = self.on_message
+        client.on_subscribe = self._on_subscribe
 
     # ------------------------------------------------------------------
     # Connection state
@@ -154,7 +160,7 @@ class Gateway:
                 "MQTT session not present for id=%s; broker may have dropped queued QoS1 uplinks", GATEWAY_ID
             )
         for topic, qos in (("v1/devices/+/up", 1), ("v1/devices/+/presence", 1), ("v1/devices/+/state", 1)):
-            result, _ = client.subscribe(topic, qos=qos)
+            result, mid = client.subscribe(topic, qos=qos)
             if result != mqtt.MQTT_ERR_SUCCESS:
                 log.error(
                     "subscribe failed for %s: %s; dropping connection for supervisor recovery",
@@ -162,7 +168,10 @@ class Gateway:
                 )
                 client.disconnect()
                 return
-        self._generation += 1
+            self._pending_subscribe_mids.add(mid)
+        with self._generation_lock:
+            self._generation += 1
+            self._connection_valid = True
         self._connected.set()
         log.info(
             "multi-device MQTT gateway connected id=%s generation=%s sessionPresent=%s",
@@ -171,15 +180,34 @@ class Gateway:
 
     def on_disconnect(self, _client: mqtt.Client, _userdata: object, _flags: Any, reason: Any, _properties: Any) -> None:
         self._connected.clear()
+        self._subscribed.clear()
+        with self._generation_lock:
+            # The generation number stays for diagnostics, but from this
+            # moment it no longer authorises any ACK on this connection.
+            self._connection_valid = False
         log.warning("MQTT gateway disconnected id=%s: %s", GATEWAY_ID, reason)
 
+    def _on_subscribe(self, _client: mqtt.Client, _userdata: object, mid: int, _reasons: Any, _properties: Any) -> None:
+        """Track SUBACKs: only a confirmed subscription guarantees delivery."""
+        self._pending_subscribe_mids.discard(mid)
+        if not self._pending_subscribe_mids:
+            self._subscribed.set()
+
+    def wait_subscribed(self, timeout: float) -> bool:
+        return self._subscribed.wait(timeout)
+
     def on_message(self, _client: mqtt.Client, _userdata: object, message: mqtt.MQTTMessage) -> None:
-        shard = self._shard_for(message)
         try:
+            shard = self._shard_for(message)
             self.inboxes[shard].put_nowait((message, 0, self._generation))
         except queue.Full:
+            self.backpressure_disconnects += 1
+            with self._generation_lock:
+                self._connection_valid = False
             log.error("MQTT gateway inbox full; disconnecting so QoS1 can redeliver")
             self.client.disconnect()
+        except Exception:
+            log.exception("unexpected error dispatching MQTT message topic=%s", message.topic)
 
     def _shard_for(self, message: mqtt.MQTTMessage) -> int:
         parts = message.topic.split("/")
@@ -187,14 +215,20 @@ class Gateway:
         return hash(device_id) % self.worker_count
 
     def ack(self, message: mqtt.MQTTMessage, generation: int) -> None:
-        if generation != self._generation:
-            log.debug(
-                "ignoring stale generation ACK mid=%s gen=%s current=%s",
-                message.mid, generation, self._generation,
-            )
-            return
-        if message.qos:
-            self.client.ack(message.mid, message.qos)
+        with self._generation_lock:
+            # Serialise the validity check with the ACK send itself: a
+            # concurrent reconnect (on_connect/on_disconnect) cannot slip
+            # between "check" and "send" and smuggle a stale MID onto a
+            # new connection. Invalidating on disconnect makes even a
+            # matching generation number powerless once the socket is gone.
+            if not self._connection_valid or generation != self._generation:
+                log.debug(
+                    "ignoring stale generation ACK mid=%s gen=%s current=%s valid=%s",
+                    message.mid, generation, self._generation, self._connection_valid,
+                )
+                return
+            if message.qos:
+                self.client.ack(message.mid, message.qos)
 
     # ------------------------------------------------------------------
     # Connection supervision
@@ -210,33 +244,48 @@ class Gateway:
         failures = 0
         next_retry_at = 0.0
         while not self.stop_event.wait(SUPERVISOR_INTERVAL_SECONDS):
-            if self.connected or self._loop_thread() is not None:
-                # Healthy, or paho's own loop is retrying (initial connect,
-                # transient socket failures). Never fight a live loop.
+            if self._loop_thread() is not None:
+                # The network loop is alive: either healthy or retrying on
+                # its own (initial connect, transient socket failures).
+                # A live loop is the source of truth; a stale `connected`
+                # flag from a crashed loop must never mask recovery.
                 failures = 0
                 next_retry_at = 0.0
                 continue
             if time.monotonic() < next_retry_at:
                 continue
-            with self._reconnect_lock:
-                if self.stop_event.is_set():
-                    break
-                log.warning("MQTT network loop is dead; supervisor restoring connection id=%s", GATEWAY_ID)
+            self._recover_once()
+            failures += 1
+            next_retry_at = time.monotonic() + min(
+                RECONNECT_BACKOFF_MAX_SECONDS, 1.0 * (2 ** min(failures - 1, 6))
+            )
+
+    def _recover_once(self) -> None:
+        """Restore the network loop after it died. Runs on the supervisor
+        thread only; rechecks shutdown after reconnect() so a close racing
+        the reconnect never leaves a fresh connection or loop behind."""
+        with self._reconnect_lock:
+            if self.stop_event.is_set():
+                return
+            log.warning("MQTT network loop is dead; supervisor restoring connection id=%s", GATEWAY_ID)
+            try:
+                self.client.loop_stop()
+            except Exception:  # pragma: no cover - paho defensive
+                pass
+            result = mqtt.MQTT_ERR_CONN_REFUSED
+            try:
+                result = self.client.reconnect()
+            except (OSError, ValueError) as exc:
+                log.warning("MQTT supervisor reconnect failed: %s", exc)
+            if self.stop_event.is_set():
+                log.warning("shutdown raced the reconnect; discarding restored connection")
                 try:
-                    self.client.loop_stop()
+                    self.client.disconnect()
                 except Exception:  # pragma: no cover - paho defensive
                     pass
-                try:
-                    result = self.client.reconnect()
-                except (OSError, ValueError) as exc:
-                    log.warning("MQTT supervisor reconnect failed: %s", exc)
-                    result = mqtt.MQTT_ERR_CONN_REFUSED
-                if result == mqtt.MQTT_ERR_SUCCESS:
-                    self.client.loop_start()
-                failures += 1
-                next_retry_at = time.monotonic() + min(
-                    RECONNECT_BACKOFF_MAX_SECONDS, 1.0 * (2 ** min(failures - 1, 6))
-                )
+                return
+            if result == mqtt.MQTT_ERR_SUCCESS:
+                self.client.loop_start()
 
     # ------------------------------------------------------------------
     # Uplink processing
@@ -283,13 +332,20 @@ class Gateway:
         delay = min(30.0, 2 ** min(attempt, 5))
         log.warning("MQTT uplink retry count=%s in %.1fs worker=%s: %s", len(items), delay, worker_id, exc)
         if not self.stop_event.wait(delay):
-            for item in items:
-                try:
-                    inbox.put(item, timeout=1)
-                except queue.Full:
-                    log.error("MQTT gateway retry queue full; disconnecting")
-                    self.client.disconnect()
-                    return
+            self._requeue_after_retry(inbox, items)
+
+    def _requeue_after_retry(
+        self, inbox: queue.Queue[tuple[mqtt.MQTTMessage, int, int]], items: list[tuple[mqtt.MQTTMessage, int, int]],
+    ) -> None:
+        """Requeue failed uplinks with attempt+1 (so backoff grows) while
+        preserving the connection generation for ACK isolation."""
+        for message, attempt, generation in items:
+            try:
+                inbox.put((message, attempt + 1, generation), timeout=1)
+            except queue.Full:
+                log.error("MQTT gateway retry queue full; disconnecting")
+                self.client.disconnect()
+                return
 
     def _process_one(
         self, inbox: queue.Queue[tuple[mqtt.MQTTMessage, int, int]], message: mqtt.MQTTMessage, attempt: int,
@@ -396,14 +452,20 @@ class Gateway:
                 return
             self._shutdown_done = True
         self.stop_event.set()
-        try:
-            self.client.disconnect()
-        except Exception:  # pragma: no cover - paho defensive
-            pass
-        try:
-            self.client.loop_stop()
-        except Exception:  # pragma: no cover - paho defensive
-            pass
+        # Take the reconnect lock so a supervisor reconnect in flight either
+        # observes stop_event and tears its fresh connection down, or we tear
+        # it down here; shutdown returns with no new connection or loop left.
+        with self._reconnect_lock:
+            try:
+                self.client.disconnect()
+            except Exception:  # pragma: no cover - paho defensive
+                pass
+            try:
+                self.client.loop_stop()
+            except Exception:  # pragma: no cover - paho defensive
+                pass
+        with self._generation_lock:
+            self._connection_valid = False
         self._connected.clear()
         for thread in self.worker_threads:
             thread.join(timeout=2)
@@ -417,10 +479,11 @@ class Gateway:
         """Return 0 while every critical thread is alive, else 1 (after writing a failing health file)."""
         workers_alive = bool(self.worker_threads) and all(thread.is_alive() for thread in self.worker_threads)
         command_alive = bool(self.command_thread and self.command_thread.is_alive())
-        if not (workers_alive and command_alive):
+        supervisor_alive = bool(self.supervisor_thread and self.supervisor_thread.is_alive())
+        if not (workers_alive and command_alive and supervisor_alive):
             log.critical(
-                "gateway critical thread died (workers=%s command=%s); failing health and exiting for restart",
-                workers_alive, command_alive,
+                "gateway critical thread died (workers=%s command=%s supervisor=%s); failing health and exiting for restart",
+                workers_alive, command_alive, supervisor_alive,
             )
             self._write_health()
             return 1
@@ -442,6 +505,7 @@ class Gateway:
             "commandWorkerAlive": bool(self.command_thread and self.command_thread.is_alive()),
             "supervisorAlive": bool(self.supervisor_thread and self.supervisor_thread.is_alive()),
             "connectionGeneration": self._generation,
+            "backpressureDisconnects": self.backpressure_disconnects,
             "queueDepth": sum(inbox.qsize() for inbox in self.inboxes),
         }
         HEALTH_FILE.parent.mkdir(parents=True, exist_ok=True)

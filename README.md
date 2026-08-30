@@ -200,6 +200,10 @@ openssl rand -hex 32
 ## 6. 本地检查与部署
 
 ```bash
+# 依赖统一从锁文件安装（运行时 requirements.lock；开发/测试用 requirements-dev.lock，
+# 均含全量传递依赖，见 R0 依赖锁定），避免传递依赖漂移：
+uv venv --managed-python --python 3.12 .venv
+uv pip install --python .venv/bin/python -r requirements-dev.lock
 .venv/bin/pytest -q
 node --check public/order.js
 .venv/bin/python scripts/export_openapi.py
@@ -257,8 +261,8 @@ curl http://127.0.0.1:8788/health
 - 网关 Client ID 必须稳定：默认 `coffee-mqtt-gateway-v1`，由 `MQTT_GATEWAY_ID` 覆盖。Client ID 即 Broker 会话身份，随机默认会在每次重启时丢弃会话与排队的 QoS 1 上行。**多实例部署时每个网关进程必须配置各自唯一且稳定的 ID**（如 `coffee-mqtt-gateway-v2`），同 ID 互踢会导致会话抖动。
 - MQTT 5 会话为持久会话：`clean_start=False` + 会话有效期 7 天（`MQTT_SESSION_EXPIRY_SECONDS`，默认 604800）。网关重启/重建对象后，离线期间排队的 QoS 1 上行会被重投。CONNACK 返回 `sessionPresent=false` 时会记录警告：Broker 可能已丢弃会话状态（首次连接除外），不能把 MQTT QoS 1 等同于应用层恰好一次。
 - 连接监督：Paho 网络循环在主动 `disconnect()`（背压队列满、订阅失败）后自行终止且不会重连；网关唯一的监督线程检测到循环死亡后执行 `loop_stop → reconnect → loop_start`，带指数退避（上限 60s）。初次连接失败与意外断线由 Paho 循环内建重试处理，监督器不与存活循环竞争。网络回调只记录状态，绝不在线程内 join/重连。
-- 连接代次（generation）ACK 隔离：每条上行消息携带收到它的连接代次；旧代次的 MID 不能在新连接上 ACK（Broker 可能在新连接复用同一 MID 指向另一条消息）。过期代次消息照常处理但跳过 ACK，由持久会话后续重投，业务幂等由云端 Inbox 保证。
-- 关键线程退出（上行 worker、命令发布线程）会使健康文件置为失败并以非零码退出进程，交给容器 `restart: unless-stopped` 受控恢复，而不是永远假存活。`shutdown()` 幂等并保留 Broker 会话。
+- 连接代次（generation）ACK 隔离：每条上行消息携带收到它的连接代次，且代次有效性由锁串行化——断开瞬间代次即失效（仅代次号相等不再授权 ACK），代次切换与 ACK 发送不会交错，旧连接 MID 不可能在新连接上被确认。过期/失效代次消息照常处理但跳过 ACK，由持久会话后续重投，业务幂等由云端 Inbox 保证。订阅仅在 SUBACK 确认后才视为可用（`wait_subscribed`）。
+- 关键线程退出（上行 worker、命令发布线程、监督线程）会使健康文件置为失败并以非零码退出进程，交给容器 `restart: unless-stopped` 受控恢复，而不是永远假存活。监督器与 shutdown 通过重连锁协调：重连返回后复查关闭状态，关闭完成时不残留新连接或网络线程。`shutdown()` 幂等并保留 Broker 会话。
 
 `coffee-cloud-mvp` 的每个 Uvicorn worker 各维护一个 PostgreSQL LISTEN 连接和一个 Redis Pub/Sub 连接。订单/支付/生命周期通知刷新 SQL 快照；进度通知只读 Redis，不查询 SQL。浏览器初次连接/重连时先鉴权，再订阅并合并 PostgreSQL 状态与 Redis 进度。`coffee-domain-worker` 只刷设备状态，不再刷制作进度；领域派单、支付退款仍相互隔离。管理端订单列表也以单个 Redis pipeline 叠加最新进度。
 

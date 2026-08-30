@@ -7,8 +7,10 @@ WORKDIR /app
 
 RUN useradd --create-home --uid 10001 appuser
 
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.txt requirements.lock ./
+# Install from the lock so transitive dependencies cannot drift between
+# rebuilds of the same source (see R0 in docs/optimization-roadmap-2026-08-30.md).
+RUN pip install --no-cache-dir -r requirements.lock
 
 COPY app ./app
 COPY public ./public
