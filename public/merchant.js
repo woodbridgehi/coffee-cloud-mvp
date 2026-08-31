@@ -39,11 +39,22 @@ const LIFECYCLE = {
   ARCHIVED: { label: '已归档', kind: 'gray' },
 };
 const PAY_STATUS = {
+  NOT_REQUIRED: { label: '无需支付', kind: 'gray' },
+  SUCCESS: { label: '支付成功', kind: 'green' }, SUCCEEDED: { label: '支付成功', kind: 'green' },
   PENDING: { label: '待支付', kind: 'amber' }, PAID: { label: '已支付', kind: 'green' },
   REFUNDING: { label: '退款申请中', kind: 'amber' }, REFUNDED: { label: '已退款', kind: 'gray' },
   PARTIALLY_REFUNDED: { label: '部分退款', kind: 'amber' }, FAILED: { label: '支付失败', kind: 'red' },
 };
+const REFUND_STATUS = {
+  PENDING: { label: '退款申请中', kind: 'amber' }, PROCESSING: { label: '退款处理中', kind: 'amber' },
+  SUCCESS: { label: '退款成功', kind: 'green' }, SUCCEEDED: { label: '退款成功', kind: 'green' },
+  FAILED: { label: '退款失败', kind: 'red' },
+};
 const PROD_STATUS = {
+  CREATED: { label: '已创建', kind: 'gray' }, AWAITING_PAYMENT: { label: '等待支付', kind: 'amber' },
+  DISPATCHED: { label: '已派单', kind: 'blue' }, ACCEPTED: { label: '设备已接受', kind: 'blue' },
+  READY: { label: '已交付', kind: 'green' }, EXPIRED: { label: '已超时', kind: 'red' },
+  REFUNDED: { label: '已退款', kind: 'gray' },
   QUEUED: { label: '排队中', kind: 'blue' }, MAKING: { label: '制作中', kind: 'blue' },
   HOLD: { label: '待人工确认', kind: 'amber' }, DELIVERED: { label: '已交付', kind: 'green' },
   FAILED: { label: '制作失败', kind: 'red' }, CANCELLED: { label: '已取消', kind: 'gray' },
@@ -294,7 +305,7 @@ function openModal({ title, body, footer, wide, dismissible = true, onClose }) {
       el('h3', null, title),
       dismissible ? el('button', { class: 'modal-close', type: 'button', 'aria-label': '关闭', onclick: close, html: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M5.5 5.5 18.5 18.5M18.5 5.5 5.5 18.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>' }) : null),
     el('div', { class: 'modal-body' }, body),
-    footer ? el('div', { class: 'modal-foot' }, footer) : null,
+    ...(footer ? [el('div', { class: 'modal-foot' }, footer)] : []),
   );
   card.addEventListener('click', event => event.stopPropagation());
   root.classList.remove('hidden');
@@ -336,7 +347,7 @@ function openDrawer({ title, sub, content, footer, onClose }) {
         sub ? el('p', { class: 'muted drawer-sub' }, sub) : null),
       el('button', { class: 'modal-close', type: 'button', 'aria-label': '关闭', onclick: close, html: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M5.5 5.5 18.5 18.5M18.5 5.5 5.5 18.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>' })),
     body,
-    footer ? el('div', { class: 'drawer-foot' }, footer) : null,
+    ...(footer ? [el('div', { class: 'drawer-foot' }, footer)] : []),
   );
   const veil = el('div', { class: 'drawer-veil', onclick: close });
   root.classList.remove('hidden');
@@ -2337,21 +2348,21 @@ function paintOrderDrawer(drawer, order) {
       el('h4', null, '支付与退款'),
       el('div', { class: 'plain-list' }, (order.payments || []).map(payment => el('div', { class: 'plain-item' },
         el('span', null, `${payment.provider}${payment.accountLabel ? ' · ' + payment.accountLabel : ''}${payment.environment && payment.environment !== 'LIVE' ? '（' + payment.environment + '）' : ''}`),
-        el('span', null, `${payment.status === 'SUCCESS' ? badge('green', '成功') : statusBadge(PAY_STATUS, payment.status)} ${fmtMoney(payment.amountMinor)}`)))),
+        el('span', null, statusBadge(PAY_STATUS, payment.status), ' ', fmtMoney(payment.amountMinor))))),
       (order.refunds || []).length ? el('div', { class: 'plain-list', style: 'margin-top:8px' }, order.refunds.map(refund => el('div', { class: 'plain-item' },
-        el('span', null, `${refund.status === 'PENDING' ? badge('amber', '退款申请中') : refund.status === 'SUCCESS' ? badge('green', '退款成功') : badge('red', '退款失败')} ${refund.reason || ''}`),
+        el('span', null, statusBadge(REFUND_STATUS, refund.status), ' ', refund.reason || ''),
         el('span', { class: 'num' }, fmtMoney(refund.amountMinor))))) : el('p', { class: 'muted' }, '无退款记录'),
       order.costSummary ? el('p', { class: 'field-hint' }, `材料成本：${order.costSummary.materialCostMinor === null || order.costSummary.materialCostMinor === undefined ? '待补全' : fmtMoney(order.costSummary.materialCostMinor)}（${order.costSummary.status === 'MISSING' ? '成本缺失' : order.costSummary.status === 'ESTIMATED' ? '标准配方估算' : '已确认'}）`) : null),
     el('div', { class: 'detail-sec' },
       el('h4', null, '时间线'),
       el('div', { class: 'timeline' }, (order.timeline || []).map(entry => el('div', { class: 'timeline-item' },
-        el('span', { class: 'muted' }, fmtDateTime(entry.at, tz())),
-        el('span', null, entry.label))))),
-    canRefund ? el('div', { class: 'detail-sec' },
+        el('span', { class: 'muted' }, fmtDateTime(entry.createdAt ?? entry.at, tz())),
+        el('span', null, entry.description || entry.label || statusBadge(PROD_STATUS, entry.status)))))),
+    ...(canRefund ? [el('div', { class: 'detail-sec' },
       el('h4', null, '操作'),
       el('div', { class: 'action-row' },
         el('button', { class: 'btn danger small', type: 'button', onclick: () => openRefundModal(order, drawer) }, '发起退款'),
-        el('span', { class: 'field-hint', style: 'align-self:center' }, '可退上限以服务端校验为准；提交后状态为“退款申请中”，成功以退款记录为准。'))) : null,
+        el('span', { class: 'field-hint', style: 'align-self:center' }, '可退上限以服务端校验为准；提交后状态为“退款申请中”，成功以退款记录为准。')))] : []),
   );
 }
 
@@ -2360,7 +2371,7 @@ function openRefundModal(order, drawer) {
      绝不 coercion 成 0；提交入口同步禁用。 */
   const received = order.receivedMinor;
   const refunded = order.refundedMinor;
-  const unknownLimit = received === null || received === undefined || refunded === null || refunded === undefined;
+  const unknownLimit = [received, refunded].some(value => !Number.isSafeInteger(value) || value < 0) || refunded > received;
   const max = unknownLimit ? null : Math.max(0, received - refunded);
   const amount = el('input', {
     class: 'input', inputmode: 'decimal',
@@ -2555,7 +2566,7 @@ async function loadPurchases(container) {
         ? el('span', {
             class: 'num',
             title: total.hasUnknown ? '部分明细金额待补全，合计仅包含已知金额' : null,
-          }, fmtMoney(total.sum) + (total.hasUnknown ? ' ＊' : ''))
+          }, total.count ? fmtMoney(total.sum) + (total.hasUnknown ? ' ＊' : '') : '待补全')
         : el('span', { class: 'num' }, '—'), '合计'),
       tdl(purchase.status === 'DRAFT' ? badge('amber', '草稿') : badge('green', '已入账'), '状态'),
       tdl(el('span', { class: 'muted num' }, `v${purchase.version}`), '版本'),

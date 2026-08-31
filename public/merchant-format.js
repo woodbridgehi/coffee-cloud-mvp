@@ -227,9 +227,10 @@ export function sumMinor(items, key) {
   let sum = 0; let hasUnknown = false; let count = 0;
   for (const item of Array.isArray(items) ? items : []) {
     const v = item ? item[key] : undefined;
-    if (v === null || v === undefined) { hasUnknown = true; continue; }
+    if ((typeof v !== 'number' && typeof v !== 'string') || isBlank(v)) { hasUnknown = true; continue; }
     const n = Number(v);
-    if (Number.isFinite(n)) { sum += n; count += 1; }
+    if (Number.isSafeInteger(n)) { sum += n; count += 1; }
+    else { hasUnknown = true; }
   }
   return { sum, hasUnknown, count };
 }

@@ -74,3 +74,13 @@ test('uses one SSE stream instead of production status polling', () => {
   assert.doesNotMatch(source, /setTimeout\(loadOrder/);
   assert.doesNotMatch(source, /PRODUCTION_POLL_MS/);
 });
+
+
+test('unknown or malformed prices never appear as free products', () => {
+  for (const priceMinor of [null, undefined, '', ' ', false, [], 'bad', 0.5, Infinity]) {
+    assert.equal(context.money({ priceMinor }), '—');
+  }
+  assert.equal(context.money({ priceMinor: 0 }), '¥0.00');
+  assert.equal(context.money({ priceMinor: '1250' }), '¥12.50');
+  assert.equal(context.money({ totalAmountMinor: 1250 }), '¥12.50');
+});

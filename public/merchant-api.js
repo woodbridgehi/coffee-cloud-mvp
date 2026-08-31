@@ -200,7 +200,11 @@ export function createRealAdapter() {
     async createPrice(body) { return (await json('/prices', { method: 'POST', body })).data; },
 
     /* ---- 订单与退款 ---- */
-    async listOrders(params) { return normalizeList(await json(`/orders${buildQuery(params)}`)); },
+    async listOrders(params = {}) {
+      // The original UI/demo labels differ from persisted order states.
+      const status = ({ DELIVERED: 'READY', PENDING: 'AWAITING_PAYMENT' })[params.status] || params.status;
+      return normalizeList(await json(`/orders${buildQuery({ ...params, status })}`));
+    },
     async getOrder(id) { return (await json(`/orders/${encodeURIComponent(id)}`)).data; },
     async createRefund(id, body, idempotencyKey) {
       return (await json(`/orders/${encodeURIComponent(id)}/refunds`, { method: 'POST', body, idempotencyKey })).data;

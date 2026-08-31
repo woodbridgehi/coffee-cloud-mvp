@@ -296,3 +296,11 @@ test('demo：authConfig 返回 EMAIL 演示配置，与真实适配器同形', a
   assert.ok(cfg.usernamePattern.length > 0);
   assert.equal(typeof cfg.limitedRelease, 'boolean');
 });
+
+
+test('采购合计区分全部未知、部分已知和真实零金额', () => {
+  const unknown = [null, undefined, '', ' ', false, [], 'bad', 0.5].map(v => ({ v }));
+  assert.deepEqual(F.sumMinor(unknown, 'v'), { sum: 0, hasUnknown: true, count: 0 });
+  assert.deepEqual(F.sumMinor([...unknown, { v: '1200' }], 'v'), { sum: 1200, hasUnknown: true, count: 1 });
+  assert.deepEqual(F.sumMinor([{ v: 0 }], 'v'), { sum: 0, hasUnknown: false, count: 1 });
+});

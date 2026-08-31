@@ -131,9 +131,11 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
   function rowActivate(row, handler) {
     row.tabIndex = 0;
     row.addEventListener('keydown', event => {
+      // Nested controls retain their native Enter/Space behavior.
+      if (event.target !== row || event.repeat) return;
       if (event.key === 'Enter' || event.key === ' ') {
         event.preventDefault();
-      handler();
+        handler();
       }
     });
   }

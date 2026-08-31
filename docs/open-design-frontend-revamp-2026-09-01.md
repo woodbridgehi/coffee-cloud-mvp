@@ -53,7 +53,7 @@
 
 1. 未启动真实浏览器逐视口截图验收（本环境无浏览器）；390px/320px 结论基于响应式规则的静态推演。
 2. 未连接真实后端/隔离环境做联调；未执行任何真实支付、退款或设备命令。
-3. `/assets/admin.js` 由 classic script 改为 ES Module（defer 语义不变）；如部署层有 script 类型相关 CSP 需同步（当前代码库未发现 CSP 头）。
+3. `/assets/admin.js` 由 classic script 改为 ES Module（defer 语义不变）；如部署层有 script 类型相关 CSP 需同步（评审更正：`app/merchant/http.py` 对商户 HTML 设置了 CSP；本次仅使用同源资源，无需放宽策略）。
 4. openapi 快照不含商户接口，未据此改动（按后端实现为准）。
 
 ## 五、后端契约观察（未改 Python，仅记录）

@@ -8,7 +8,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, copyFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, copyFileSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -68,8 +68,7 @@ class StubElement {
   getAttribute(name) { return name in this.attributes ? this.attributes[name] : null; }
   append(...nodes) {
     for (const node of nodes) {
-      if (node === null || node === undefined || node === false) continue;
-      const child = node.nodeType ? node : documentStub.createTextNode(String(node));
+      const child = node?.nodeType ? node : documentStub.createTextNode(String(node));
       child.parentNode = this;
       this.children.push(child);
     }
@@ -272,7 +271,10 @@ writeFileSync(join(tmpModuleDir, 'package.json'), JSON.stringify({ type: 'module
 for (const name of ['merchant-format.js', 'merchant-api.js', 'merchant-demo.js', 'merchant.js']) {
   copyFileSync(new URL(name, publicDir), join(tmpModuleDir, name));
 }
-await import(pathToFileURL(join(tmpModuleDir, 'merchant.js')).href);
+// Expose private view functions only in the disposable test copy.
+const entry = join(tmpModuleDir, 'merchant.js');
+writeFileSync(entry, readFileSync(entry, 'utf8') + '\nexport { paintOrderDrawer, openDrawer, openRefundModal };\n');
+const views = await import(pathToFileURL(entry).href);
 
 /* ---------------- 场景 ---------------- */
 
@@ -429,4 +431,33 @@ test('冒烟：OPERATOR 看不到利润与退款入口，订单抽屉正常打�
   documentStub.getElementById('logout-btn').dispatch('click');
   await flush(8);
   assert.equal(documentStub.getElementById('shell').classList.contains('hidden'), true, '登出后外壳隐藏');
+});
+
+
+test('真实订单契约：退款成功、时间线字段与 DOM 节点正确渲染，无 null 占位', () => {
+  const drawer = views.openDrawer({ title: '契约测试订单' });
+  views.paintOrderDrawer(drawer, {
+    id: 'contract-order', paymentStatus: 'NOT_REQUIRED', productionStatus: 'READY',
+    totalMinor: 1200, receivedMinor: 1200, refundedMinor: 300, allowedActions: [],
+    payments: [{ provider: 'alipay_mock', status: 'PAID', amountMinor: 1200 }],
+    refunds: [{ status: 'SUCCEEDED', amountMinor: 300 }],
+    timeline: [{ status: 'READY', description: '设备确认完成', createdAt: '2026-08-31T12:00:00Z' }],
+  });
+  const content = textOf(documentStub.getElementById('drawer-root'));
+  for (const expected of ['无需支付', '已交付', '已支付', '退款成功', '设备确认完成', '2026/08/31']) assert.ok(content.includes(expected), expected);
+  assert.doesNotMatch(content, /\[object |\bnull\b|\bundefined\b|退款失败/);
+  assert.ok(findAll(drawer.body, n => n.classList.contains('badge')).length >= 4);
+  drawer.close();
+});
+
+
+test('退款上限缺失或异常时禁用金额与提交，不能把非法金额当作零', () => {
+  for (const [receivedMinor, refundedMinor] of [[null, 0], [100, undefined], ['', 0], [false, 0], [100, NaN], [100, 101]]) {
+    views.openRefundModal({ id: 'refund-contract', receivedMinor, refundedMinor }, {});
+    const root = documentStub.getElementById('modal-root');
+    assert.ok(textOf(root).includes('无法计算可退上限'));
+    assert.equal(findButtonByText(root, '确认退款').disabled, true);
+    assert.equal(findAll(root, n => n.tagName === 'INPUT')[0].disabled, true);
+    findAll(root, n => n.classList.contains('modal-close'))[0].click();
+  }
 });

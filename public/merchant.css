@@ -60,6 +60,8 @@ code { font-family: var(--font-mono); }
 ul { margin: 0; }
 
 :focus-visible { outline: none; box-shadow: var(--focus-ring); border-radius: 6px; }
+/* Route focus announces the workspace without drawing a ring around the page. */
+.workspace:focus { outline: none; box-shadow: none; }
 .hidden { display: none !important; }
 .muted { color: var(--muted); }
 .mono { font-family: var(--font-mono); font-size: 12.5px; }

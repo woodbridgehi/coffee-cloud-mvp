@@ -41,3 +41,14 @@ test('fmtAgo：空值显示「从未」，可注入当前时间', () => {
   assert.equal(fmtAgo(new Date(now - 60_000).toISOString(), now), '1 分钟前');
   assert.equal(fmtAgo(new Date(now - 45 * 3600_000).toISOString(), now), '2 天前');
 });
+
+
+test('金额和比率拒绝隐式转成零的值，整数分不静默舍入', () => {
+  for (const value of ['', '   ', false, true, [], {}, NaN, Infinity]) {
+    assert.equal(fmtMoney(value), '—');
+    assert.equal(fmtPercent(value), '—');
+  }
+  for (const value of [0.5, -0.5, Number.MAX_SAFE_INTEGER + 1]) assert.equal(fmtMoney(value), '—');
+  assert.equal(fmtMoney('1250'), '¥12.50');
+  assert.equal(fmtPercent('0'), '0.0%');
+});

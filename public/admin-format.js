@@ -11,13 +11,17 @@
 
 export const UNKNOWN_LABEL = '—';
 
+function numeric(value) {
+  return typeof value === 'number' || (typeof value === 'string' && value.trim() !== '');
+}
+
 /** 金额（分）→ 展示字符串；未知返回「—」。 */
 export function fmtMoney(minor, currency) {
-  if (minor === null || minor === undefined) return UNKNOWN_LABEL;
+  if (!numeric(minor)) return UNKNOWN_LABEL;
   const n = Number(minor);
-  if (!Number.isFinite(n)) return UNKNOWN_LABEL;
+  if (!Number.isSafeInteger(n)) return UNKNOWN_LABEL;
   const sign = n < 0 ? '-' : '';
-  const abs = Math.abs(Math.round(n));
+  const abs = Math.abs(n);
   const body = `${Math.floor(abs / 100)}.${String(abs % 100).padStart(2, '0')}`;
   return currency === 'CNY' || !currency ? `${sign}¥${body}` : `${sign}${body} ${currency}`;
 }
@@ -47,7 +51,7 @@ export function fmtAgo(value, now = Date.now()) {
 
 /** 比率（0–1）→ 百分比；缺失返回「—」。 */
 export function fmtPercent(rate) {
-  if (rate === null || rate === undefined) return UNKNOWN_LABEL;
+  if (!numeric(rate)) return UNKNOWN_LABEL;
   const n = Number(rate);
   if (!Number.isFinite(n)) return UNKNOWN_LABEL;
   return `${(n * 100).toFixed(1)}%`;
