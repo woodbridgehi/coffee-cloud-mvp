@@ -20,12 +20,8 @@ class MerchantBoundary:
                         b"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"))
             await send(message)
 
-        # GET/HEAD/OPTIONS requests do not need a request-body limit.  In
-        # particular, consuming and replaying `receive` for the merchant
-        # shell and its ES modules can race with an HTTP client disconnect
-        # after the response has started, yielding truncated static assets.
-        # Pass those requests through untouched while retaining the merchant
-        # response headers above.
+        # Read-only requests do not need the write-endpoint body buffer.
+        # Preserve their receive stream and retain the response headers above.
         if scope['method'] in {'GET', 'HEAD', 'OPTIONS'}:
             return await self.app(scope, receive, safe_send)
 

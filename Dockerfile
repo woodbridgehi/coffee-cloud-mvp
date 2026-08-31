@@ -14,6 +14,10 @@ RUN pip install --no-cache-dir -r requirements.lock
 
 COPY app ./app
 COPY public ./public
+# Local copies can carry owner-only permissions (e.g. 0600). COPY preserves
+# those modes but makes root the owner; the non-root server must read every
+# static module, including modules imported by the merchant entry point.
+RUN chmod -R a+rX ./public
 
 USER appuser
 
