@@ -5,3 +5,27 @@
 .pytest_cache/
 __pycache__/
 *.py[cod]
+
+# ---- 以下为补充（避免与上方原有规则重复）----
+# Lint / 类型检查缓存（.ruff_cache 此前仅靠其内部自动生成的 * 自忽略，显式声明更稳）
+.ruff_cache/
+.mypy_cache/
+
+# 测试覆盖率
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# 数据库备份（README §6 升级前 pg_dump 产物会落在仓库根目录）
+*.dump
+*.bak
+
+# IDE / 编辑器
+.idea/
+.vscode/
+
+# 日志与临时文件
+*.log
+*.tmp
+*.swp

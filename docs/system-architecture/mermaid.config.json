@@ -1,0 +1,7 @@
+{
+  "theme": "neutral",
+  "fontFamily": "Arial, PingFang SC, Microsoft YaHei, sans-serif",
+  "flowchart": { "htmlLabels": false, "curve": "linear", "useMaxWidth": true },
+  "sequence": { "useMaxWidth": true, "wrap": true, "actorFontSize": 16, "messageFontSize": 16 },
+  "er": { "useMaxWidth": true }
+}
