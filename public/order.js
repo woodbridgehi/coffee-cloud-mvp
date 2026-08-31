@@ -87,22 +87,20 @@ function orderLabel(status) {
 
 /* ---------- 品牌与图形 ---------- */
 
-function baseHeader(pillClass, pillText) {
-  return `<header class="brand-row">
-    <div class="brand">
-      <div class="brand-mark" aria-hidden="true">
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
-          <path d="M4 9h12v6.5a4.5 4.5 0 0 1-4.5 4.5h-3A4.5 4.5 0 0 1 4 15.5V9Z" fill="currentColor" opacity=".92"/>
-          <path d="M16 10.5h1.8a2.7 2.7 0 0 1 0 5.4H16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-          <path d="M7.5 6c0-1.2 1-1.6 1-2.8M11 6c0-1.2 1-1.6 1-2.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" opacity=".7"/>
-        </svg>
-      </div>
-      <div>
-        <div class="eyebrow">Robot Coffee</div>
-        <h1>Woodbridge Coffee</h1>
-      </div>
+const brandCoffeeSvg = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+  <path d="M4 9h12v6.5a4.5 4.5 0 0 1-4.5 4.5h-3A4.5 4.5 0 0 1 4 15.5V9Z" fill="currentColor" opacity=".92"/>
+  <path d="M16 10.5h1.8a2.7 2.7 0 0 1 0 5.4H16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+  <path d="M7.5 6c0-1.2 1-1.6 1-2.8M11 6c0-1.2 1-1.6 1-2.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" opacity=".7"/>
+</svg>`;
+
+function baseHeader(pillClass, pillText, sub) {
+  return `<header class="devicebar">
+    <span class="db-logo" aria-hidden="true">${brandCoffeeSvg}</span>
+    <div class="db-info">
+      <strong>Woodbridge Coffee</strong>
+      <span class="db-sub">${sub ? sub : 'Robot Coffee · 扫码下单'}</span>
     </div>
-    <div class="live-pill ${pillClass}"><span class="dot" aria-hidden="true"></span><span class="lp-text">${esc(pillText)}</span></div>
+    <span class="db-pill ${pillClass}"><span class="dot" aria-hidden="true"></span><span class="lp-text">${esc(pillText)}</span></span>
   </header>`;
 }
 
@@ -209,34 +207,37 @@ function renderMenu() {
   const sellable = menu.salesEnabled && available.length > 0;
 
   app.innerHTML = `
-    ${baseHeader(menu.online ? '' : 'warn', menu.online ? '设备在线' : '设备离线')}
-    <section class="hero">
-      <div class="eyebrow">${esc(menu.storeId || menu.deviceId || '')}</div>
-      <h2>现在，来一杯<br>机器人现磨咖啡</h2>
-      <p>饮品、余量与时长由设备实时上报，云端逐单确认。</p>
-    </section>
-    <section class="machine-card" aria-label="设备状态">
-      <div class="machine-meta">
-        <span class="status-dot ${menu.online ? 'online' : ''}" aria-hidden="true"></span>
-        <div>
-          <strong>${menu.online ? '设备在线 · 可以下单' : '设备离线 · 暂停接单'}</strong>
-          <small>设备状态 ${esc(menu.deviceStatus || 'UNKNOWN')}</small>
+    ${baseHeader(menu.online ? '' : 'warn', menu.online ? '设备在线' : '设备离线', esc(menu.storeId || menu.deviceId || ''))}
+    <main class="page-main has-checkout">
+      <section class="hero">
+        <div class="hero-kicker">今日菜单</div>
+        <h1>现在，来一杯<br>机器人现磨咖啡</h1>
+        <p class="hero-sub">饮品、余量与时长由设备实时上报，云端逐单确认。</p>
+      </section>
+      <section class="machine-card" aria-label="设备状态">
+        <div class="machine-meta">
+          <span class="status-dot ${menu.online ? 'online' : ''}" aria-hidden="true"></span>
+          <div>
+            <strong>${menu.online ? '设备在线 · 可以下单' : '设备离线 · 暂停接单'}</strong>
+            <small>设备状态 ${esc(menu.deviceStatus || 'UNKNOWN')}</small>
+          </div>
         </div>
+        <div class="stock-summary">
+          <strong>${totalRemaining}</strong>
+          <small>预计可售杯数</small>
+        </div>
+      </section>
+      <div class="section-title">
+        <h2>今日可售</h2>
+        <span>${menu.materialAlertCount ? '有物料待补充' : '共享原料状态正常'}</span>
       </div>
-      <div class="stock-summary">
-        <strong>${totalRemaining}</strong>
-        <small>预计可售杯数</small>
-      </div>
-    </section>
-    <div class="section-title">
-      <h3>今日可售</h3>
-      <span>${menu.materialAlertCount ? '有物料待补充' : '共享原料状态正常'}</span>
-    </div>
-    ${menu.products.length ? `<section class="drink-list">${menu.products.map(card).join('')}</section>`
-      : `<section class="center-state" style="min-height:32vh"><p>设备尚未上报可售饮品，请稍后重试。</p></section>`}
-    <div class="notice">${online
-      ? '付款由支付宝处理，云端确认支付成功后才会向设备派发制作任务。支付完成后请保持订单状态页打开，直到取杯。'
-      : '当前为内部联调模式（免支付），下单会真实触发模拟终端制作，仅供验收使用。'}</div>
+      ${menu.products.length ? `<section class="drink-list">${menu.products.map(card).join('')}</section>`
+        : `<section class="center-state" style="min-height:32vh"><p>设备尚未上报可售饮品，请稍后重试。</p></section>`}
+      <div class="notice">${online
+        ? '付款由支付宝处理，云端确认支付成功后才会向设备派发制作任务。支付完成后请保持订单状态页打开，直到取杯。'
+        : '当前为内部联调模式（免支付），下单会真实触发模拟终端制作，仅供验收使用。'}</div>
+      <p class="page-foot">由 Coffee Cloud 提供技术支持 · 价格与库存以设备实时数据为准</p>
+    </main>
     <section class="checkout" aria-label="结算栏">
       <div class="checkout-copy">
         <strong>${selected ? esc(selected.name) : '请选择一款饮品'}</strong>
@@ -497,40 +498,46 @@ function renderOrder(order) {
        未拿到 provider 时用中性文案，避免误导；仅文案差异，不改布局、href 与二维码行为。 */
     const provider = order.payment?.provider || '';
     const isMockProvider = provider === 'alipay_mock';
-    const payTitle = isMockProvider ? '请完成模拟付款' : provider ? '请完成支付宝付款' : '请完成付款';
+    const isAlipayProvider = provider === 'alipay';
+    const payTitle = isMockProvider ? '请完成模拟付款' : isAlipayProvider ? '请完成支付宝付款' : '请完成付款';
     const payLead = isMockProvider ? '仅为模拟付款，不产生真实扣款；确认后后台会按订单流程处理。' : '支付成功前，不会向设备派发制作任务。';
-    const payQrAlt = isMockProvider ? '模拟付款二维码' : provider ? '支付宝付款二维码' : '付款二维码';
-    const payButton = isMockProvider ? '打开模拟付款页' : provider ? '打开支付宝付款' : '打开付款页';
+    const payQrAlt = isMockProvider ? '模拟付款二维码' : isAlipayProvider ? '支付宝付款二维码' : '付款二维码';
+    const payButton = isMockProvider ? '打开模拟付款页' : isAlipayProvider ? '打开支付宝付款' : '打开付款页';
+    const payTag = isMockProvider ? '<span class="pay-tag mock">alipay_mock · 模拟渠道</span>'
+      : isAlipayProvider ? '<span class="pay-tag live">支付宝</span>' : '';
     document.title = 'Woodbridge Coffee · 等待支付';
     app.innerHTML = `
-      ${baseHeader('warn', '等待支付确认')}
-      <section class="order-head">
-        <div>
-          <div class="eyebrow">Secure payment</div>
-          <div class="order-no">订单号 ${esc(order.orderNo)}</div>
+      ${baseHeader('warn', '等待支付确认', `订单 ${esc(order.orderNo)}`)}
+      <main class="page-main">
+        <div class="pay-grid">
+          <section class="pay-order-card" aria-label="订单信息">
+            <h1>${payTitle}</h1>
+            <p class="lead">${payLead}</p>
+            <div class="pay-product-row">
+              <span class="pp-name">
+                <strong>${esc(order.product?.name || '饮品')} × 1</strong>
+                <small>扫码下单 · 云端逐单确认</small>
+              </span>
+              <span class="pay-amount"><strong>${money({ priceMinor: order.totalAmountMinor, currency: order.currency })}</strong><small>合计</small></span>
+            </div>
+            ${milestoneMarkup(order)}
+            <div class="pay-side-actions">
+              <button class="btn-secondary" id="refresh">刷新支付状态</button>
+              <span class="pay-hint">支付状态由服务端实时推送，二维码加载后保持不变</span>
+            </div>
+          </section>
+          <aside class="pay-panel" aria-label="支付面板">
+            <div class="pay-panel-head"><strong>扫码支付</strong>${payTag}</div>
+            <div class="qr-frame"><img id="payment-qr" alt="${payQrAlt}"></div>
+            <p class="qr-note" id="payment-qr-note">二维码加载后保持不变，刷新不会导致重复支付</p>
+            <div class="pay-actions">
+              ${order.payment?.qrCode
+                ? `<a class="btn-primary" href="${esc(order.payment.qrCode)}">${payButton}</a>`
+                : '<span class="pay-hint">正在获取付款方式…</span>'}
+            </div>
+          </aside>
         </div>
-      </section>
-      <section class="status-hero">
-        <div class="eyebrow">${esc(order.product?.name || '饮品')}</div>
-        <h1>${payTitle}</h1>
-        <p class="lead">${payLead}</p>
-        ${milestoneMarkup(order)}
-        <div class="pay-card">
-          <div class="pay-amount"><strong>${money({ priceMinor: order.totalAmountMinor, currency: order.currency })}</strong><small>合计</small></div>
-          <div class="qr-frame"><img id="payment-qr" alt="${payQrAlt}"></div>
-          <p class="qr-note" id="payment-qr-note">二维码加载后保持不变，刷新不会导致重复支付</p>
-          <div class="pay-actions">
-            ${order.payment?.qrCode
-              ? `<a class="btn-primary" href="${esc(order.payment.qrCode)}">${payButton}</a>`
-              : '<span class="pay-hint">正在获取付款方式…</span>'}
-            <span class="pay-hint">支付状态由服务端实时推送</span>
-          </div>
-        </div>
-      </section>
-      <footer class="status-foot">
-        <span>支付状态由服务端实时推送，二维码加载后保持不变</span>
-        <button class="btn-secondary" id="refresh">刷新状态</button>
-      </footer>`;
+      </main>`;
     document.getElementById('refresh').onclick = loadOrder;
     attachPaymentQr(order, token);
     return;
@@ -563,38 +570,42 @@ function renderOrder(order) {
       : '等待设备返回计划时长';
 
   app.innerHTML = `
-    ${baseHeader(terminal ? 'idle' : '', terminal ? '状态已确认' : '实时同步中')}
-    <section class="order-head">
-      <div>
-        <div class="eyebrow">Live order</div>
-        <div class="order-no">订单号 ${esc(order.orderNo)}</div>
+    ${baseHeader(terminal ? 'idle' : '', terminal ? '状态已确认' : '实时同步中', `订单 ${esc(order.orderNo)}`)}
+    <main class="page-main">
+      ${bannerFor(order)}
+      <div class="status-grid">
+        <section class="status-card" aria-label="制作进度">
+          <div class="progress-wrap">
+            <div class="progress-ring" style="--progress:${percent * 3.6}deg" role="img" aria-label="整杯进度 ${percent}%">
+              <div><strong>${percent}%</strong><small>整杯进度</small></div>
+            </div>
+            <div class="now-step">
+              <strong>${esc(order.production?.currentStepName || orderLabel(order.status))}</strong>
+              <span>${timing}</span>
+              <span class="muted-line">${esc(order.product?.name || '饮品')} × 1 · ${money({ priceMinor: order.totalAmountMinor, currency: order.currency })}</span>
+            </div>
+          </div>
+          <strong>${orderLabel(order.status)}</strong>
+          <div class="status-meta">${esc(statusNote(order))}</div>
+          ${milestoneMarkup(order)}
+          <button class="btn-secondary" id="refresh">刷新状态</button>
+          <p class="pay-hint" style="margin-top:10px">${terminal ? '最终状态已存档，实时更新已停止' : '制作状态实时刷新，请保持页面打开'}</p>
+        </section>
+        <section class="status-steps">
+          <div class="steps-card">
+            <h2>制作步骤</h2>
+            <ol class="timeline" aria-label="制作步骤">${timeline}</ol>
+          </div>
+          <div class="ops-card">
+            <strong>支付、原料与设备分层确认</strong>
+            <p>支付结果由支付平台确认；设备接受任务后才预留整杯物料；制作终态以设备持久化事件为准。</p>
+          </div>
+        </section>
       </div>
-    </section>
-    <section class="status-hero">
-      <div class="eyebrow">${esc(order.product?.name || '饮品')}</div>
-      <h1>${orderLabel(order.status)}</h1>
-      <p class="lead">${esc(statusNote(order))}</p>
-      ${milestoneMarkup(order)}
-      <div class="progress-wrap">
-        <div class="progress-ring" style="--progress:${percent * 3.6}deg" role="img" aria-label="整杯进度 ${percent}%">
-          <div><strong>${percent}%</strong><small>整杯进度</small></div>
-        </div>
-        <div class="now-step">
-          <strong>${esc(order.production?.currentStepName || orderLabel(order.status))}</strong>
-          <span>${timing}</span>
-        </div>
-      </div>
-    </section>
-    ${bannerFor(order)}
-    <ol class="timeline" aria-label="制作步骤">${timeline}</ol>
-    <div class="ops-card">
-      <strong>支付、原料与设备分层确认</strong>
-      <p>支付结果由支付平台确认；设备接受任务后才预留整杯物料；制作终态以设备持久化事件为准。</p>
-    </div>
-    <footer class="status-foot">
-      <span>${terminal ? '最终状态已存档' : '制作状态实时刷新'}</span>
-      <button class="btn-secondary" id="refresh">刷新状态</button>
-    </footer>`;
+      <footer class="status-foot">
+        <span>${terminal ? '最终状态已存档' : '制作状态实时刷新'}</span>
+      </footer>
+    </main>`;
   document.getElementById('refresh').onclick = loadOrder;
 }
 
@@ -602,13 +613,16 @@ function renderError(message, retry = false) {
   document.title = 'Woodbridge Coffee · 出错了';
   app.innerHTML = `
     ${baseHeader('idle', '连接中断')}
-    <section class="center-state">
-      <div class="error-box">
-        <strong>暂时无法继续</strong>
-        <p>${esc(message)}</p>
-        ${retry ? '<button class="btn-secondary" id="retry">重新连接</button>' : ''}
-      </div>
-    </section>`;
+    <main class="page-main">
+      <section class="center-state">
+        <div class="brew-loader" aria-hidden="true"><i></i><i></i><i></i></div>
+        <div class="error-box">
+          <strong>暂时无法继续</strong>
+          <p>${esc(message)}</p>
+          ${retry ? '<button class="btn-secondary" id="retry">重新连接</button>' : ''}
+        </div>
+      </section>
+    </main>`;
   if (retry) {
     const node = document.getElementById('retry');
     if (node) node.onclick = () => location.reload();

@@ -455,6 +455,7 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
     state.expandedOperatorId = null;
     closeModal();
     $('shell').classList.add('hidden');
+    $('bottom-nav')?.classList.add('hidden');
     $('login-view').classList.remove('hidden');
     document.title = 'Coffee Cloud · 设备运营台';
     if (message) toast(message, 'error');
@@ -496,11 +497,39 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
         class: `nav-item${state.view === def.id ? ' active' : ''}`,
         type: 'button',
         'aria-current': state.view === def.id ? 'page' : null,
-        onclick: () => { location.hash = `#/${def.id}`; },
+        onclick: () => { location.hash = `#/${def.id}`; closeMobileNav(); },
       },
         el('span', { class: 'n-icon', html: def.icon, 'aria-hidden': 'true' }),
         el('span', null, def.label)));
     }
+    buildBottomNav();
+  }
+
+  /* Mobile 底部导航：视图数量 ≤5，全部纳入；账号与退出在抽屉侧栏 */
+  function buildBottomNav() {
+    const bar = $('bottom-nav');
+    if (!bar) return;
+    clear(bar);
+    const defs = VIEW_DEFS.filter(def => can(def.perm));
+    if (!state.token || !defs.length) {
+      bar.classList.add('hidden');
+      return;
+    }
+    bar.append(el('div', { class: 'bottom-nav-grid' }, defs.map(def => el('button', {
+      class: state.view === def.id ? 'active' : '',
+      type: 'button',
+      'aria-current': state.view === def.id ? 'page' : null,
+      onclick: () => { location.hash = `#/${def.id}`; },
+    },
+      el('span', { class: 'n-icon', html: def.icon, 'aria-hidden': 'true' }),
+      el('span', { class: 'bn-label' }, def.label)))));
+    bar.classList.remove('hidden');
+  }
+
+  function closeMobileNav() {
+    document.body.classList.remove('nav-open');
+    const veil = $('nav-veil');
+    if (veil) veil.classList.add('hidden');
   }
 
   function currentViewDef() { return VIEW_DEFS.find(def => def.id === state.view); }
@@ -1639,5 +1668,10 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
   $('login-form').addEventListener('submit', handleLogin);
   $('logout-btn').addEventListener('click', logout);
   $('refresh-btn').addEventListener('click', refreshNow);
+  $('hamburger')?.addEventListener('click', () => {
+    document.body.classList.add('nav-open');
+    $('nav-veil')?.classList.remove('hidden');
+  });
+  $('nav-veil')?.addEventListener('click', closeMobileNav);
   window.addEventListener('hashchange', () => { if (state.token) route(); });
 })();

@@ -672,16 +672,30 @@ function readFragmentToken() {
   }
 }
 
-function authShell(card) {
+function authShell(card, heading) {
   const wrap = $('auth-view');
   clearNode(wrap);
-  wrap.append(el('div', { class: 'auth-card' },
-    el('div', { class: 'auth-brand' },
+  /* Light Fresh 认证分栏：280px 说明 + 420px 表单，手机单列（CSS 控制）。
+     表单内容仍由 renderAuth 各分支产生，业务逻辑不变。 */
+  wrap.append(
+    el('header', { class: 'auth-brandbar' },
       el('span', { class: 'auth-mark', html: icon.coffee, 'aria-hidden': 'true' }),
-      el('div', null,
-        el('div', { class: 'auth-eyebrow' }, 'Coffee Cloud'),
-        el('h1', null, '客户运营后台'))),
-    card));
+      el('span', { class: 'auth-eyebrow' }, 'Coffee Cloud'),
+      el('span', { class: 'auth-brand-sub' }, '客户运营后台')),
+    el('div', { class: 'auth-main' },
+      el('div', { class: 'auth-grid' },
+        el('aside', { class: 'auth-aside' },
+          el('div', { class: 'auth-kicker' }, 'Merchant Workspace'),
+          el('h2', null, '登录你的咖啡经营组织'),
+          el('p', null, 'Coffee Cloud 帮助连锁咖啡商户管理自助咖啡机设备、订单与成本。此处为商户账号入口，平台运维请使用独立的 Token 入口。'),
+          el('ul', { class: 'auth-points' },
+            ['一个账号可归属多个组织，登录后可在顶栏切换',
+              '角色（OWNER / OPERATOR / FINANCE）决定可见模块与操作',
+              '敏感操作需要重新验证密码，会话由服务端管理'].map(text =>
+              el('li', null, el('span', { html: icon.check, 'aria-hidden': 'true' }), el('span', null, text))))),
+        el('section', { class: 'auth-form-col' },
+          heading ? el('h1', { class: 'auth-heading' }, heading) : null,
+          card))));
   wrap.classList.remove('hidden');
   $('shell').classList.add('hidden');
 }
@@ -761,7 +775,7 @@ function renderAuth() {
     authShell(el('div', null,
       el('p', { class: 'auth-note' }, '会话由服务端 HttpOnly Cookie 管理；本页面不保存任何密码或令牌。'),
       hintBox, form,
-      authLinkRow(links)));
+      authLinkRow(links)), '登录');
     return;
   }
 
@@ -861,7 +875,7 @@ function renderAuth() {
         submit, errorNode);
     }
     authShell(el('div', null, el('p', { class: 'auth-note' }, '创建组织账号后，你将成为该组织的 OWNER。'), hintBox, form,
-      authLinkRow([el('a', { href: '#/login' }, '返回登录')])));
+      authLinkRow([el('a', { href: '#/login' }, '返回登录')])), '创建组织账号');
     return;
   }
 
@@ -890,7 +904,7 @@ function renderAuth() {
       el('div', { class: 'field' }, el('span', { class: 'field-label' }, '注册邮箱 *'), email),
       submit, errorNode);
     authShell(el('div', null, el('p', { class: 'auth-note' }, '通过邮箱链接重置密码。'), form,
-      authLinkRow([el('a', { href: '#/login' }, '返回登录')])));
+      authLinkRow([el('a', { href: '#/login' }, '返回登录')])), '找回密码');
     return;
   }
 
@@ -926,7 +940,7 @@ function renderAuth() {
       el('div', { class: 'field' }, el('span', { class: 'field-label' }, '确认新密码 *'), confirm),
       submit, errorNode);
     authShell(el('div', null, el('p', { class: 'auth-note' }, 'token 来自邮件链接的地址栏片段，仅保留在当前页面内存中。'), form,
-      authLinkRow([el('a', { href: '#/login' }, '返回登录')])));
+      authLinkRow([el('a', { href: '#/login' }, '返回登录')])), '重置密码');
     return;
   }
 
@@ -949,7 +963,7 @@ function renderAuth() {
       el('p', { class: 'auth-note' }, '验证不会自动执行：请核对 token 后点击按钮确认，验证链接只能使用一次。'),
       el('div', { class: 'field' }, el('span', { class: 'field-label' }, '验证 token *'), tokenInput),
       submit, errorNode,
-      authLinkRow([el('a', { href: '#/login' }, '返回登录')])));
+      authLinkRow([el('a', { href: '#/login' }, '返回登录')])), '验证邮箱');
     return;
   }
 
@@ -985,7 +999,7 @@ function renderAuth() {
     submit, errorNode);
   authShell(el('div', null,
     el('p', { class: 'auth-note' }, '已有账号的成员请先登录，再通过组织内的邀请确认入口接受，无需在此修改密码。'),
-    form, authLinkRow([el('a', { href: '#/login' }, '返回登录')])));
+    form, authLinkRow([el('a', { href: '#/login' }, '返回登录')])), '接受邀请');
 }
 
 function authResultPage(title, lines, links = []) {
@@ -998,26 +1012,17 @@ function authResultPage(title, lines, links = []) {
 
 /** 配置获取失败：诚实展示错误与重试，不回退演示、不假定任何登录方式可用。 */
 function renderAuthConfigError(error) {
-  const wrap = $('auth-view');
-  if (!wrap) return;
-  clearNode(wrap);
-  wrap.append(el('div', { class: 'auth-card' },
-    el('div', { class: 'auth-brand' },
-      el('span', { class: 'auth-mark', html: icon.coffee, 'aria-hidden': 'true' }),
-      el('div', null,
-        el('div', { class: 'auth-eyebrow' }, 'Coffee Cloud'),
-        el('h1', null, '客户运营后台'))),
-    el('div', { class: 'auth-result' },
-      el('span', { class: 'result-icon error', html: icon.alert, 'aria-hidden': 'true' }),
-      el('h2', null, '无法加载登录配置'),
-      el('p', { class: 'muted' }, '页面需要先获取注册与登录方式配置，才能展示正确的表单。当前配置获取失败，不会假定认证可用。'),
-      el('p', { class: 'muted', style: 'overflow-wrap:anywhere' }, describeMerchantError(error)),
-      el('div', { class: 'auth-links' },
-        el('button', { class: 'btn secondary', type: 'button', onclick: () => startWithAuthConfig() }, '重试')),
-      el('p', { class: 'field-hint' }, '可稍后重试，或刷新页面重新加载；不会回退到演示模式，也不会在未取得配置前展示登录表单。'))));
-  wrap.classList.remove('hidden');
-  $('shell')?.classList.add('hidden');
+  /* 复用认证分栏外壳；仅展示错误与重试，不渲染任何输入框 */
+  authShell(el('div', { class: 'auth-result' },
+    el('span', { class: 'result-icon error', html: icon.alert, 'aria-hidden': 'true' }),
+    el('h2', null, '无法加载登录配置'),
+    el('p', { class: 'muted' }, '页面需要先获取注册与登录方式配置，才能展示正确的表单。当前配置获取失败，不会假定认证可用。'),
+    el('p', { class: 'muted', style: 'overflow-wrap:anywhere' }, describeMerchantError(error)),
+    el('div', { class: 'auth-links' },
+      el('button', { class: 'btn secondary', type: 'button', onclick: () => startWithAuthConfig() }, '重试')),
+    el('p', { class: 'field-hint' }, '可稍后重试，或刷新页面重新加载；不会回退到演示模式，也不会在未取得配置前展示登录表单。')));
 }
+
 
 /* ============================================================
    会话 / 外壳
@@ -1062,6 +1067,7 @@ function forceLogout(message) {
   closeDrawer();
   if (activeModal) closeModal();
   $('shell').classList.add('hidden');
+  $('bottom-nav')?.classList.add('hidden');
   updateEnvBanner();
   renderAuth();
   if (message) toast(message, 'error');
@@ -1147,6 +1153,31 @@ function buildShell() {
       el('strong', null, state.session.user.displayName || accountLabel(state.session.user)),
       el('span', { class: 'muted' }, `${ROLE_LABEL[roleNow()] || roleNow() || ''} · ${state.session.tenant.name}`));
   }
+  buildBottomNav();
+}
+
+/* Mobile 底部导航：仅承载高频视图（同样受权限门控），
+   其余视图仍可从抽屉侧栏到达，不新增任何业务语义。 */
+const BOTTOM_NAV_IDS = ['dashboard', 'orders', 'devices', 'reports'];
+
+function buildBottomNav() {
+  const bar = $('bottom-nav');
+  if (!bar) return;
+  clearNode(bar);
+  const defs = VIEW_DEFS.filter(def => BOTTOM_NAV_IDS.includes(def.id) && can(def.perm));
+  if (!state.session || !defs.length) {
+    bar.classList.add('hidden');
+    return;
+  }
+  bar.append(el('div', { class: 'bottom-nav-grid' }, defs.map(def => el('button', {
+    class: state.view === def.id ? 'active' : '',
+    type: 'button',
+    'aria-current': state.view === def.id ? 'page' : null,
+    onclick: () => { location.hash = `#/${def.id}`; },
+  },
+    el('span', { class: 'n-icon', html: def.icon, 'aria-hidden': 'true' }),
+    el('span', { class: 'bn-label' }, def.label)))));
+  bar.classList.remove('hidden');
 }
 
 function closeMobileNav() {
@@ -1216,7 +1247,7 @@ function buildShellControls() {
   holder.append(
     el('label', { class: 'm-ctl' }, el('span', { class: 'm-ctl-label' }, '组织'), orgSelect),
     el('label', { class: 'm-ctl' }, el('span', { class: 'm-ctl-label' }, '门店'), storeSelect),
-    el('div', { class: 'm-ctl' }, el('span', { class: 'm-ctl-label' }, '日期区间'), rangeBtn),
+    el('div', { class: 'm-ctl' }, el('span', { class: 'm-ctl-label' }, '日期区间'), pop.wrap),
     el('div', { class: 'm-ctl' }, el('span', { class: 'm-ctl-label' }, '数据环境'), envWrap),
     buildUserMenu());
 }
@@ -1272,7 +1303,8 @@ function buildUserMenu() {
       }, '撤销其他会话'),
       el('button', { class: 'btn ghost small block', type: 'button', onclick: () => { closePopover(pop); doLogout(); } }, '退出登录')));
   const pop = attachPopover(btn, panel);
-  return el('div', { class: 'm-ctl' }, el('span', { class: 'm-ctl-label' }, '账号'), btn);
+  /* 挂载定位容器（m-pop）而非单独的按钮，保证 pop-panel 在文档流内可定位 */
+  return el('div', { class: 'm-ctl' }, el('span', { class: 'm-ctl-label' }, '账号'), pop.wrap);
 }
 
 /* ---------------- Popover ---------------- */
@@ -1437,7 +1469,12 @@ function renderDashboardView(root) {
     el('div', { class: 'card-head' }, el('h3', null, '最近订单'),
       el('button', { class: 'btn ghost small', type: 'button', onclick: () => { location.hash = '#/orders'; } }, '全部订单 →')),
     el('div', { class: 'card-body' }, skeletonRows(4)));
-  root.append(releaseNoteNode(), cards, trend, el('div', { class: 'split-2' }, alerts, recent));
+  /* 主/辅分栏：左侧经营指标 + 趋势，右侧告警队列；最近订单全宽置底 */
+  root.append(releaseNoteNode(),
+    el('div', { class: 'dash-grid' },
+      el('div', { class: 'dash-main' }, cards, trend),
+      el('div', { class: 'dash-side' }, alerts)),
+    recent);
   loadRegion(cards, loadDashboardCards);
   loadRegion(trend, loadDashboardTrend);
   loadRegion(alerts, loadDashboardAlerts);
