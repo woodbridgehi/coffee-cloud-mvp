@@ -191,7 +191,7 @@ class OrderAdjudicationRequest(BaseModel):
 
 
 class PaymentCreateRequest(BaseModel):
-    provider: Literal["alipay", "mock"] | None = None
+    provider: Literal["alipay", "alipay_mock", "mock"] | None = None
 
 
 class RefundCreateRequest(BaseModel):

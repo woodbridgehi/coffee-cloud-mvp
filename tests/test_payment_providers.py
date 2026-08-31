@@ -1,5 +1,7 @@
 import base64
 import json
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 from cryptography.hazmat.primitives import hashes, serialization
@@ -75,7 +77,12 @@ def test_alipay_provider_parses_gbk_sandbox_response(monkeypatch: pytest.MonkeyP
         def raise_for_status(self) -> None:
             return None
 
-    monkeypatch.setattr("app.payment_providers.httpx.post", lambda *args, **kwargs: Response())
+    def post(*args, **kwargs):
+        timestamp = datetime.strptime(kwargs["data"]["timestamp"], "%Y-%m-%d %H:%M:%S")
+        shanghai_now = datetime.now(ZoneInfo("Asia/Shanghai")).replace(tzinfo=None)
+        assert abs((shanghai_now - timestamp).total_seconds()) < 5
+        return Response()
+    monkeypatch.setattr("app.payment_providers.httpx.post", post)
     assert provider.query_payment("merchant-1").status == "PENDING"
 
 

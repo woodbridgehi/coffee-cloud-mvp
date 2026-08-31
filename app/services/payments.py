@@ -109,6 +109,8 @@ class PaymentApplicationService:
                         transition_order(connection, order, "AWAITING_PAYMENT", "payment-service", reason="payment created")
                     orders.update_payment_status(order_id, "PENDING")
 
+        # A retried CREATED intent retains its original channel after a default switch.
+        provider_name = payment["provider"]
         provider = self.provider_factory(provider_name)
         request_value = PaymentRequest(
             merchant_payment_no=payment["merchant_payment_no"], amount_minor=payment["amount_minor"],
@@ -171,16 +173,19 @@ class PaymentApplicationService:
             raise ServiceError(409, "payment QR code is not ready")
         return str(payment["qr_code"])
 
-    def alipay_callback(self, values: dict[str, str]) -> str:
+    def alipay_callback(self, values: dict[str, str], *, provider_name: str = "alipay") -> str:
         try:
-            parsed = self.provider_factory("alipay").verify_and_parse_callback(values)
-            if parsed.get("app_id") and parsed.get("app_id") != self.settings.alipay_app_id:
+            if provider_name not in {"alipay", "alipay_mock"}:
+                raise ValueError("unsupported RSA2 callback channel")
+            parsed = self.provider_factory(provider_name).verify_and_parse_callback(values)
+            expected_app_id = getattr(self.settings, provider_name + "_app_id")
+            if not expected_app_id or parsed.get("app_id") != expected_app_id:
                 raise ValueError("Alipay callback app_id mismatch")
             if parsed.get("trade_status") not in {"TRADE_SUCCESS", "TRADE_FINISHED"}:
                 return "success"
             with self.uow.transaction() as connection:
                 apply_paid_callback(
-                    connection, provider="alipay", event_id=callback_event_id("alipay", parsed), values=parsed
+                    connection, provider=provider_name, event_id=callback_event_id(provider_name, parsed), values=parsed
                 )
             return "success"
         except (ValueError, ServiceError) as exc:

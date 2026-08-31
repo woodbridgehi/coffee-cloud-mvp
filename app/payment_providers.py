@@ -10,6 +10,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 from urllib.parse import urlencode
+from zoneinfo import ZoneInfo
 
 import httpx
 from cryptography.hazmat.primitives import hashes, serialization
@@ -152,7 +153,7 @@ class AlipayProvider(PaymentProvider):
             "format": "JSON",
             "charset": "utf-8",
             "sign_type": "RSA2",
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "timestamp": datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S"),
             "version": "1.0",
             "biz_content": json.dumps(biz_content, ensure_ascii=False, separators=(",", ":")),
             **(common_params or {}),

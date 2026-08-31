@@ -490,6 +490,14 @@ function renderOrder(order) {
   const terminal = [...TERMINAL_STATUSES, 'REFUNDED'].includes(order.status);
 
   if (['CREATED', 'AWAITING_PAYMENT'].includes(order.status)) {
+    /* 支付等待页文案：按 order.payment.provider 区分独立模拟（alipay_mock）与支付宝。
+       未拿到 provider 时用中性文案，避免误导；仅文案差异，不改布局、href 与二维码行为。 */
+    const provider = order.payment?.provider || '';
+    const isMockProvider = provider === 'alipay_mock';
+    const payTitle = isMockProvider ? '请完成模拟付款' : provider ? '请完成支付宝付款' : '请完成付款';
+    const payLead = isMockProvider ? '仅为模拟付款，不产生真实扣款；确认后后台会按订单流程处理。' : '支付成功前，不会向设备派发制作任务。';
+    const payQrAlt = isMockProvider ? '模拟付款二维码' : provider ? '支付宝付款二维码' : '付款二维码';
+    const payButton = isMockProvider ? '打开模拟付款页' : provider ? '打开支付宝付款' : '打开付款页';
     document.title = 'Woodbridge Coffee · 等待支付';
     app.innerHTML = `
       ${baseHeader('warn', '等待支付确认')}
@@ -501,16 +509,16 @@ function renderOrder(order) {
       </section>
       <section class="status-hero">
         <div class="eyebrow">${esc(order.product?.name || '饮品')}</div>
-        <h1>请完成支付宝付款</h1>
-        <p class="lead">支付成功前，不会向设备派发制作任务。</p>
+        <h1>${payTitle}</h1>
+        <p class="lead">${payLead}</p>
         ${milestoneMarkup(order)}
         <div class="pay-card">
           <div class="pay-amount"><strong>${money({ priceMinor: order.totalAmountMinor, currency: order.currency })}</strong><small>合计</small></div>
-          <div class="qr-frame"><img id="payment-qr" alt="支付宝付款二维码"></div>
+          <div class="qr-frame"><img id="payment-qr" alt="${payQrAlt}"></div>
           <p class="qr-note" id="payment-qr-note">二维码加载后保持不变，刷新不会导致重复支付</p>
           <div class="pay-actions">
             ${order.payment?.qrCode
-              ? `<a class="btn-primary" href="${esc(order.payment.qrCode)}">打开支付宝付款</a>`
+              ? `<a class="btn-primary" href="${esc(order.payment.qrCode)}">${payButton}</a>`
               : '<span class="pay-hint">正在获取付款方式…</span>'}
             <span class="pay-hint">支付状态由服务端实时推送</span>
           </div>

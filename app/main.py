@@ -73,18 +73,25 @@ def payment_provider(name: str) -> PaymentProvider:
     normalized = name.lower()
     if normalized == "mock":
         return mock_payment_provider
-    if normalized != "alipay":
+    if normalized not in {"alipay", "alipay_mock"}:
         raise HTTPException(status_code=422, detail="unsupported payment provider")
-    if not all((settings.alipay_app_id, settings.alipay_app_private_key_file, settings.alipay_public_key_file)):
+    prefix = "alipay_mock" if normalized == "alipay_mock" else "alipay"
+    app_id = getattr(settings, prefix + "_app_id")
+    private_file = getattr(settings, prefix + "_app_private_key_file")
+    public_file = getattr(settings, prefix + "_public_key_file")
+    gateway = getattr(settings, prefix + "_gateway")
+    if not all((app_id, private_file, public_file, gateway)):
         raise HTTPException(status_code=503, detail="Alipay provider is not configured")
     try:
-        private_key = Path(settings.alipay_app_private_key_file).read_text(encoding="utf-8")
-        public_key = Path(settings.alipay_public_key_file).read_text(encoding="utf-8")
-        return AlipayProvider(
-            app_id=settings.alipay_app_id or "", app_private_key=private_key,
-            alipay_public_key=public_key, gateway=settings.alipay_gateway,
+        private_key = Path(private_file).read_text(encoding="utf-8")
+        public_key = Path(public_file).read_text(encoding="utf-8")
+        provider = AlipayProvider(
+            app_id=app_id, app_private_key=private_key,
+            alipay_public_key=public_key, gateway=gateway,
             timeout_seconds=settings.alipay_timeout_seconds,
         )
+        provider.name = normalized
+        return provider
     except OSError as exc:
         logger.error("payment key file unavailable: %s", exc)
         raise HTTPException(status_code=503, detail="Alipay key material is unavailable") from exc
@@ -743,6 +750,12 @@ async def alipay_callback(request: Request) -> str:
 @app.post("/api/v1/payments/callback/mock", tags=["payments"], include_in_schema=False)
 async def mock_payment_callback(request: Request, _: AccessManage) -> dict[str, Any]:
     return payment_application_service.mock_callback(await request.json())
+
+
+@app.post("/api/v1/payments/callback/alipay_mock", tags=["payments"], response_class=PlainTextResponse)
+async def alipay_mock_callback(request: Request) -> str:
+    values = dict(parse_qsl((await request.body()).decode("utf-8"), keep_blank_values=True))
+    return payment_application_service.alipay_callback(values, provider_name="alipay_mock")
 
 
 @app.post("/api/v1/payments/{payment_id}/refund", tags=["payments"], status_code=202)
