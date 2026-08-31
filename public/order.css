@@ -2,49 +2,48 @@
    Woodbridge Coffee · 扫码下单 / 订单状态页
    移动端优先：360–430px 为主战场，向上兼容 560px。
    系统字体 + CSS 图形 + 内联 SVG，无外部依赖。
+   令牌源头：/assets/shared/coffee-ui.css（--cc-*）；本页保留
+   消费者专属的展示字体与更深文字变体，触控目标 ≥ 44px。
    ============================================================ */
 
 :root {
-  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
-    "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
-  --font-display: "Songti SC", "Noto Serif SC", Georgia, "Times New Roman", serif;
+  --font-ui: var(--cc-font-ui);
+  --font-display: var(--cc-font-display);
 
-  --bg: #f8f3ea;
-  --bg-glow: #f0e3d0;
-  --surface: #fffdf9;
-  --surface-2: #fdf7ee;
-  --ink: #2b1c11;
-  --ink-2: #5c4636;
-  --muted: #7c6a5c;
+  --bg: var(--cc-bg);
+  --bg-glow: #f0e3d0;            /* 页面专属：右上角光晕 */
+  --surface: var(--cc-surface);
+  --surface-2: var(--cc-surface-2);
+  --ink: var(--cc-ink);
+  --ink-2: var(--cc-ink-2);
+  --muted: var(--cc-muted);
 
-  --espresso: #3c2317;
-  --espresso-hi: #573521;
-  --caramel: #a9652c;
-  --caramel-deep: #8d5220;
-  --caramel-soft: #f4e4d2;
+  --espresso: var(--cc-espresso);
+  --espresso-hi: var(--cc-espresso-hi);
+  --caramel: var(--cc-caramel);
+  --caramel-deep: #8d5220;       /* 派生：强调色深文字变体 */
+  --caramel-soft: var(--cc-caramel-soft);
 
-  --sage: #2c7a4b;
-  --sage-deep: #1f5e38;
-  --sage-soft: #e4f0e7;
-  --danger: #ab3a2a;
-  --danger-deep: #8c2f22;
-  --danger-soft: #fbeae5;
-  --amber: #8a5f16;
-  --amber-soft: #fbf1da;
+  --sage: var(--cc-sage);
+  --sage-deep: #1f5e38;          /* 派生：成功深文字变体 */
+  --sage-soft: var(--cc-sage-soft);
+  --danger: var(--cc-danger);
+  --danger-deep: #8c2f22;        /* 派生：危险深文字变体 */
+  --danger-soft: var(--cc-danger-soft);
+  --amber: var(--cc-amber);
+  --amber-soft: var(--cc-amber-soft);
 
-  --line: #eadfcc;
+  --line: var(--cc-line);
   --line-soft: #f1e7d8;
   --ring: #a9652c66;
 
-  --radius-lg: 20px;
-  --radius-md: 16px;
-  --radius-sm: 12px;
+  --radius-lg: var(--cc-radius-lg);
+  --radius-md: var(--cc-radius-md);
+  --radius-sm: var(--cc-radius-sm);
 
-  --shadow-1: 0 2px 10px rgba(76, 48, 27, 0.06);
-  --shadow-2: 0 14px 36px rgba(76, 48, 27, 0.12);
+  --shadow-1: var(--cc-shadow-1);
+  --shadow-2: var(--cc-shadow-2);
 }
-
-* { box-sizing: border-box; }
 
 html { -webkit-text-size-adjust: 100%; }
 
@@ -765,13 +764,4 @@ img { max-width: 100%; }
   .app-shell { padding-inline: 24px; }
 }
 
-/* ---------- 无动画偏好 ---------- */
-
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-    scroll-behavior: auto !important;
-  }
-}
+/* 无动画偏好由 shared/coffee-ui.css 统一提供 */

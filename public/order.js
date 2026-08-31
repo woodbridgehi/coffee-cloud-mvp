@@ -67,7 +67,9 @@ function statusText(reason) {
 }
 
 function money(item) {
-  const amount = (Number(item.priceMinor ?? item.totalAmountMinor ?? 0) / 100).toFixed(2);
+  const minor = item.priceMinor ?? item.totalAmountMinor;
+  if (minor === null || minor === undefined || !Number.isFinite(Number(minor))) return '—';
+  const amount = (Number(minor) / 100).toFixed(2);
   const currency = item.currency || 'CNY';
   return currency === 'CNY' ? `¥${amount}` : `${amount} ${esc(currency)}`;
 }

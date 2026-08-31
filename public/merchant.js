@@ -140,7 +140,12 @@ function kv(label, value, { mono = false, wide = false } = {}) {
     el('strong', mono ? { class: 'mono' } : null, isBlank(value) ? '—' : String(value)));
 }
 
-function tdl(content, label) { return el('td', { 'data-label': label }, content); }
+/* 单元格：直接子内容为 .num（金额 / 数量 / 版本）时自动标记为数值列，
+   配合 CSS 右对齐；makeTable 会同步标记对应表头。 */
+function tdl(content, label) {
+  const numeric = Boolean(content && content.nodeType === 1 && content.classList && content.classList.contains('num'));
+  return el('td', { 'data-label': label, class: numeric ? 'num' : null }, content);
+}
 
 function busy(btn, text) {
   btn.disabled = true;
@@ -522,7 +527,15 @@ async function loadRegion(container, loader) {
 /* ---------------- 简单表格 ---------------- */
 
 function makeTable({ headers, rows, responsive = true, minTable = 760 }) {
-  const thead = el('thead', null, el('tr', null, headers.map(h => el('th', null, h))));
+  /* 数值列判定：该列所有数据单元格均带 num 类时，表头同步右对齐 */
+  const numericColumns = headers.map((_, index) => {
+    if (!rows.length) return false;
+    return rows.every(row => {
+      const cell = row.children && row.children[index];
+      return Boolean(cell && cell.nodeType === 1 && cell.classList.contains('num'));
+    });
+  });
+  const thead = el('thead', null, el('tr', null, headers.map((h, i) => el('th', { class: numericColumns[i] ? 'num' : null }, h))));
   const tbody = el('tbody', null, rows);
   return el('div', { class: 'table-scroll' },
     el('table', { class: `grid${responsive ? ' responsive' : ''}`, style: minTable ? `min-width:${minTable}px` : '' }, thead, tbody));
@@ -1335,6 +1348,7 @@ function route() {
   $('view-title').textContent = def.title;
   $('view-sub').textContent = def.sub;
   buildShell();
+  dashboardMemo = { key: '', promise: null }; /* 新视图 / 新筛选不再复用旧总览快照 */
   const workspace = $('workspace');
   clearNode(workspace);
   def.render(workspace);
@@ -1368,6 +1382,23 @@ function dashboardParams() {
     storeId: state.storeId || undefined,
     environment: state.environment,
   };
+}
+
+/* 总览一次渲染会请求 4 个区域（卡片 / 趋势 / 告警 / 最近订单）：
+   合并为同一快照请求，保证四块数据一致，也避免 4 次重复往返。
+   route() 时失效；组织切换 / 重载会走 route，不会拿到旧组织数据。 */
+let dashboardMemo = { key: '', promise: null };
+
+function fetchDashboardSnapshot() {
+  const key = JSON.stringify(dashboardParams());
+  if (dashboardMemo.key !== key || !dashboardMemo.promise) {
+    const promise = adapter.dashboard(dashboardParams());
+    /* 失败（含网络中断 / 中止）后清空缓存：重试按钮必须发起新请求，
+       而不是回放同一个被拒绝的 Promise。 */
+    promise.catch(() => { if (dashboardMemo.promise === promise) dashboardMemo = { key: '', promise: null }; });
+    dashboardMemo = { key, promise };
+  }
+  return dashboardMemo.promise;
 }
 
 function statCard(label, value, { sub, kind, num = true } = {}) {
@@ -1412,7 +1443,7 @@ function completenessNote(completeness) {
 }
 
 async function loadDashboardCards(container) {
-  const data = await adapter.dashboard(dashboardParams());
+  const data = await fetchDashboardSnapshot();
   clearNode(container);
   if (!data || !data.metrics) {
     container.append(el('section', { class: 'card' }, emptyState('暂无总览数据', '当前筛选条件下没有数据。')));
@@ -1450,7 +1481,7 @@ async function loadDashboardTrend(container) {
     clearNode(container);
     return;
   }
-  const data = await adapter.dashboard(dashboardParams());
+  const data = await fetchDashboardSnapshot();
   clearNode(container);
   if (!data || !data.trend || !data.trend.length) {
     container.append(el('section', { class: 'card' }, emptyState('区间内没有趋势数据', '调整日期区间或门店筛选后重试。')));
@@ -1474,7 +1505,7 @@ async function loadDashboardTrend(container) {
 const SEVERITY = { ERROR: { label: '严重', kind: 'red' }, WARNING: { label: '警告', kind: 'amber' }, INFO: { label: '提示', kind: 'blue' } };
 
 async function loadDashboardAlerts(container) {
-  const data = await adapter.dashboard(dashboardParams());
+  const data = await fetchDashboardSnapshot();
   const body = container.querySelector('.card-body');
   if (!body) return;
   clearNode(body);
@@ -1491,7 +1522,7 @@ async function loadDashboardAlerts(container) {
 }
 
 async function loadDashboardRecent(container) {
-  const data = await adapter.dashboard(dashboardParams());
+  const data = await fetchDashboardSnapshot();
   const body = container.querySelector('.card-body');
   if (!body) return;
   clearNode(body);
@@ -2325,16 +2356,28 @@ function paintOrderDrawer(drawer, order) {
 }
 
 function openRefundModal(order, drawer) {
-  const max = Math.max(0, (order.receivedMinor || 0) - (order.refundedMinor || 0));
-  const amount = el('input', { class: 'input', inputmode: 'decimal', value: (max / 100).toFixed(2) });
+  /* 可退上限依赖实收 / 已退金额：任一缺失（null）时按未知处理，
+     绝不 coercion 成 0；提交入口同步禁用。 */
+  const received = order.receivedMinor;
+  const refunded = order.refundedMinor;
+  const unknownLimit = received === null || received === undefined || refunded === null || refunded === undefined;
+  const max = unknownLimit ? null : Math.max(0, received - refunded);
+  const amount = el('input', {
+    class: 'input', inputmode: 'decimal',
+    value: unknownLimit ? '' : (max / 100).toFixed(2),
+    disabled: unknownLimit || null,
+    'aria-label': '退款金额（元）',
+  });
   const reason = el('textarea', { class: 'input', placeholder: '退款原因（写入审计）', maxlength: '300' });
   const errorNode = el('p', { class: 'form-error', role: 'alert' });
-  const submit = el('button', { class: 'btn danger', type: 'button' }, '确认退款');
+  const submit = el('button', { class: 'btn danger', type: 'button', disabled: unknownLimit || null }, '确认退款');
   const idem = newIdemScope();
   const modal = openModal({
     title: `发起退款 · ${order.orderNo || order.id}`,
     body: [
-      el('p', { class: 'field-hint' }, `订单金额 ${fmtMoney(order.totalMinor)} · 实收 ${fmtMoney(order.receivedMinor)} · 已退 ${fmtMoney(order.refundedMinor)}。可退上限 ${fmtMoney(max)}；允许部分退款，最终以服务端限制为准。`),
+      unknownLimit
+        ? el('p', { class: 'field-hint' }, '实收或已退金额待补全，无法计算可退上限；请稍后重开此弹窗重试，或联系平台核实。')
+        : el('p', { class: 'field-hint' }, `订单金额 ${fmtMoney(order.totalMinor)} · 实收 ${fmtMoney(order.receivedMinor)} · 已退 ${fmtMoney(order.refundedMinor)}。可退上限 ${fmtMoney(max)}；允许部分退款，最终以服务端限制为准。`),
       el('div', { class: 'field', 'data-field': 'amountMinor' }, el('span', { class: 'field-label' }, '退款金额（元）*'), amount),
       el('div', { class: 'field', 'data-field': 'reason' }, el('span', { class: 'field-label' }, '原因'), reason),
       errorNode,
@@ -2342,6 +2385,7 @@ function openRefundModal(order, drawer) {
     footer: [el('button', { class: 'btn secondary', type: 'button', onclick: () => modal.close() }, '取消'), submit],
   });
   submit.addEventListener('click', async () => {
+    if (unknownLimit) return;
     clearFieldErrors(modal.card);
     errorNode.textContent = '';
     const parsed = parseYuanToMinor(amount.value);
@@ -2482,7 +2526,7 @@ function renderPurchasesTab(root) {
       can(PERM.costsManage)
         ? el('div', { class: 'toolbar-actions' }, el('button', { class: 'btn primary small', type: 'button', html: icon.plus + '<span>新建采购</span>', onclick: () => openPurchaseModal(null) }))
         : null),
-    el('p', { class: 'field-hint' }, '采购先存为草稿，确认后入账；已入账单据不可直接修改，更正走后续调整。'),
+    el('p', { class: 'field-hint' }, '采购先存为草稿，确认后入账；已入账单据不可直接修改，更正走后续调整。合计中的「＊」表示部分明细金额待补全，不计入合计。'),
     region);
   region.append(skeletonRows(3));
   loadRegion(region, loadPurchases);
@@ -2494,7 +2538,8 @@ async function loadPurchases(container) {
   clearNode(container);
   if (!items.length) { container.append(emptyState('区间内没有采购单', can(PERM.costsManage) ? '使用「新建采购」录入采购草稿' : '需要 costs.manage 权限')); return; }
   const rows = items.map(purchase => {
-    const total = (purchase.lines || []).reduce((sum, line) => sum + (Number(line.totalCostMinor) || 0), 0);
+    /* 合计仅累加已知金额；缺失明细标记待补全，不按 0 混入展示 */
+    const total = sumMinor(purchase.lines || [], 'totalCostMinor');
     const actions = [];
     if (can(PERM.costsManage)) {
       if (purchase.status === 'DRAFT') {
@@ -2506,7 +2551,12 @@ async function loadPurchases(container) {
       tdl(el('div', null, el('div', { class: 'cell-strong' }, purchase.supplier || '未填供应商'), el('div', { class: 'cell-sub' }, purchase.purchasedOn)), '采购'),
       tdl((state.stores.find(s => s.id === purchase.storeId) || {}).name || purchase.storeId || '—', '门店'),
       tdl(el('div', { class: 'cell-sub' }, (purchase.lines || []).map(l => `${l.materialName || l.materialId} × ${l.quantity}${l.unit || ''}`).join('；') || '—'), '明细'),
-      tdl(el('span', { class: 'num' }, fmtMoney(total)), '合计'),
+      tdl((purchase.lines || []).length
+        ? el('span', {
+            class: 'num',
+            title: total.hasUnknown ? '部分明细金额待补全，合计仅包含已知金额' : null,
+          }, fmtMoney(total.sum) + (total.hasUnknown ? ' ＊' : ''))
+        : el('span', { class: 'num' }, '—'), '合计'),
       tdl(purchase.status === 'DRAFT' ? badge('amber', '草稿') : badge('green', '已入账'), '状态'),
       tdl(el('span', { class: 'muted num' }, `v${purchase.version}`), '版本'),
       tdl(actions.length ? el('div', { class: 'action-row' }, actions) : el('span', { class: 'muted' }, '只读'), '操作'));

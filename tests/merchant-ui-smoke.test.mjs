@@ -314,6 +314,16 @@ test('冒烟：设备列表渲染并可打开详情抽屉', async () => {
   assert.ok(list, '设备列表区域存在');
   const rows = findAll(list, n => n.tagName === 'TR' && n.classList.contains('clickable'));
   assert.ok(rows.length >= 4, `晨光咖啡演示设备 ≥4 台（实际 ${rows.length}）`);
+  /* 数值列（版本）右对齐：th 与 td 均带 num 类 */
+  const deviceTable = findAll(list, n => n.tagName === 'TABLE')[0];
+  const versionTh = findAll(deviceTable, n => n.tagName === 'TH').find(h => textOf(h) === '版本');
+  assert.ok(versionTh, '版本列表头存在');
+  assert.ok(versionTh.classList.contains('num'), '数值列表头同步 num 类（右对齐）');
+  const versionTd = findAll(deviceTable, n => n.tagName === 'TD' && n.attributes['data-label'] === '版本')[0];
+  assert.ok(versionTd.classList.contains('num'), '数值单元格带 num 类（等宽数字 + 右对齐）');
+  /* 手机端卡片化：每个单元格都携带 data-label 列名 */
+  const labeledCells = findAll(deviceTable, n => n.tagName === 'TD' && n.attributes['data-label']);
+  assert.ok(labeledCells.length >= rows.length * 6, 'data-label 覆盖全部数据单元格');
   const drawerRoot = documentStub.getElementById('drawer-root');
   rows[0].dispatch('click');
   await flush(8);
