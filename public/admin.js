@@ -112,6 +112,43 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
     return el('td', { 'data-label': label, class: cls || null }, content);
   }
 
+  /* 计数字段缺失时显示「—」，不默认成 0 */
+  function fmtCount(value) {
+    return value === null || value === undefined ? '—' : String(value);
+  }
+
+  /* 表单行：<label for> 与控件关联，保证可访问名称 */
+  let fieldSeq = 0;
+  function field(labelText, control, cls, ...extra) {
+    const id = control.id || `admin-field-${++fieldSeq}`;
+    if (!control.id) control.id = id;
+    return el('div', { class: `field${cls ? ' ' + cls : ''}` },
+      el('label', { class: 'field-label', for: id }, labelText),
+      control, ...extra);
+  }
+
+  /* 键盘行激活 + 跨重渲染保持焦点（自动刷新会整体重建表格行） */
+  function rowActivate(row, handler) {
+    row.tabIndex = 0;
+    row.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+      handler();
+      }
+    });
+  }
+
+  function captureRowFocus() {
+    const active = document.activeElement;
+    return active && active.tagName === 'TR' ? String(active.dataset.rowKey || '') : '';
+  }
+
+  function restoreRowFocus(container, key) {
+    if (!key) return;
+    const next = container.querySelector(`tr[data-row-key="${CSS.escape(key)}"]`);
+    if (next) next.focus({ preventScroll: true });
+  }
+
   function th(label, cls) {
     return el('th', { class: cls || null }, label);
   }
@@ -206,6 +243,7 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
     if (!root) return;
     const node = el('div', {
       class: `toast ${kind}`,
+      role: kind === 'error' ? 'alert' : 'status',
       onclick: () => node.remove(),
     },
       el('span', { class: 't-icon', html: kind === 'success' ? icon.check : kind === 'error' ? icon.alert : icon.info, 'aria-hidden': 'true' }),
@@ -226,7 +264,8 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
   function openModal({ title, body, footer, wide, dismissible = true }) {
     closeModal();
     const root = $('modal-root');
-    const handle = { root, card: null, onClose: null };
+    const lastActive = document.activeElement;
+    const handle = { root, card: null, onClose: null, lastActive };
     const close = () => {
       if (!activeModal || activeModal.root !== root) return;
       activeModal = null;
@@ -234,6 +273,11 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
       root.setAttribute('aria-hidden', 'true');
       clear(root);
       if (handle.onClose) handle.onClose();
+      /* 关闭后把焦点还给触发元素（若仍在文档中） */
+      const previous = handle.lastActive;
+      if (previous && previous.isConnected && typeof previous.focus === 'function') {
+        previous.focus({ preventScroll: true });
+      }
     };
     const card = el('div', { class: `modal${wide ? ' wide' : ''}`, role: 'dialog', 'aria-modal': 'true', 'aria-label': title });
     card.append(
@@ -248,9 +292,10 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
     root.setAttribute('aria-hidden', 'false');
     root.replaceChildren(card);
     root.onclick = dismissible ? close : () => {};
+    handle.card = card;
     activeModal = handle;
-    const focusable = card.querySelector('input, select, textarea, button:not(.modal-close)');
-    if (focusable) focusable.focus();
+    const focusable = card.querySelector('input, select, textarea, button:not(.modal-close)') || card.querySelector('button');
+    if (focusable) focusable.focus({ preventScroll: true });
     return { ...handle, close, card };
   }
 
@@ -263,11 +308,25 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
     activeModal = null;
   }
 
+  const MODAL_FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
   document.addEventListener('keydown', event => {
-    if (event.key === 'Escape' && activeModal) {
-      const root = $('modal-root');
-      root.onclick?.();
+    if (!activeModal) return;
+    if (event.key === 'Escape') {
+      $('modal-root').onclick?.();
+      return;
     }
+    /* Tab 焦点圈定：焦点始终留在弹窗内 */
+    if (event.key !== 'Tab' || !activeModal.card) return;
+    const focusables = Array.from(activeModal.card.querySelectorAll(MODAL_FOCUSABLE))
+      .filter(node => node.getClientRects().length > 0);
+    if (!focusables.length) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    const current = document.activeElement;
+    if (!activeModal.card.contains(current)) { event.preventDefault(); first.focus(); return; }
+    if (event.shiftKey && current === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && current === last) { event.preventDefault(); first.focus(); }
   });
 
   /* 确认弹窗；requireText 非空时需要输入指定文本才能确认（二次确认） */
@@ -282,7 +341,7 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
       if (requireText) {
         input = el('input', { class: 'input', placeholder: `输入“${requireText}”以确认`, autocomplete: 'off' });
         input.addEventListener('input', () => { confirmBtn.disabled = input.value.trim() !== requireText; });
-        body.push(el('div', { class: 'field' }, el('span', { class: 'field-label' }, '请输入确认文字'), input));
+        body.push(field('请输入确认文字', input));
       }
       const done = result => { modal.close(); resolve(result); };
       confirmBtn = el('button', {
@@ -434,6 +493,7 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
       nav.append(el('button', {
         class: `nav-item${state.view === def.id ? ' active' : ''}`,
         type: 'button',
+        'aria-current': state.view === def.id ? 'page' : null,
         onclick: () => { location.hash = `#/${def.id}`; },
       },
         el('span', { class: 'n-icon', html: def.icon, 'aria-hidden': 'true' }),
@@ -465,6 +525,7 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
     document.title = `Coffee Cloud · ${active.title}`;
     $('view-title').textContent = active.title;
     $('view-sub').textContent = active.sub;
+    $('view-title').focus({ preventScroll: true });
     buildNav();
     const workspace = $('workspace');
     clear(workspace);
@@ -666,6 +727,7 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
 
   function renderOrderTable(container, orders, { compact = false, expandable = true } = {}) {
     if (!container) return;
+    const focusKey = captureRowFocus();
     clear(container);
     if (!orders.length) {
       container.append(emptyState('还没有订单', '设备产生扫码订单后会出现在这里'));
@@ -681,6 +743,10 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
       compact ? null : th('创建时间'),
     ));
     const tbody = el('tbody');
+    const toggleOrderRow = orderId => {
+      state.expandedOrderId = state.expandedOrderId === orderId ? null : orderId;
+      renderOrderTable(container, orders, { compact, expandable });
+    };
     for (const order of orders) {
       const progress = Math.round(Math.max(0, Math.min(1, Number(order.progress || 0))) * 100);
       let expandedSlot = null;
@@ -701,26 +767,23 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
         compact ? null : td(el('span', { class: 'muted' }, fmtTime(order.createdAt)), '创建时间'),
       );
       if (expandable) {
-        row.addEventListener('click', () => {
-          state.expandedOrderId = state.expandedOrderId === order.orderId ? null : order.orderId;
-          for (const tr of Array.from(tbody.children)) {
-            if (tr.dataset.orderId) tr.classList.toggle('expanded', tr.dataset.orderId === state.expandedOrderId);
-          }
-          if (expandedSlot) renderOrderDetail(expandedSlot, order);
-        });
-        row.dataset.orderId = order.orderId;
+        row.dataset.rowKey = order.orderId;
+        row.setAttribute('aria-expanded', String(state.expandedOrderId === order.orderId));
+        row.addEventListener('click', () => toggleOrderRow(order.orderId));
+        rowActivate(row, () => toggleOrderRow(order.orderId));
       }
       tbody.append(row);
       if (expandable && state.expandedOrderId === order.orderId) {
         row.classList.add('expanded');
         expandedSlot = el('td', { colspan: String(colspan) });
         const detailRow = el('tr', { class: 'expanded' }, expandedSlot);
-        detailRow.dataset.orderId = order.orderId;
+        detailRow.dataset.rowKey = `${order.orderId}:detail`;
         renderOrderDetail(expandedSlot, order);
         tbody.append(detailRow);
       }
     }
     container.append(el('table', { class: 'grid responsive' }, thead, tbody));
+    restoreRowFocus(container, focusKey);
   }
 
   function renderOrderDetail(slot, order) {
@@ -764,8 +827,8 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
     );
 
     const toolbar = el('div', { class: 'card toolbar' },
-      el('div', { class: 'field grow' }, el('span', { class: 'field-label' }, '搜索'), search),
-      el('div', { class: 'field' }, el('span', { class: 'field-label' }, '连接状态'), connFilter),
+      field('搜索', search, 'grow'),
+      field('连接状态', connFilter),
       el('div', { class: 'toolbar-actions' },
         can(PERMISSIONS.devicesManage)
           ? el('button', { class: 'btn primary small', type: 'button', html: icon.plus + '<span>登记设备</span>', onclick: openRegisterModal })
@@ -814,6 +877,7 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
   function renderDeviceRows() {
     const container = $('device-rows');
     if (!container) return;
+    const focusKey = captureRowFocus();
     clear(container);
     const devices = filteredDevices();
     if (!devices.length) {
@@ -840,14 +904,18 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
           el('div', null, device.storeName || device.storeId || '—'),
           el('div', { class: 'cell-sub' }, `${device.storeId || '无门店 ID'} · ${device.profileComplete ? '资料已完成' : '待首次安装'}`)), '门店 / 实例'),
         td(lifecycleBadge(device.lifecycleStatus), '生命周期'),
-        td(el('span', { class: 'num' }, String(device.activeOrderCount ?? 0)), '活跃订单', 'num'),
+        td(el('span', { class: 'num' }, fmtCount(device.activeOrderCount)), '活跃订单', 'num'),
         td(el('div', null,
           el('div', null, fmtAgo(device.lastHeartbeatAt)),
           el('div', { class: 'cell-sub' }, `软件 ${device.softwareVersion || '—'}`)), '最近心跳'),
       );
+      row.dataset.rowKey = device.deviceId;
+      if (device.deviceId === state.selectedDeviceId) row.setAttribute('aria-current', 'true');
+      rowActivate(row, () => selectDevice(device.deviceId));
       tbody.append(row);
     }
     container.append(el('table', { class: 'grid responsive' }, thead, tbody));
+    restoreRowFocus(container, focusKey);
   }
 
   function resetDeviceDetail() {
@@ -913,8 +981,8 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
         kv('软件版本', detail.softwareVersion),
         kv('活跃启动 ID', detail.activeBootId, true),
         kv('最近序列号', detail.lastSequence),
-        kv('心跳 / 事件 / 命令', `${detail.heartbeatCount ?? 0} / ${detail.eventCount ?? 0} / ${detail.commandCount ?? 0}`),
-        kv('活跃订单', String(detail.activeOrderCount ?? 0)),
+        kv('心跳 / 事件 / 命令', `${fmtCount(detail.heartbeatCount)} / ${fmtCount(detail.eventCount)} / ${fmtCount(detail.commandCount)}`),
+        kv('活跃订单', fmtCount(detail.activeOrderCount)),
         kv('能力快照', snapshots.capabilities ? `v${snapshots.capabilities.version || '?'} · ${fmtAgo(snapshots.capabilities.receivedAt)}` : '未上报'),
         kv('物料快照', snapshots.inventory ? `v${snapshots.inventory.version || '?'} · ${fmtAgo(snapshots.inventory.receivedAt)}` : '未上报'),
         kv('最近心跳', fmtTime(detail.lastHeartbeatAt)),
@@ -1009,8 +1077,8 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
     const modal = openModal({
       title: `变更生命周期 · ${deviceId}`,
       body: [
-        el('div', { class: 'field' }, el('span', { class: 'field-label' }, '目标状态'), statusSelect),
-        el('div', { class: 'field' }, el('span', { class: 'field-label' }, '变更原因（必填）'), reason, error),
+        field('目标状态', statusSelect),
+        field('变更原因（必填）', reason, null, error),
         el('p', { class: 'field-hint' }, 'SUSPENDED / MAINTENANCE 会立即停止向该设备派发新制作任务；已在制作的订单不受影响。'),
       ],
       footer: [
@@ -1124,10 +1192,10 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
       body: [
         el('p', { class: 'field-hint' }, '先预登记受约束的设备 ID 与出厂序列号，再把一次性激活码交给设备端。门店资料在设备首次安装时补齐；deviceId 格式为 coffee-bot-003，序列号格式为 CB-2026-003。'),
         el('div', { class: 'kv-grid' },
-          el('div', { class: 'field' }, el('span', { class: 'field-label' }, 'deviceId *'), deviceIdInput),
-          el('div', { class: 'field' }, el('span', { class: 'field-label' }, '序列号 *'), serialInput),
-          el('div', { class: 'field' }, el('span', { class: 'field-label' }, 'instanceId'), instanceInput),
-          el('div', { class: 'field' }, el('span', { class: 'field-label' }, 'storeId'), storeInput)),
+          field('deviceId *', deviceIdInput),
+          field('序列号 *', serialInput),
+          field('instanceId', instanceInput),
+          field('storeId', storeInput)),
         error,
       ],
       footer: [
@@ -1195,8 +1263,8 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
     });
     container.append(
       el('div', { class: 'card toolbar' },
-        el('div', { class: 'field' }, el('span', { class: 'field-label' }, '订单状态'), statusSelect),
-        el('div', { class: 'field grow' }, el('span', { class: 'field-label' }, '设备'), deviceInput),
+        field('订单状态', statusSelect),
+        field('设备', deviceInput, 'grow'),
         el('div', { class: 'toolbar-actions' },
           el('button', { class: 'btn secondary small', type: 'button', html: icon.refresh + '<span>查询</span>', onclick: () => loadOrders().catch(() => { }) }))),
       el('section', { class: 'card' },
@@ -1244,6 +1312,7 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
   }
 
   function renderOperators(container) {
+    const focusKey = captureRowFocus();
     clear(container);
     if (!state.operators.length) {
       container.append(emptyState('还没有运营员', can(PERMISSIONS.accessManage) ? '使用「新建运营员」创建第一个账号' : '需要 OWNER 创建运营员'));
@@ -1260,16 +1329,20 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
           el('div', { class: 'cell-sub mono' }, operator.operatorId)), '运营员'),
         td(badge(operator.role === 'OWNER' ? 'blue' : operator.role === 'MANAGER' ? 'green' : 'gray', operator.role), '角色'),
         td(badge(operator.status === 'ACTIVE' ? 'green' : 'red', operator.status === 'ACTIVE' ? '启用' : '停用'), '状态'),
-        td(el('span', { class: 'num' }, String(operator.activeTokenCount ?? 0)), '有效 Token', 'num'),
+        td(el('span', { class: 'num' }, fmtCount(operator.activeTokenCount)), '有效 Token', 'num'),
         td(el('span', { class: 'muted' }, fmtAgo(operator.lastUsedAt)), '最近使用'),
         td(can(PERMISSIONS.accessManage)
           ? el('button', { class: 'btn secondary small', type: 'button', onclick: event => { event.stopPropagation(); openEditOperatorModal(operator); } }, '编辑')
           : el('span', { class: 'muted' }, '只读'), '操作'),
       );
-      row.addEventListener('click', () => {
+      row.dataset.rowKey = operator.operatorId;
+      row.setAttribute('aria-expanded', String(state.expandedOperatorId === operator.operatorId));
+      const toggleOperatorRow = () => {
         state.expandedOperatorId = state.expandedOperatorId === operator.operatorId ? null : operator.operatorId;
         renderOperators(container);
-      });
+      };
+      row.addEventListener('click', toggleOperatorRow);
+      rowActivate(row, toggleOperatorRow);
       tbody.append(row);
       if (state.expandedOperatorId === operator.operatorId) {
         row.classList.add('selected');
@@ -1280,6 +1353,7 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
       }
     }
     container.append(el('table', { class: 'grid responsive' }, thead, tbody));
+    restoreRowFocus(container, focusKey);
   }
 
   function renderOperatorTokens(slot, operator) {
@@ -1355,8 +1429,8 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
           el('span', { html: icon.plus, 'aria-hidden': 'true' }),
           el('span', null, '创建 Token'));
           section.append(el('div', { class: 'toolbar', style: 'border:1px solid var(--line);border-radius:12px;margin-top:10px' },
-            el('div', { class: 'field grow' }, el('span', { class: 'field-label' }, '新 Token 标签 *'), label),
-            el('div', { class: 'field' }, el('span', { class: 'field-label' }, '过期时间（可选）'), expires),
+            field('新 Token 标签 *', label, 'grow'),
+            field('过期时间（可选）', expires),
             el('div', { class: 'toolbar-actions', style: 'align-self:end' }, createBtn)));
         }
         wrap.append(section);
@@ -1404,8 +1478,8 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
     const modal = openModal({
       title: '新建运营员',
       body: [
-        el('div', { class: 'field' }, el('span', { class: 'field-label' }, '名称 *'), nameInput),
-        el('div', { class: 'field' }, el('span', { class: 'field-label' }, '角色'), roleSelect),
+        field('名称 *', nameInput),
+        field('角色', roleSelect),
         el('div', { class: 'field' }, el('span', { class: 'field-label' }, '该角色权限'), permPreview),
         error,
       ],
@@ -1446,10 +1520,10 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
     const modal = openModal({
       title: `编辑运营员 · ${operator.displayName}`,
       body: [
-        el('div', { class: 'field' }, el('span', { class: 'field-label' }, '名称'), nameInput),
+        field('名称', nameInput),
         el('div', { class: 'kv-grid' },
-          el('div', { class: 'field' }, el('span', { class: 'field-label' }, '角色'), roleSelect),
-          el('div', { class: 'field' }, el('span', { class: 'field-label' }, '状态'), statusSelect)),
+          field('角色', roleSelect),
+          field('状态', statusSelect)),
         el('p', { class: 'field-hint' }, '停用后该运营员全部 Token 立即失效；变更会写入审计日志。'),
         error,
       ],
@@ -1493,8 +1567,8 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
     resourceInput.addEventListener('keydown', event => { if (event.key === 'Enter') apply(); });
     container.append(
       el('div', { class: 'card toolbar' },
-        el('div', { class: 'field grow' }, el('span', { class: 'field-label' }, 'action'), actionInput),
-        el('div', { class: 'field grow' }, el('span', { class: 'field-label' }, 'resourceType'), resourceInput),
+        field('action', actionInput, 'grow'),
+        field('resourceType', resourceInput, 'grow'),
         el('div', { class: 'toolbar-actions', style: 'align-self:end' },
           el('button', { class: 'btn secondary small', type: 'button', html: icon.refresh + '<span>查询</span>', onclick: apply }))),
       el('section', { class: 'card' },
@@ -1532,6 +1606,8 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
           el('div', { class: 'cell-sub mono' }, log.resourceId || '')), '资源'),
         td(el('span', { class: 'muted mono' }, log.requestId || '—'), '请求 ID'),
       );
+      row.setAttribute('aria-haspopup', 'dialog');
+      rowActivate(row, () => showAuditDetail(log));
       row.addEventListener('click', () => showAuditDetail(log));
       tbody.append(row);
     }
