@@ -6,6 +6,12 @@ from typing import Iterator
 import psycopg
 from psycopg_pool import ConnectionPool
 from psycopg.rows import dict_row
+from .merchant.schema import SCHEMA as MERCHANT_SCHEMA
+from .merchant.asset_schema import SCHEMA as MERCHANT_ASSET_SCHEMA
+from .merchant.payment_schema import SCHEMA as MERCHANT_PAYMENT_SCHEMA
+from .merchant.accounting_schema import SCHEMA as MERCHANT_ACCOUNTING_SCHEMA
+from .merchant.rls_schema import SCHEMA as MERCHANT_RLS_SCHEMA
+from .merchant.username_schema import SCHEMA as MERCHANT_USERNAME_SCHEMA
 
 
 SCHEMA_SQL = """
@@ -570,6 +576,12 @@ MIGRATIONS: tuple[tuple[int, str, str], ...] = (
             unique(order_id,idempotency_key)
         );
     """),
+    (13, "merchant-identity-and-isolation", MERCHANT_SCHEMA),
+    (14, "merchant-asset-ownership", MERCHANT_ASSET_SCHEMA),
+    (15, "merchant-payment-accounts", MERCHANT_PAYMENT_SCHEMA),
+    (16, "merchant-operating-ledger", MERCHANT_ACCOUNTING_SCHEMA),
+    (17, "merchant-runtime-rls", MERCHANT_RLS_SCHEMA),
+    (18, "merchant-username-registration", MERCHANT_USERNAME_SCHEMA),
 )
 
 

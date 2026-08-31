@@ -15,6 +15,10 @@ def main() -> None:
     )
     try:
         database.initialize(run_migrations=True)
+        if settings.merchant_enabled:
+            from .merchant.provision import provision_role
+            with database.connect() as connection:
+                provision_role(connection, settings.merchant_runtime_role)
     finally:
         database.close()
 

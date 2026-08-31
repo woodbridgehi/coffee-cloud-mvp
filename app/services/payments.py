@@ -16,6 +16,7 @@ from .errors import ServiceError
 from .order_state import transition_order
 from .presenters import payment_payload
 from .refund_intents import create_refund_intent
+from ..merchant.accounts import provider_for_payment
 
 
 log = logging.getLogger("coffee-cloud-mvp.payments")
@@ -75,6 +76,13 @@ class PaymentApplicationService:
             orders = OrderRepository(connection)
             payments = PaymentRepository(connection)
             order = self._authenticate_order(orders, order_id, access_token, for_update=True)
+            if order.get('payment_account_id'):
+                account = payments.merchant_account(order['payment_account_id'], order['tenant_id'])
+                if not account or account['status'] != 'VALIDATED':
+                    raise ServiceError(409, 'order payment account is unavailable; create a new order')
+                if payload.provider and payload.provider != account['provider']:
+                    raise ServiceError(409, 'provider differs from order payment account')
+                provider_name = account['provider']
             if order["payment_mode"] == "TEST_FREE":
                 raise ServiceError(409, "test-free order does not require payment")
             existing = payments.find_idempotent(order_id, idempotency_key)
@@ -111,11 +119,12 @@ class PaymentApplicationService:
 
         # A retried CREATED intent retains its original channel after a default switch.
         provider_name = payment["provider"]
-        provider = self.provider_factory(provider_name)
+        provider = provider_for_payment(self.provider_factory, payment)
         request_value = PaymentRequest(
             merchant_payment_no=payment["merchant_payment_no"], amount_minor=payment["amount_minor"],
             currency=payment["currency"], subject=payment["subject"],
-            notify_url=f"{self.settings.public_base_url.rstrip('/')}/api/v1/payments/callback/{provider_name}",
+            notify_url=f"{self.settings.public_base_url.rstrip('/')}/api/v1/payments/callback/" +
+                (f"accounts/{payment['payment_account_id']}" if payment.get('payment_account_id') else provider_name),
             metadata={"orderId": str(order_id)},
         )
         try:
@@ -173,19 +182,37 @@ class PaymentApplicationService:
             raise ServiceError(409, "payment QR code is not ready")
         return str(payment["qr_code"])
 
-    def alipay_callback(self, values: dict[str, str], *, provider_name: str = "alipay") -> str:
+    def account_callback(self, values: dict[str, str], account_id: uuid.UUID) -> str:
+        with self.uow.transaction() as connection:
+            account = PaymentRepository(connection).merchant_account(account_id)
+        if not account:
+            return 'failure'
+        return self.alipay_callback(values, provider_name=account['provider'], payment_account_id=account_id)
+
+    def alipay_callback(self, values: dict[str, str], *, provider_name: str = "alipay", payment_account_id: Any = None) -> str:
         try:
             if provider_name not in {"alipay", "alipay_mock"}:
                 raise ValueError("unsupported RSA2 callback channel")
-            parsed = self.provider_factory(provider_name).verify_and_parse_callback(values)
-            expected_app_id = getattr(self.settings, provider_name + "_app_id")
+            provider = provider_for_payment(self.provider_factory, {'provider': provider_name, 'payment_account_id': payment_account_id})
+            parsed = provider.verify_and_parse_callback(values)
+            expected_app_id = provider.app_id if payment_account_id else getattr(self.settings, provider_name + "_app_id")
             if not expected_app_id or parsed.get("app_id") != expected_app_id:
                 raise ValueError("Alipay callback app_id mismatch")
             if parsed.get("trade_status") not in {"TRADE_SUCCESS", "TRADE_FINISHED"}:
                 return "success"
             with self.uow.transaction() as connection:
+                if payment_account_id:
+                    payment = PaymentRepository(connection).callback_account(provider_name, parsed.get('out_trade_no'))
+                    account = PaymentRepository(connection).merchant_account(payment_account_id)
+                    if not payment or payment['payment_account_id'] != payment_account_id or not account or parsed.get('seller_id') != account['merchant_id']:
+                        raise ValueError('callback account or seller mismatch')
+                elif getattr(self.settings, 'merchant_enabled', False):
+                    payment = PaymentRepository(connection).callback_account(provider_name, parsed.get('out_trade_no'))
+                    if payment and payment['payment_account_id']:
+                        raise ValueError('merchant payment requires its own account callback')
                 apply_paid_callback(
-                    connection, provider=provider_name, event_id=callback_event_id(provider_name, parsed), values=parsed
+                    connection, provider=provider_name,
+                    event_id=(f'account:{payment_account_id}:' if payment_account_id else '') + callback_event_id(provider_name, parsed), values=parsed
                 )
             return "success"
         except (ValueError, ServiceError) as exc:

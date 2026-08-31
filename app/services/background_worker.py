@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ..merchant.accounts import provider_for_payment
 
 import logging
 import uuid
@@ -143,7 +144,7 @@ class BackgroundWorkerService:
         if payment is None:
             return 0
         try:
-            provider = self.payment_provider(payment["provider"])
+            provider = provider_for_payment(self.payment_provider, payment)
             result = provider.query_payment(payment["merchant_payment_no"])
         except Exception as exc:
             log.info("payment reconciliation deferred payment=%s: %s", payment["id"], exc)
@@ -200,7 +201,7 @@ class BackgroundWorkerService:
             else:
                 workers.mark_refund_attempt(refund["id"])
         try:
-            provider = self.payment_provider(payment["provider"])
+            provider = provider_for_payment(self.payment_provider, payment)
             request = RefundRequest(
                 merchant_payment_no=payment["merchant_payment_no"],
                 merchant_refund_no=refund["merchant_refund_no"], amount_minor=refund["amount_minor"],

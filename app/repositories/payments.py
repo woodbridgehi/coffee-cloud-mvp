@@ -19,6 +19,19 @@ class PaymentRepository:
             f"select * from payment where id=%s{self._lock_suffix(for_update)}", (payment_id,)
         ).fetchone()
 
+    def merchant_account(self, account_id: uuid.UUID, tenant_id: uuid.UUID | None = None) -> dict[str, Any] | None:
+        row = self.connection.execute(
+            'select id,tenant_id,provider,app_id,merchant_id,status from merchant_payment_account where id=%s',
+            (account_id,),
+        ).fetchone()
+        return row if row and (tenant_id is None or row['tenant_id'] == tenant_id) else None
+
+    def callback_account(self, provider: str, merchant_no: str | None) -> dict[str, Any] | None:
+        return self.connection.execute(
+            'select payment_account_id from payment where provider=%s and merchant_payment_no=%s',
+            (provider, merchant_no),
+        ).fetchone()
+
     def find_idempotent(
         self, order_id: uuid.UUID, idempotency_key: str, *, for_update: bool = True
     ) -> dict[str, Any] | None:

@@ -16,6 +16,8 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Sec
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
+from fastapi.exceptions import RequestValidationError
+from fastapi.exception_handlers import request_validation_exception_handler
 from starlette.concurrency import run_in_threadpool
 import qrcode
 
@@ -49,6 +51,10 @@ from .services.background_worker import BackgroundWorkerService
 from .telemetry import TelemetryCache
 from .order_events import OrderEventBroker
 from .order_stream import order_stream
+from .merchant.router import create_router as merchant_router
+from .merchant.service import MerchantService
+from .merchant.security import MerchantError
+from .merchant.accounts import MerchantAccounts
 
 
 SERVICE_VERSION = "0.4.0"
@@ -69,7 +75,9 @@ telemetry_cache = TelemetryCache(
 order_event_broker = OrderEventBroker(settings.database_url, redis_url=settings.telemetry_redis_url, logger=logger)
 
 
-def payment_provider(name: str) -> PaymentProvider:
+def payment_provider(name: str, payment_account_id: Any = None) -> PaymentProvider:
+    if payment_account_id is not None:
+        return MerchantAccounts(merchant_service).resolve(name, payment_account_id)
     normalized = name.lower()
     if normalized == "mock":
         return mock_payment_provider
@@ -228,6 +236,7 @@ domain_worker = DomainWorker()
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     database.initialize(run_migrations=settings.run_database_migrations)
+    merchant_service.validate_runtime()
     telemetry_cache.start()
     if settings.run_order_sse_listener:
         order_event_broker.start()
@@ -260,10 +269,33 @@ app = FastAPI(
 )
 PUBLIC_DIR = Path(__file__).resolve().parent.parent / "public"
 app.mount("/assets", StaticFiles(directory=PUBLIC_DIR), name="public-assets")
+merchant_service = MerchantService(database, settings)
+app.include_router(merchant_router(merchant_service))
+from .merchant.http import MerchantBoundary
+app.add_middleware(MerchantBoundary)
+
+
+@app.exception_handler(MerchantError)
+async def merchant_error_handler(request: Request, exc: MerchantError) -> JSONResponse:
+    headers = {"Retry-After": "600"} if exc.status == 429 else {}
+    return JSONResponse(status_code=exc.status, headers=headers, content={"error": {
+        "code": exc.code, "message": exc.message, "fields": exc.fields,
+        "requestId": getattr(request.state, "request_id", ""),
+    }})
+
+
+@app.exception_handler(RequestValidationError)
+async def safe_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
+    if request.url.path.startswith('/api/v1/merchant/'):
+        # Never echo submitted passwords/private keys in validation errors.
+        return JSONResponse(status_code=422, content={'error': {'code': 'INVALID_REQUEST', 'message': '请求格式不正确'}})
+    return await request_validation_exception_handler(request, exc)
 
 
 @app.exception_handler(ServiceError)
-async def service_error_handler(_: Request, exc: ServiceError) -> JSONResponse:
+async def service_error_handler(request: Request, exc: ServiceError) -> JSONResponse:
+    if request.url.path.startswith('/api/v1/merchant/'):
+        return JSONResponse(status_code=exc.status_code, content={'error': {'code': 'BUSINESS_RULE', 'message': str(exc.detail)}})
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
 
@@ -273,7 +305,7 @@ async def disable_public_order_cache(request: Request, call_next: Any) -> Respon
     response = await call_next(request)
     response.headers["X-Request-Id"] = request.state.request_id
     if request.url.path in {"/order", "/order/status", "/admin", "/assets/order.js"} \
-            or request.url.path.startswith("/api/v1/admin/"):
+            or request.url.path.startswith(("/api/v1/admin/", "/api/v1/merchant/", "/assets/merchant")):
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
@@ -756,6 +788,15 @@ async def mock_payment_callback(request: Request, _: AccessManage) -> dict[str, 
 async def alipay_mock_callback(request: Request) -> str:
     values = dict(parse_qsl((await request.body()).decode("utf-8"), keep_blank_values=True))
     return payment_application_service.alipay_callback(values, provider_name="alipay_mock")
+
+
+@app.post('/api/v1/payments/callback/accounts/{account_id}', tags=['payments'], response_class=PlainTextResponse)
+async def merchant_payment_callback(account_id: uuid.UUID, request: Request) -> str:
+    try:
+        values = dict(parse_qsl((await request.body()).decode('utf-8'), keep_blank_values=True))
+    except UnicodeDecodeError:
+        return 'failure'
+    return payment_application_service.account_callback(values, account_id)
 
 
 @app.post("/api/v1/payments/{payment_id}/refund", tags=["payments"], status_code=202)

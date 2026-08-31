@@ -72,6 +72,18 @@ class Settings(BaseSettings):
     service_host: str = Field(default="127.0.0.1", alias="SERVICE_HOST")
     service_port: int = Field(default=8788, alias="SERVICE_PORT", ge=1, le=65535)
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
+    merchant_enabled: bool = Field(default=False, alias="MERCHANT_ENABLED")
+    merchant_registration_mode: Literal['EMAIL', 'USERNAME'] = Field(default='EMAIL', alias='MERCHANT_REGISTRATION_MODE')
+    merchant_limited_release: bool = Field(default=False, alias='MERCHANT_LIMITED_RELEASE')
+    merchant_runtime_role: str = Field(default="coffee_merchant", alias="MERCHANT_RUNTIME_ROLE", pattern=r"^[a-z][a-z0-9_]{0,62}$")
+    merchant_encryption_key: str | None = Field(default=None, alias="MERCHANT_ENCRYPTION_KEY")
+    merchant_cookie_secure: bool = Field(default=True, alias="MERCHANT_COOKIE_SECURE")
+    merchant_session_hours: int = Field(default=12, alias="MERCHANT_SESSION_HOURS", ge=1, le=168)
+    merchant_smtp_host: str | None = Field(default=None, alias="MERCHANT_SMTP_HOST")
+    merchant_smtp_port: int = Field(default=587, alias="MERCHANT_SMTP_PORT", ge=1, le=65535)
+    merchant_smtp_user: str | None = Field(default=None, alias="MERCHANT_SMTP_USER")
+    merchant_smtp_password: str | None = Field(default=None, alias="MERCHANT_SMTP_PASSWORD")
+    merchant_mail_from: str | None = Field(default=None, alias="MERCHANT_MAIL_FROM")
 
 
 @lru_cache

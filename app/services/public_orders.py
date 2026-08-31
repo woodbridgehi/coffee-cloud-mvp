@@ -18,6 +18,8 @@ from .errors import ServiceError
 from .order_state import transition_order
 from .presenters import iso, payment_payload
 from .refund_intents import REFUNDABLE_PAYMENT_STATUSES, ensure_automatic_refund_intent
+from ..merchant.accounts import provider_for_payment
+from ..merchant.catalog import apply_merchant_catalog
 
 
 log = logging.getLogger("coffee-cloud-mvp.public-orders")
@@ -99,14 +101,14 @@ class PublicOrderService:
             terminal = self._terminal(terminals, identifier)
             capabilities = terminals.snapshot(terminal["id"], "capabilities")
             inventory = terminals.snapshot(terminal["id"], "inventory")
-        return {
-            **public_menu(
+            menu = public_menu(
                 terminal, capabilities, inventory, self.settings.offline_threshold_seconds,
                 self.settings.default_product_price_minor, self.settings.payment_currency,
                 self.settings.public_payment_mode,
-            ),
-            "serverTime": iso(utc_now()),
-        }
+            )
+            if getattr(self.settings,'merchant_enabled',False):
+                menu = apply_merchant_catalog(connection,terminal,menu,self.settings.public_payment_mode)
+        return {**menu,"serverTime":iso(utc_now())}
 
     def create(
         self, identifier: str, payload: PublicOrderCreateRequest, idempotency_key: str | None
@@ -137,6 +139,8 @@ class PublicOrderService:
                 self.settings.default_product_price_minor, self.settings.payment_currency,
                 self.settings.public_payment_mode,
             )
+            if getattr(self.settings,'merchant_enabled',False):
+                menu = apply_merchant_catalog(connection,terminal,menu,self.settings.public_payment_mode)
             product = next((item for item in menu["products"] if item["recipeId"] == payload.recipeId), None)
             if not product or product["recipeVersion"] != payload.recipeVersion:
                 raise ServiceError(409, "recipe is missing or version changed; refresh the menu")
@@ -226,7 +230,7 @@ class PublicOrderService:
         closed: list[tuple[dict[str, Any], Any]] = []
         for intent in intents_to_close:
             try:
-                result = self.payment_provider(intent["provider"]).close_payment(
+                result = provider_for_payment(self.payment_provider, intent).close_payment(
                     intent["merchant_payment_no"]
                 )
                 closed.append((intent, result))
