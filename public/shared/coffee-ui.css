@@ -1,0 +1,79 @@
+/* ============================================================
+   Coffee Cloud · 共享设计令牌（三套前端唯一视觉源头）
+   ------------------------------------------------------------
+   命名空间：所有令牌一律使用 --cc- 前缀；本文件不定义任何
+   页面级类（除 cc- 工具类），避免 merchant / admin / order
+   三套页面互相污染。页面 CSS 通过别名映射消费：
+
+     --bg: var(--cc-bg);  --espresso: var(--cc-espresso); …
+
+   引入方式（页面 <head>，置于页面 CSS 之前）：
+     <link rel="stylesheet" href="/assets/shared/coffee-ui.css?v=20260901">
+
+   变更规则：修改品牌色 / 圆角 / 阴影 / 状态色只能改这里，
+   页面文件只允许保留自身派生值（如更深的文字变体）。
+   ============================================================ */
+
+:root {
+  /* ---- 字体 ---- */
+  --cc-font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+  --cc-font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  /* 展示字体：消费者页面标题使用；运营后台为数据密集界面，默认不使用 */
+  --cc-font-display: "Songti SC", "Noto Serif SC", Georgia, "Times New Roman", serif;
+
+  /* ---- 表面与文字 ---- */
+  --cc-bg: #f6f2ec;            /* 暖白底 */
+  --cc-surface: #ffffff;       /* 卡片 */
+  --cc-surface-2: #faf6f0;     /* 次级面板 / 表头 */
+  --cc-ink: #261a11;           /* 主文字 */
+  --cc-ink-2: #4d3c2d;         /* 次级文字 */
+  --cc-muted: #7d6e5f;         /* 弱化文字 */
+
+  /* ---- 品牌色 ---- */
+  --cc-espresso: #35241a;      /* 主品牌 · 深咖啡 */
+  --cc-espresso-hi: #4d3527;   /* 主品牌 hover */
+  --cc-caramel: #a3652c;       /* 强调色 · 焦糖 */
+  --cc-caramel-soft: #f5e6d3;
+
+  /* ---- 状态色（低饱和，配同色系 soft 底） ---- */
+  --cc-sage: #1f7a4d;  --cc-sage-soft: #e2f0e7;   /* 成功 */
+  --cc-danger: #b23a2a; --cc-danger-soft: #fbeae5; /* 危险 */
+  --cc-amber: #96650f; --cc-amber-soft: #faf0d8;   /* 警告 */
+  --cc-azure: #1f5f8a; --cc-azure-soft: #e3eef6;   /* 进行 / 信息 */
+
+  /* ---- 边框 ---- */
+  --cc-line: #e7ddd0;
+  --cc-line-strong: #d5c7b6;
+
+  /* ---- 圆角 ---- */
+  --cc-radius-lg: 16px;
+  --cc-radius-md: 12px;
+  --cc-radius-sm: 9px;
+
+  /* ---- 阴影 ---- */
+  --cc-shadow-1: 0 1px 3px rgba(53, 36, 26, 0.08);
+  --cc-shadow-2: 0 18px 44px rgba(53, 36, 26, 0.18);
+
+  /* ---- 焦点环（白色间隔 + 实色焦糖环，白底对比度 ≥3:1） ---- */
+  --cc-focus-ring:
+    0 0 0 2px #ffffff,
+    0 0 0 4px #a3652c;
+}
+
+/* ---- 基础盒子模型（三套页面统一） ---- */
+* { box-sizing: border-box; }
+
+/* ---- 工具类（cc- 前缀，可在任何页面使用） ---- */
+.cc-mono { font-family: var(--cc-font-mono); }
+.cc-num { font-variant-numeric: tabular-nums; }
+
+/* ---- 无动画偏好（三套页面统一） ---- */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

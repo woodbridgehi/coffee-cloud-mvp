@@ -1,12 +1,15 @@
 /* ============================================================
-   Coffee Cloud · 设备运营台（无框架实现）
+   Coffee Cloud · 设备运营台（无框架实现，ES Module）
    - Token 仅保存在页面内存变量中，不写 localStorage /
      sessionStorage / cookie / URL，也不输出到 console。
    - 登录后先请求 GET /api/v1/admin/session，按 permissions
      控制导航与操作可见性。
    - API 数据一律走 textContent / createElement；innerHTML 仅
      用于不含任何 API 数据的静态 SVG 图标。
+   - 纯展示函数抽到 admin-format.js（可被 Node 回归测试导入）。
    ============================================================ */
+import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
+
 (() => {
   'use strict';
 
@@ -103,36 +106,56 @@
       el('strong', mono ? { class: 'mono' } : null, value === null || value === undefined || value === '' ? '—' : String(value)));
   }
 
-  /* ---------- 展示辅助 ---------- */
+  /* 表格单元格：data-label 供手机端卡片化布局展示列名；
+     cls 含 num 时金额 / 数量列右对齐（与 th.num 对应）。 */
+  function td(content, label, cls) {
+    return el('td', { 'data-label': label, class: cls || null }, content);
+  }
 
-  function fmtTime(value) {
-    if (!value) return '—';
-    const date = new Date(value);
-    return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString('zh-CN', {
-      hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit',
+  /* 计数字段缺失时显示「—」，不默认成 0 */
+  function fmtCount(value) {
+    return value === null || value === undefined ? '—' : String(value);
+  }
+
+  /* 表单行：<label for> 与控件关联，保证可访问名称 */
+  let fieldSeq = 0;
+  function field(labelText, control, cls, ...extra) {
+    const id = control.id || `admin-field-${++fieldSeq}`;
+    if (!control.id) control.id = id;
+    return el('div', { class: `field${cls ? ' ' + cls : ''}` },
+      el('label', { class: 'field-label', for: id }, labelText),
+      control, ...extra);
+  }
+
+  /* 键盘行激活 + 跨重渲染保持焦点（自动刷新会整体重建表格行） */
+  function rowActivate(row, handler) {
+    row.tabIndex = 0;
+    row.addEventListener('keydown', event => {
+      // Nested controls retain their native Enter/Space behavior.
+      if (event.target !== row || event.repeat) return;
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        handler();
+      }
     });
   }
 
-  function fmtAgo(value) {
-    if (!value) return '从未';
-    const ms = Date.now() - new Date(value).getTime();
-    if (!Number.isFinite(ms)) return '—';
-    const sec = Math.round(ms / 1000);
-    if (sec < 0) return fmtTime(value);
-    if (sec < 60) return `${sec} 秒前`;
-    if (sec < 3600) return `${Math.round(sec / 60)} 分钟前`;
-    if (sec < 86400) return `${Math.round(sec / 3600)} 小时前`;
-    return `${Math.round(sec / 86400)} 天前`;
+  function captureRowFocus() {
+    const active = document.activeElement;
+    return active && active.tagName === 'TR' ? String(active.dataset.rowKey || '') : '';
   }
 
-  function fmtMoney(minor, currency) {
-    const amount = (Number(minor || 0) / 100).toFixed(2);
-    return currency === 'CNY' || !currency ? `¥${amount}` : `${amount} ${currency}`;
+  function restoreRowFocus(container, key) {
+    if (!key) return;
+    const next = container.querySelector(`tr[data-row-key="${CSS.escape(key)}"]`);
+    if (next) next.focus({ preventScroll: true });
   }
 
-  function fmtPercent(rate) {
-    return rate === null || rate === undefined ? '—' : `${(Number(rate) * 100).toFixed(1)}%`;
+  function th(label, cls) {
+    return el('th', { class: cls || null }, label);
   }
+
+  /* ---------- 展示辅助（纯函数在 admin-format.js，可回归测试） ---------- */
 
   const ORDER_STATUS = {
     CREATED: { label: '已创建', kind: 'gray' },
@@ -222,6 +245,7 @@
     if (!root) return;
     const node = el('div', {
       class: `toast ${kind}`,
+      role: kind === 'error' ? 'alert' : 'status',
       onclick: () => node.remove(),
     },
       el('span', { class: 't-icon', html: kind === 'success' ? icon.check : kind === 'error' ? icon.alert : icon.info, 'aria-hidden': 'true' }),
@@ -242,7 +266,8 @@
   function openModal({ title, body, footer, wide, dismissible = true }) {
     closeModal();
     const root = $('modal-root');
-    const handle = { root, card: null, onClose: null };
+    const lastActive = document.activeElement;
+    const handle = { root, card: null, onClose: null, lastActive };
     const close = () => {
       if (!activeModal || activeModal.root !== root) return;
       activeModal = null;
@@ -250,6 +275,11 @@
       root.setAttribute('aria-hidden', 'true');
       clear(root);
       if (handle.onClose) handle.onClose();
+      /* 关闭后把焦点还给触发元素（若仍在文档中） */
+      const previous = handle.lastActive;
+      if (previous && previous.isConnected && typeof previous.focus === 'function') {
+        previous.focus({ preventScroll: true });
+      }
     };
     const card = el('div', { class: `modal${wide ? ' wide' : ''}`, role: 'dialog', 'aria-modal': 'true', 'aria-label': title });
     card.append(
@@ -264,9 +294,10 @@
     root.setAttribute('aria-hidden', 'false');
     root.replaceChildren(card);
     root.onclick = dismissible ? close : () => {};
+    handle.card = card;
     activeModal = handle;
-    const focusable = card.querySelector('input, select, textarea, button:not(.modal-close)');
-    if (focusable) focusable.focus();
+    const focusable = card.querySelector('input, select, textarea, button:not(.modal-close)') || card.querySelector('button');
+    if (focusable) focusable.focus({ preventScroll: true });
     return { ...handle, close, card };
   }
 
@@ -279,11 +310,25 @@
     activeModal = null;
   }
 
+  const MODAL_FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
   document.addEventListener('keydown', event => {
-    if (event.key === 'Escape' && activeModal) {
-      const root = $('modal-root');
-      root.onclick?.();
+    if (!activeModal) return;
+    if (event.key === 'Escape') {
+      $('modal-root').onclick?.();
+      return;
     }
+    /* Tab 焦点圈定：焦点始终留在弹窗内 */
+    if (event.key !== 'Tab' || !activeModal.card) return;
+    const focusables = Array.from(activeModal.card.querySelectorAll(MODAL_FOCUSABLE))
+      .filter(node => node.getClientRects().length > 0);
+    if (!focusables.length) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    const current = document.activeElement;
+    if (!activeModal.card.contains(current)) { event.preventDefault(); first.focus(); return; }
+    if (event.shiftKey && current === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && current === last) { event.preventDefault(); first.focus(); }
   });
 
   /* 确认弹窗；requireText 非空时需要输入指定文本才能确认（二次确认） */
@@ -298,7 +343,7 @@
       if (requireText) {
         input = el('input', { class: 'input', placeholder: `输入“${requireText}”以确认`, autocomplete: 'off' });
         input.addEventListener('input', () => { confirmBtn.disabled = input.value.trim() !== requireText; });
-        body.push(el('div', { class: 'field' }, el('span', { class: 'field-label' }, '请输入确认文字'), input));
+        body.push(field('请输入确认文字', input));
       }
       const done = result => { modal.close(); resolve(result); };
       confirmBtn = el('button', {
@@ -450,6 +495,7 @@
       nav.append(el('button', {
         class: `nav-item${state.view === def.id ? ' active' : ''}`,
         type: 'button',
+        'aria-current': state.view === def.id ? 'page' : null,
         onclick: () => { location.hash = `#/${def.id}`; },
       },
         el('span', { class: 'n-icon', html: def.icon, 'aria-hidden': 'true' }),
@@ -481,6 +527,7 @@
     document.title = `Coffee Cloud · ${active.title}`;
     $('view-title').textContent = active.title;
     $('view-sub').textContent = active.sub;
+    $('view-title').focus({ preventScroll: true });
     buildNav();
     const workspace = $('workspace');
     clear(workspace);
@@ -682,62 +729,63 @@
 
   function renderOrderTable(container, orders, { compact = false, expandable = true } = {}) {
     if (!container) return;
+    const focusKey = captureRowFocus();
     clear(container);
     if (!orders.length) {
       container.append(emptyState('还没有订单', '设备产生扫码订单后会出现在这里'));
       return;
     }
     const thead = el('thead', null, el('tr', null,
-      el('th', null, '订单'),
-      el('th', null, '设备'),
-      el('th', null, '饮品 / 金额'),
-      el('th', null, '状态'),
-      el('th', null, '支付'),
-      el('th', null, '制作进度'),
-      compact ? null : el('th', null, '创建时间'),
+      th('订单'),
+      th('设备'),
+      th('金额', 'num'),
+      th('状态'),
+      th('支付'),
+      th('制作进度'),
+      compact ? null : th('创建时间'),
     ));
     const tbody = el('tbody');
+    const toggleOrderRow = orderId => {
+      state.expandedOrderId = state.expandedOrderId === orderId ? null : orderId;
+      renderOrderTable(container, orders, { compact, expandable });
+    };
     for (const order of orders) {
       const progress = Math.round(Math.max(0, Math.min(1, Number(order.progress || 0))) * 100);
       let expandedSlot = null;
       const colspan = compact ? 6 : 7;
       const row = el('tr', { class: expandable ? 'clickable' : '' },
-        el('td', null,
+        td(el('div', null,
           el('div', { class: 'cell-strong mono' }, order.orderNo || order.orderId),
-          el('div', { class: 'cell-sub' }, order.paymentMode === 'TEST_FREE' ? '免支付联调' : order.storeId || '')),
-        el('td', null,
+          el('div', { class: 'cell-sub' }, order.paymentMode === 'TEST_FREE' ? '免支付联调' : order.storeId || '')), '订单'),
+        td(el('div', null,
           el('div', null, order.deviceId || '—'),
-          el('div', { class: 'cell-sub' }, order.productName || '')),
-        el('td', null, fmtMoney(order.totalAmountMinor, order.currency)),
-        el('td', null, orderBadge(order.status)),
-        el('td', null, paymentBadge(order.paymentStatus)),
-        el('td', null,
-          el('div', { class: 'progress-line' },
-            el('div', { class: 'progress-track' }, el('div', { class: 'progress-fill', style: `width:${progress}%` })),
-            el('small', null, order.currentStepName ? `${order.currentStepName} · ${progress}%` : `${progress}%`))),
-        compact ? null : el('td', null, el('span', { class: 'muted' }, fmtTime(order.createdAt))),
+          el('div', { class: 'cell-sub' }, order.productName || '')), '设备'),
+        td(el('span', { class: 'num' }, fmtMoney(order.totalAmountMinor, order.currency)), '金额', 'num'),
+        td(orderBadge(order.status), '状态'),
+        td(paymentBadge(order.paymentStatus), '支付'),
+        td(el('div', { class: 'progress-line' },
+          el('div', { class: 'progress-track' }, el('div', { class: 'progress-fill', style: `width:${progress}%` })),
+          el('small', null, order.currentStepName ? `${order.currentStepName} · ${progress}%` : `${progress}%`)), '制作进度'),
+        compact ? null : td(el('span', { class: 'muted' }, fmtTime(order.createdAt)), '创建时间'),
       );
       if (expandable) {
-        row.addEventListener('click', () => {
-          state.expandedOrderId = state.expandedOrderId === order.orderId ? null : order.orderId;
-          for (const tr of Array.from(tbody.children)) {
-            if (tr.dataset.orderId) tr.classList.toggle('expanded', tr.dataset.orderId === state.expandedOrderId);
-          }
-          if (expandedSlot) renderOrderDetail(expandedSlot, order);
-        });
-        row.dataset.orderId = order.orderId;
+        row.dataset.rowKey = order.orderId;
+        row.setAttribute('aria-expanded', String(state.expandedOrderId === order.orderId));
+        row.addEventListener('click', () => toggleOrderRow(order.orderId));
+        rowActivate(row, () => toggleOrderRow(order.orderId));
       }
       tbody.append(row);
       if (expandable && state.expandedOrderId === order.orderId) {
         row.classList.add('expanded');
         expandedSlot = el('td', { colspan: String(colspan) });
         const detailRow = el('tr', { class: 'expanded' }, expandedSlot);
-        detailRow.dataset.orderId = order.orderId;
+        detailRow.dataset.rowKey = `${order.orderId}:detail`;
         renderOrderDetail(expandedSlot, order);
         tbody.append(detailRow);
       }
     }
-    container.append(el('table', { class: 'grid' }, thead, tbody));
+    container.append(el('table', { class: 'grid responsive' }, thead, tbody));
+    restoreRowFocus(container, focusKey);
   }
 
   function renderOrderDetail(slot, order) {
@@ -781,8 +829,8 @@
     );
 
     const toolbar = el('div', { class: 'card toolbar' },
-      el('div', { class: 'field grow' }, el('span', { class: 'field-label' }, '搜索'), search),
-      el('div', { class: 'field' }, el('span', { class: 'field-label' }, '连接状态'), connFilter),
+      field('搜索', search, 'grow'),
+      field('连接状态', connFilter),
       el('div', { class: 'toolbar-actions' },
         can(PERMISSIONS.devicesManage)
           ? el('button', { class: 'btn primary small', type: 'button', html: icon.plus + '<span>登记设备</span>', onclick: openRegisterModal })
@@ -831,6 +879,7 @@
   function renderDeviceRows() {
     const container = $('device-rows');
     if (!container) return;
+    const focusKey = captureRowFocus();
     clear(container);
     const devices = filteredDevices();
     if (!devices.length) {
@@ -840,31 +889,35 @@
       return;
     }
     const thead = el('thead', null, el('tr', null,
-      el('th', null, '连接'), el('th', null, '设备'), el('th', null, '门店 / 实例'),
-      el('th', null, '生命周期'), el('th', null, '活跃订单'), el('th', null, '最近心跳')));
+      th('连接'), th('设备'), th('门店 / 实例'),
+      th('生命周期'), th('活跃订单', 'num'), th('最近心跳')));
     const tbody = el('tbody');
     for (const device of devices) {
       const row = el('tr', {
         class: `clickable${device.deviceId === state.selectedDeviceId ? ' selected' : ''}`,
         onclick: () => selectDevice(device.deviceId),
       },
-        el('td', null, badge(device.online ? 'green' : device.hasEverConnected ? 'red' : 'gray',
-          device.online ? '在线' : device.hasEverConnected ? '离线' : '从未上线')),
-        el('td', null,
+        td(badge(device.online ? 'green' : device.hasEverConnected ? 'red' : 'gray',
+          device.online ? '在线' : device.hasEverConnected ? '离线' : '从未上线'), '连接'),
+        td(el('div', null,
           el('div', { class: 'cell-strong mono' }, device.deviceId),
-          el('div', { class: 'cell-sub' }, `序列号 ${device.serialNumber || '—'}`)),
-        el('td', null,
+          el('div', { class: 'cell-sub' }, `序列号 ${device.serialNumber || '—'}`)), '设备'),
+        td(el('div', null,
           el('div', null, device.storeName || device.storeId || '—'),
-          el('div', { class: 'cell-sub' }, `${device.storeId || '无门店 ID'} · ${device.profileComplete ? '资料已完成' : '待首次安装'}`)),
-        el('td', null, lifecycleBadge(device.lifecycleStatus)),
-        el('td', null, el('span', { class: 'num' }, String(device.activeOrderCount ?? 0))),
-        el('td', null,
+          el('div', { class: 'cell-sub' }, `${device.storeId || '无门店 ID'} · ${device.profileComplete ? '资料已完成' : '待首次安装'}`)), '门店 / 实例'),
+        td(lifecycleBadge(device.lifecycleStatus), '生命周期'),
+        td(el('span', { class: 'num' }, fmtCount(device.activeOrderCount)), '活跃订单', 'num'),
+        td(el('div', null,
           el('div', null, fmtAgo(device.lastHeartbeatAt)),
-          el('div', { class: 'cell-sub' }, `软件 ${device.softwareVersion || '—'}`)),
+          el('div', { class: 'cell-sub' }, `软件 ${device.softwareVersion || '—'}`)), '最近心跳'),
       );
+      row.dataset.rowKey = device.deviceId;
+      if (device.deviceId === state.selectedDeviceId) row.setAttribute('aria-current', 'true');
+      rowActivate(row, () => selectDevice(device.deviceId));
       tbody.append(row);
     }
-    container.append(el('table', { class: 'grid' }, thead, tbody));
+    container.append(el('table', { class: 'grid responsive' }, thead, tbody));
+    restoreRowFocus(container, focusKey);
   }
 
   function resetDeviceDetail() {
@@ -930,8 +983,8 @@
         kv('软件版本', detail.softwareVersion),
         kv('活跃启动 ID', detail.activeBootId, true),
         kv('最近序列号', detail.lastSequence),
-        kv('心跳 / 事件 / 命令', `${detail.heartbeatCount ?? 0} / ${detail.eventCount ?? 0} / ${detail.commandCount ?? 0}`),
-        kv('活跃订单', String(detail.activeOrderCount ?? 0)),
+        kv('心跳 / 事件 / 命令', `${fmtCount(detail.heartbeatCount)} / ${fmtCount(detail.eventCount)} / ${fmtCount(detail.commandCount)}`),
+        kv('活跃订单', fmtCount(detail.activeOrderCount)),
         kv('能力快照', snapshots.capabilities ? `v${snapshots.capabilities.version || '?'} · ${fmtAgo(snapshots.capabilities.receivedAt)}` : '未上报'),
         kv('物料快照', snapshots.inventory ? `v${snapshots.inventory.version || '?'} · ${fmtAgo(snapshots.inventory.receivedAt)}` : '未上报'),
         kv('最近心跳', fmtTime(detail.lastHeartbeatAt)),
@@ -1026,8 +1079,8 @@
     const modal = openModal({
       title: `变更生命周期 · ${deviceId}`,
       body: [
-        el('div', { class: 'field' }, el('span', { class: 'field-label' }, '目标状态'), statusSelect),
-        el('div', { class: 'field' }, el('span', { class: 'field-label' }, '变更原因（必填）'), reason, error),
+        field('目标状态', statusSelect),
+        field('变更原因（必填）', reason, null, error),
         el('p', { class: 'field-hint' }, 'SUSPENDED / MAINTENANCE 会立即停止向该设备派发新制作任务；已在制作的订单不受影响。'),
       ],
       footer: [
@@ -1141,10 +1194,10 @@
       body: [
         el('p', { class: 'field-hint' }, '先预登记受约束的设备 ID 与出厂序列号，再把一次性激活码交给设备端。门店资料在设备首次安装时补齐；deviceId 格式为 coffee-bot-003，序列号格式为 CB-2026-003。'),
         el('div', { class: 'kv-grid' },
-          el('div', { class: 'field' }, el('span', { class: 'field-label' }, 'deviceId *'), deviceIdInput),
-          el('div', { class: 'field' }, el('span', { class: 'field-label' }, '序列号 *'), serialInput),
-          el('div', { class: 'field' }, el('span', { class: 'field-label' }, 'instanceId'), instanceInput),
-          el('div', { class: 'field' }, el('span', { class: 'field-label' }, 'storeId'), storeInput)),
+          field('deviceId *', deviceIdInput),
+          field('序列号 *', serialInput),
+          field('instanceId', instanceInput),
+          field('storeId', storeInput)),
         error,
       ],
       footer: [
@@ -1212,8 +1265,8 @@
     });
     container.append(
       el('div', { class: 'card toolbar' },
-        el('div', { class: 'field' }, el('span', { class: 'field-label' }, '订单状态'), statusSelect),
-        el('div', { class: 'field grow' }, el('span', { class: 'field-label' }, '设备'), deviceInput),
+        field('订单状态', statusSelect),
+        field('设备', deviceInput, 'grow'),
         el('div', { class: 'toolbar-actions' },
           el('button', { class: 'btn secondary small', type: 'button', html: icon.refresh + '<span>查询</span>', onclick: () => loadOrders().catch(() => { }) }))),
       el('section', { class: 'card' },
@@ -1261,33 +1314,37 @@
   }
 
   function renderOperators(container) {
+    const focusKey = captureRowFocus();
     clear(container);
     if (!state.operators.length) {
       container.append(emptyState('还没有运营员', can(PERMISSIONS.accessManage) ? '使用「新建运营员」创建第一个账号' : '需要 OWNER 创建运营员'));
       return;
     }
     const thead = el('thead', null, el('tr', null,
-      el('th', null, '运营员'), el('th', null, '角色'), el('th', null, '状态'),
-      el('th', null, '有效 Token'), el('th', null, '最近使用'), el('th', null, '操作')));
+      th('运营员'), th('角色'), th('状态'),
+      th('有效 Token', 'num'), th('最近使用'), th('操作')));
     const tbody = el('tbody');
     for (const operator of state.operators) {
       const row = el('tr', { class: 'clickable' },
-        el('td', null,
+        td(el('div', null,
           el('div', { class: 'cell-strong' }, operator.displayName),
-          el('div', { class: 'cell-sub mono' }, operator.operatorId)),
-        el('td', null, badge(operator.role === 'OWNER' ? 'blue' : operator.role === 'MANAGER' ? 'green' : 'gray', operator.role)),
-        el('td', null, badge(operator.status === 'ACTIVE' ? 'green' : 'red', operator.status === 'ACTIVE' ? '启用' : '停用')),
-        el('td', null, el('span', { class: 'num' }, String(operator.activeTokenCount ?? 0))),
-        el('td', null, el('span', { class: 'muted' }, fmtAgo(operator.lastUsedAt))),
-        el('td', null,
-          can(PERMISSIONS.accessManage)
-            ? el('button', { class: 'btn secondary small', type: 'button', onclick: event => { event.stopPropagation(); openEditOperatorModal(operator); } }, '编辑')
-            : el('span', { class: 'muted' }, '只读')),
+          el('div', { class: 'cell-sub mono' }, operator.operatorId)), '运营员'),
+        td(badge(operator.role === 'OWNER' ? 'blue' : operator.role === 'MANAGER' ? 'green' : 'gray', operator.role), '角色'),
+        td(badge(operator.status === 'ACTIVE' ? 'green' : 'red', operator.status === 'ACTIVE' ? '启用' : '停用'), '状态'),
+        td(el('span', { class: 'num' }, fmtCount(operator.activeTokenCount)), '有效 Token', 'num'),
+        td(el('span', { class: 'muted' }, fmtAgo(operator.lastUsedAt)), '最近使用'),
+        td(can(PERMISSIONS.accessManage)
+          ? el('button', { class: 'btn secondary small', type: 'button', onclick: event => { event.stopPropagation(); openEditOperatorModal(operator); } }, '编辑')
+          : el('span', { class: 'muted' }, '只读'), '操作'),
       );
-      row.addEventListener('click', () => {
+      row.dataset.rowKey = operator.operatorId;
+      row.setAttribute('aria-expanded', String(state.expandedOperatorId === operator.operatorId));
+      const toggleOperatorRow = () => {
         state.expandedOperatorId = state.expandedOperatorId === operator.operatorId ? null : operator.operatorId;
         renderOperators(container);
-      });
+      };
+      row.addEventListener('click', toggleOperatorRow);
+      rowActivate(row, toggleOperatorRow);
       tbody.append(row);
       if (state.expandedOperatorId === operator.operatorId) {
         row.classList.add('selected');
@@ -1297,7 +1354,8 @@
         tbody.append(detailRow);
       }
     }
-    container.append(el('table', { class: 'grid' }, thead, tbody));
+    container.append(el('table', { class: 'grid responsive' }, thead, tbody));
+    restoreRowFocus(container, focusKey);
   }
 
   function renderOperatorTokens(slot, operator) {
@@ -1311,25 +1369,26 @@
         clear(wrap);
         const tokenRows = list.length
           ? list.map(token => el('tr', null,
-              el('td', null, el('span', { class: 'cell-strong' }, token.label || '—'), el('div', { class: 'cell-sub mono' }, token.tokenId)),
-              el('td', null, badge(token.status === 'ACTIVE' ? 'green' : token.status === 'REVOKED' ? 'red' : 'gray',
-                token.status === 'ACTIVE' ? '有效' : token.status === 'REVOKED' ? '已撤销' : token.status)),
-              el('td', null, token.expiresAt ? fmtTime(token.expiresAt) : '永不'),
-              el('td', null, el('span', { class: 'muted' }, fmtAgo(token.lastUsedAt))),
-              el('td', null, el('span', { class: 'muted' }, fmtTime(token.createdAt))),
-              el('td', null,
-                can(PERMISSIONS.accessManage) && token.status === 'ACTIVE'
-                  ? el('button', {
-                      class: 'btn danger small', type: 'button',
-                      onclick: () => revokeToken(operator, token),
-                    }, '撤销')
-                  : el('span', { class: 'muted' }, '—')),
+              td(el('span', null,
+                el('span', { class: 'cell-strong' }, token.label || '—'),
+                el('div', { class: 'cell-sub mono' }, token.tokenId)), '标签'),
+              td(badge(token.status === 'ACTIVE' ? 'green' : token.status === 'REVOKED' ? 'red' : 'gray',
+                token.status === 'ACTIVE' ? '有效' : token.status === 'REVOKED' ? '已撤销' : token.status), '状态'),
+              td(token.expiresAt ? fmtTime(token.expiresAt) : '永不', '过期时间'),
+              td(el('span', { class: 'muted' }, fmtAgo(token.lastUsedAt)), '最近使用'),
+              td(el('span', { class: 'muted' }, fmtTime(token.createdAt)), '创建时间'),
+              td(can(PERMISSIONS.accessManage) && token.status === 'ACTIVE'
+                ? el('button', {
+                    class: 'btn danger small', type: 'button',
+                    onclick: () => revokeToken(operator, token),
+                  }, '撤销')
+                : el('span', { class: 'muted' }, '—'), '操作'),
             ))
           : [el('tr', null, el('td', { colspan: '6' }, emptyState('还没有 Token', '为该运营员创建 API Token 后用于登录运营台')))];
-        const tokenTable = el('table', { class: 'grid', style: 'min-width:640px;margin-top:10px' },
+        const tokenTable = el('table', { class: 'grid responsive', style: 'min-width:640px;margin-top:10px' },
           el('thead', null, el('tr', null,
-            el('th', null, '标签'), el('th', null, '状态'), el('th', null, '过期时间'),
-            el('th', null, '最近使用'), el('th', null, '创建时间'), el('th', null, '操作'))),
+            th('标签'), th('状态'), th('过期时间'),
+            th('最近使用'), th('创建时间'), th('操作'))),
           el('tbody', null, tokenRows));
         const section = el('div', { style: 'display:grid;gap:4px' },
           el('h4', { style: 'font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-top:10px' }, `API Token · ${operator.displayName}`),
@@ -1372,8 +1431,8 @@
           el('span', { html: icon.plus, 'aria-hidden': 'true' }),
           el('span', null, '创建 Token'));
           section.append(el('div', { class: 'toolbar', style: 'border:1px solid var(--line);border-radius:12px;margin-top:10px' },
-            el('div', { class: 'field grow' }, el('span', { class: 'field-label' }, '新 Token 标签 *'), label),
-            el('div', { class: 'field' }, el('span', { class: 'field-label' }, '过期时间（可选）'), expires),
+            field('新 Token 标签 *', label, 'grow'),
+            field('过期时间（可选）', expires),
             el('div', { class: 'toolbar-actions', style: 'align-self:end' }, createBtn)));
         }
         wrap.append(section);
@@ -1421,8 +1480,8 @@
     const modal = openModal({
       title: '新建运营员',
       body: [
-        el('div', { class: 'field' }, el('span', { class: 'field-label' }, '名称 *'), nameInput),
-        el('div', { class: 'field' }, el('span', { class: 'field-label' }, '角色'), roleSelect),
+        field('名称 *', nameInput),
+        field('角色', roleSelect),
         el('div', { class: 'field' }, el('span', { class: 'field-label' }, '该角色权限'), permPreview),
         error,
       ],
@@ -1463,10 +1522,10 @@
     const modal = openModal({
       title: `编辑运营员 · ${operator.displayName}`,
       body: [
-        el('div', { class: 'field' }, el('span', { class: 'field-label' }, '名称'), nameInput),
+        field('名称', nameInput),
         el('div', { class: 'kv-grid' },
-          el('div', { class: 'field' }, el('span', { class: 'field-label' }, '角色'), roleSelect),
-          el('div', { class: 'field' }, el('span', { class: 'field-label' }, '状态'), statusSelect)),
+          field('角色', roleSelect),
+          field('状态', statusSelect)),
         el('p', { class: 'field-hint' }, '停用后该运营员全部 Token 立即失效；变更会写入审计日志。'),
         error,
       ],
@@ -1510,8 +1569,8 @@
     resourceInput.addEventListener('keydown', event => { if (event.key === 'Enter') apply(); });
     container.append(
       el('div', { class: 'card toolbar' },
-        el('div', { class: 'field grow' }, el('span', { class: 'field-label' }, 'action'), actionInput),
-        el('div', { class: 'field grow' }, el('span', { class: 'field-label' }, 'resourceType'), resourceInput),
+        field('action', actionInput, 'grow'),
+        field('resourceType', resourceInput, 'grow'),
         el('div', { class: 'toolbar-actions', style: 'align-self:end' },
           el('button', { class: 'btn secondary small', type: 'button', html: icon.refresh + '<span>查询</span>', onclick: apply }))),
       el('section', { class: 'card' },
@@ -1534,25 +1593,27 @@
       return;
     }
     const thead = el('thead', null, el('tr', null,
-      el('th', null, '时间'), el('th', null, '操作者'), el('th', null, '动作'),
-      el('th', null, '资源'), el('th', null, '请求 ID')));
+      th('时间'), th('操作者'), th('动作'),
+      th('资源'), th('请求 ID')));
     const tbody = el('tbody');
     for (const log of logs) {
       const row = el('tr', { class: 'clickable' },
-        el('td', null, el('span', { class: 'muted' }, fmtTime(log.createdAt))),
-        el('td', null,
+        td(el('span', { class: 'muted' }, fmtTime(log.createdAt)), '时间'),
+        td(el('div', null,
           el('div', { class: 'cell-strong' }, log.actorName || log.actorId || '—'),
-          el('div', { class: 'cell-sub' }, `${log.actorType || ''}${log.actorId ? ' · ' + log.actorId : ''}`)),
-        el('td', null, el('code', { class: 'mono' }, log.action || '—')),
-        el('td', null,
+          el('div', { class: 'cell-sub' }, `${log.actorType || ''}${log.actorId ? ' · ' + log.actorId : ''}`)), '操作者'),
+        td(el('code', { class: 'mono' }, log.action || '—'), '动作'),
+        td(el('div', null,
           el('div', null, log.resourceType || '—'),
-          el('div', { class: 'cell-sub mono' }, log.resourceId || '')),
-        el('td', null, el('span', { class: 'muted mono' }, log.requestId || '—')),
+          el('div', { class: 'cell-sub mono' }, log.resourceId || '')), '资源'),
+        td(el('span', { class: 'muted mono' }, log.requestId || '—'), '请求 ID'),
       );
+      row.setAttribute('aria-haspopup', 'dialog');
+      rowActivate(row, () => showAuditDetail(log));
       row.addEventListener('click', () => showAuditDetail(log));
       tbody.append(row);
     }
-    container.append(el('table', { class: 'grid' }, thead, tbody));
+    container.append(el('table', { class: 'grid responsive' }, thead, tbody));
     state.lastRefreshAt = new Date();
   }
 

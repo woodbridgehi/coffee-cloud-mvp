@@ -5,12 +5,13 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#241a12">
   <title>Coffee Cloud · 设备运营台</title>
-  <link rel="stylesheet" href="/assets/admin.css?v=20260827">
+  <link rel="stylesheet" href="/assets/shared/coffee-ui.css?v=20260902">
+  <link rel="stylesheet" href="/assets/admin.css?v=20260902">
 </head>
 <body class="admin-body">
 
   <!-- 登录层 -->
-  <section id="login-view" class="login-wrap" aria-label="登录">
+  <section id="login-view" class="login-wrap" aria-label="登录" data-od-id="admin-login-view">
     <div class="login-card">
       <div class="login-brand">
         <span class="login-mark" aria-hidden="true">
@@ -39,7 +40,7 @@
 
   <!-- 应用外壳 -->
   <div id="shell" class="shell hidden">
-    <aside class="sidebar">
+    <aside class="sidebar" data-od-id="admin-sidebar">
       <div class="side-brand">
         <span class="side-mark" aria-hidden="true">
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
@@ -61,9 +62,9 @@
     </aside>
 
     <div class="main-col">
-      <header class="topbar">
+      <header class="topbar" data-od-id="admin-topbar">
         <div class="topbar-title">
-          <h2 id="view-title">总览</h2>
+          <h2 id="view-title" tabindex="-1">总览</h2>
           <p id="view-sub"></p>
         </div>
         <div class="topbar-side">
@@ -71,13 +72,13 @@
           <button id="refresh-btn" class="btn secondary small" type="button">立即刷新</button>
         </div>
       </header>
-      <main id="workspace" class="workspace" tabindex="-1"></main>
+      <main id="workspace" class="workspace" tabindex="-1" data-od-id="admin-workspace"></main>
     </div>
   </div>
 
-  <div id="toast-root" class="toast-root" role="status" aria-live="polite"></div>
+  <div id="toast-root" class="toast-root"></div>
   <div id="modal-root" class="modal-root hidden" aria-hidden="true"></div>
 
-  <script src="/assets/admin.js?v=20260827" defer></script>
+  <script type="module" src="/assets/admin.js?v=20260902"></script>
 </body>
 </html>

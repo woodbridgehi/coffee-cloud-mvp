@@ -52,3 +52,21 @@ test('authConfig fetches the public auth configuration without a session', async
   assert.equal(cfg.mailEnabled, false);
   assert.equal(cfg.passwordMinLength, 15);
 });
+
+test('order filters use persisted states without dropping tenant/date filters', async (t) => {
+  const calls = [];
+  t.mock.method(globalThis, 'fetch', async url => {
+    calls.push(new URL(url, 'http://local.test'));
+    return Response.json({ data: [], meta: {} });
+  });
+  const api = createRealAdapter();
+  const params = { status: 'DELIVERED', environment: 'TEST', storeId: 'store-1', from: '2026-08-01' };
+  await api.listOrders(params);
+  assert.equal(calls[0].searchParams.get('status'), 'READY');
+  for (const key of ['environment', 'storeId', 'from']) assert.equal(calls[0].searchParams.get(key), params[key]);
+  assert.equal(params.status, 'DELIVERED');
+  await api.listOrders({ status: 'PENDING' });
+  assert.equal(calls[1].searchParams.get('status'), 'AWAITING_PAYMENT');
+  await api.listOrders({ status: 'HOLD' });
+  assert.equal(calls[2].searchParams.get('status'), 'HOLD');
+});

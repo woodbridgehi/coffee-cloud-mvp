@@ -2,47 +2,46 @@
    Coffee Cloud · B 端客户运营后台
    暖白背景 / 咖啡棕品牌色 / 低饱和状态色；桌面侧栏 + 移动折叠。
    390px 不横向溢出；尊重 prefers-reduced-motion。
+   令牌源头：/assets/shared/coffee-ui.css（--cc-*），本文件只做
+   别名映射与页面级组件规则，不再自造品牌色值。
    ============================================================ */
 
 :root {
-  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
-    "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
-  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  --font-ui: var(--cc-font-ui);
+  --font-mono: var(--cc-font-mono);
 
-  --bg: #f6f2ec;
-  --panel: #ffffff;
-  --panel-2: #faf6f0;
-  --ink: #261a11;
-  --ink-2: #4d3c2d;
-  --muted: #7d6e5f;
+  --bg: var(--cc-bg);
+  --panel: var(--cc-surface);
+  --panel-2: var(--cc-surface-2);
+  --ink: var(--cc-ink);
+  --ink-2: var(--cc-ink-2);
+  --muted: var(--cc-muted);
 
-  --espresso: #35241a;
-  --espresso-hi: #4d3527;
-  --caramel: #a3652c;
-  --caramel-soft: #f5e6d3;
+  --espresso: var(--cc-espresso);
+  --espresso-hi: var(--cc-espresso-hi);
+  --caramel: var(--cc-caramel);
+  --caramel-soft: var(--cc-caramel-soft);
 
-  --sage: #1f7a4d;
-  --sage-soft: #e2f0e7;
-  --danger: #b23a2a;
-  --danger-soft: #fbeae5;
-  --amber: #96650f;
-  --amber-soft: #faf0d8;
-  --azure: #1f5f8a;
-  --azure-soft: #e3eef6;
+  --sage: var(--cc-sage);
+  --sage-soft: var(--cc-sage-soft);
+  --danger: var(--cc-danger);
+  --danger-soft: var(--cc-danger-soft);
+  --amber: var(--cc-amber);
+  --amber-soft: var(--cc-amber-soft);
+  --azure: var(--cc-azure);
+  --azure-soft: var(--cc-azure-soft);
 
-  --line: #e7ddd0;
-  --line-strong: #d5c7b6;
+  --line: var(--cc-line);
+  --line-strong: var(--cc-line-strong);
 
-  --radius-lg: 16px;
-  --radius-md: 12px;
-  --radius-sm: 9px;
+  --radius-lg: var(--cc-radius-lg);
+  --radius-md: var(--cc-radius-md);
+  --radius-sm: var(--cc-radius-sm);
 
-  --shadow-1: 0 1px 3px rgba(53, 36, 26, 0.08);
-  --shadow-2: 0 18px 44px rgba(53, 36, 26, 0.18);
-  --focus-ring: 0 0 0 3px rgba(163, 101, 44, 0.35);
+  --shadow-1: var(--cc-shadow-1);
+  --shadow-2: var(--cc-shadow-2);
+  --focus-ring: var(--cc-focus-ring);
 }
-
-* { box-sizing: border-box; }
 
 html, body { max-width: 100%; overflow-x: hidden; }
 
@@ -61,6 +60,8 @@ code { font-family: var(--font-mono); }
 ul { margin: 0; }
 
 :focus-visible { outline: none; box-shadow: var(--focus-ring); border-radius: 6px; }
+/* Route focus announces the workspace without drawing a ring around the page. */
+.workspace:focus { outline: none; box-shadow: none; }
 .hidden { display: none !important; }
 .muted { color: var(--muted); }
 .mono { font-family: var(--font-mono); font-size: 12.5px; }
@@ -407,6 +408,10 @@ table.grid tbody tr.clickable { cursor: pointer; transition: background 0.12s ea
 table.grid tbody tr.clickable:hover { background: #fbf6ee; }
 table.grid tbody tr.totals-row td { background: var(--panel-2); border-top: 2px solid var(--line-strong); }
 
+/* 金额与数量列：等宽数字 + 右对齐（td 带 num 类，由 makeTable 同步标记表头） */
+table.grid th.num, table.grid td.num { text-align: right; }
+table.grid td.num > .num { font-variant-numeric: tabular-nums; }
+
 .cell-strong { font-weight: 700; color: var(--ink); }
 .cell-sub { font-size: 11.5px; color: var(--muted); margin-top: 2px; overflow-wrap: anywhere; }
 
@@ -738,13 +743,4 @@ table.grid tbody tr.totals-row td { background: var(--panel-2); border-top: 2px 
   .m-pop { width: 100%; }
 }
 
-/* ---------- 无动画偏好 ---------- */
-
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-    scroll-behavior: auto !important;
-  }
-}
+/* 无动画偏好由 shared/coffee-ui.css 统一提供 */
