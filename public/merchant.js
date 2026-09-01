@@ -4174,6 +4174,14 @@ async function startWithAuthConfig() {
     return;
   }
   if (state.demo) {
+    /* 演示直达：?demo=1&demoAuto=1 自动登录演示 OWNER，便于对照设计稿验收；真实模式零影响 */
+    if (new URLSearchParams(location.search).get('demoAuto') === '1') {
+      try {
+        const session = await adapter.login({ email: 'demo@demo.local', password: 'demo-123456' });
+        await enterShell(session);
+        return;
+      } catch (_) { /* 自动登录失败则回落正常登录页 */ }
+    }
     renderAuth();
     return;
   }
