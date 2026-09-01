@@ -5,73 +5,61 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#F6F0E5">
   <title>Coffee Cloud · 客户运营后台</title>
-  <link rel="stylesheet" href="shared/coffee-ui.css?v=20260901-forest1">
-  <link rel="stylesheet" href="merchant.css?v=20260901-forest1">
+  <link rel="stylesheet" href="shared/coffee-ui.css?v=20260902-cc1">
+  <link rel="stylesheet" href="merchant.css?v=20260902-cc1">
+  <script src="shared/cc-icons.js?v=20260902-cc1"></script>
 </head>
-<body class="m-body">
-  <a class="skip-link" href="#workspace">跳到主内容</a>
+<body class="m-body" data-shell="merchant">
+  <a class="cc-skip" href="#workspace">跳到主内容</a>
 
   <!-- 演示模式横幅（仅 ?demo=1 时显示） -->
-  <div id="demo-banner" class="demo-banner hidden" role="status" data-od-id="demo-banner">
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/><path d="M12 11v5.5M12 7.6v.2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-    界面演示 · 数据仅存在当前页面内存 · 不操作真实设备/支付
-  </div>
+  <div id="demo-banner" class="cc-banner cc-banner--demo hidden" role="status" data-od-id="demo-banner"></div>
 
   <!-- 测试数据环境横幅（LIVE/TEST 切换为 TEST 时显示） -->
-  <div id="env-banner" class="env-banner hidden" role="status" data-od-id="env-banner">测试数据，不计入正式经营</div>
+  <div id="env-banner" class="cc-banner cc-banner--test hidden" role="status" data-od-id="env-banner">当前为 TEST 环境：调用真实 API 与测试数据，不产生真实资金。</div>
 
   <!-- 认证界面（登录 / 注册 / 找回 / 重置 / 验证 / 邀请，由 merchant.js 渲染） -->
   <section id="auth-view" class="hidden" aria-label="账号入口" data-od-id="merchant-auth-view"></section>
 
-  <!-- 应用外壳 -->
-  <div id="shell" class="shell hidden">
-    <div id="nav-veil" class="nav-veil hidden"></div>
-    <aside class="sidebar" id="sidebar" aria-label="主导航侧栏" data-od-id="merchant-sidebar">
-      <div class="side-brand">
-        <span class="side-mark" aria-hidden="true">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-            <path d="M4 9h12v6.5a4.5 4.5 0 0 1-4.5 4.5h-3A4.5 4.5 0 0 1 4 15.5V9Z" fill="currentColor" opacity=".92"/>
-            <path d="M16 10.5h1.8a2.7 2.7 0 0 1 0 5.4H16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-            <path d="M7.5 6c0-1.2 1-1.6 1-2.8M11 6c0-1.2 1-1.6 1-2.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" opacity=".7"/>
-          </svg>
-        </span>
-        <div>
-          <div class="side-eyebrow">Coffee Cloud</div>
-          <div class="side-title">客户运营后台</div>
-        </div>
+  <!-- 应用外壳（cc-shell：侧栏 + 主区） -->
+  <div id="shell" class="cc-shell hidden">
+    <aside class="cc-side" id="sidebar" aria-label="主导航侧栏" data-od-id="merchant-sidebar">
+      <div class="cc-side-brand">
+        <span class="cc-logo" aria-hidden="true" data-cc-icon="coffee" data-size="16"></span>
+        <span class="cc-brandname">Coffee Cloud</span>
       </div>
-      <nav id="side-nav" class="side-nav" aria-label="主导航"></nav>
-      <div class="side-foot">
-        <div id="who" class="who"></div>
-        <button id="logout-btn" class="btn ghost small" type="button">退出登录</button>
+      <nav id="side-nav" class="cc-side-nav" aria-label="主导航"></nav>
+      <div class="cc-side-foot">
+        <div id="who" class="m-who"></div>
+        <button id="logout-btn" class="cc-btn cc-btn--ghost cc-btn--sm" type="button">退出登录</button>
       </div>
     </aside>
 
-    <div class="main-col">
-      <header class="topbar" data-od-id="merchant-topbar">
-        <button id="hamburger" type="button" aria-label="打开导航">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-        </button>
-        <div class="topbar-title">
-          <h2 id="view-title">总览</h2>
-          <p id="view-sub"></p>
+    <div class="cc-main">
+      <header class="cc-top" data-od-id="merchant-topbar">
+        <div class="cc-top-left">
+          <span class="cc-crumb" aria-hidden="true">商户工作台</span>
         </div>
-        <div id="top-controls" class="top-controls"></div>
+        <div class="cc-top-right" id="top-user"></div>
       </header>
-      <main id="workspace" class="workspace" tabindex="-1" data-od-id="merchant-workspace"></main>
+      <div class="cc-content">
+        <!-- 全局范围条（组织 / 门店 / 日期 / 数据环境），由 merchant.js 填充 -->
+        <div id="top-controls" class="cc-scopebar hidden" role="group" aria-label="数据范围" data-od-id="context-scope"></div>
+        <main id="workspace" class="m-workspace" tabindex="-1" data-od-id="merchant-workspace"></main>
+      </div>
     </div>
   </div>
 
-  <!-- 移动端底部导航（由 merchant.js 按权限填充） -->
-  <nav id="bottom-nav" class="bottom-nav hidden" aria-label="移动端快捷导航"></nav>
+  <!-- 移动端底部导航（由 merchant.js 按权限填充；桌面端由 CSS 隐藏） -->
+  <nav id="bottom-nav" class="cc-bottomnav hidden" aria-label="移动端快捷导航"></nav>
 
-  <!-- 演示工具（仅 ?demo=1 时显示） -->
+  <!-- 演示工具（仅 ?demo=1 时显示，浮动按钮 + 面板） -->
   <div id="demo-tools" class="hidden" aria-label="演示工具"></div>
 
-  <div id="toast-root" class="toast-root" role="status" aria-live="polite"></div>
-  <div id="drawer-root" class="drawer-root hidden" aria-hidden="true"></div>
-  <div id="modal-root" class="modal-root hidden" aria-hidden="true"></div>
+  <div id="toast-root" class="cc-toasts" role="status" aria-live="polite"></div>
+  <div id="drawer-root" class="hidden" aria-hidden="true"></div>
+  <div id="modal-root" class="hidden" aria-hidden="true"></div>
 
-  <script type="module" src="/assets/merchant.js?v=20260901-forest1"></script>
+  <script type="module" src="/assets/merchant.js?v=20260902-cc1"></script>
 </body>
 </html>

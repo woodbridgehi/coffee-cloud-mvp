@@ -296,7 +296,7 @@ test('冒烟：演示模式横幅显示，登录表单可提交', async () => {
 test('冒烟：登录后外壳与 OWNER 全量导航渲染，总览加载', async () => {
   const shell = documentStub.getElementById('shell');
   assert.equal(shell.classList.contains('hidden'), false, '外壳可见');
-  const navItems = findAll(documentStub.getElementById('side-nav'), n => n.classList.contains('nav-item'));
+  const navItems = findAll(documentStub.getElementById('side-nav'), n => n.classList.contains('cc-navitem'));
   assert.equal(navItems.length, 13, 'OWNER 可见 13 个导航项');
   const navText = textOf(documentStub.getElementById('side-nav'));
   for (const label of ['经营', '设备', '成本', '组织']) assert.ok(navText.includes(label), `分组 ${label}`);
@@ -314,16 +314,16 @@ test('冒烟：设备列表渲染并可打开详情抽屉', async () => {
   await flush(8);
   const list = documentStub.getElementById('device-list');
   assert.ok(list, '设备列表区域存在');
-  const rows = findAll(list, n => n.tagName === 'TR' && n.classList.contains('clickable'));
+  const rows = findAll(list, n => n.tagName === 'TR' && n.classList.contains('is-clickable'));
   assert.ok(rows.length >= 4, `晨光咖啡演示设备 ≥4 台（实际 ${rows.length}）`);
-  /* 数值列（版本）右对齐：th 与 td 均带 num 类 */
+  /* 数值列（版本）右对齐：th 与 td 均带 cc-money 类 */
   const deviceTable = findAll(list, n => n.tagName === 'TABLE')[0];
   const versionTh = findAll(deviceTable, n => n.tagName === 'TH').find(h => textOf(h) === '版本');
   assert.ok(versionTh, '版本列表头存在');
-  assert.ok(versionTh.classList.contains('num'), '数值列表头同步 num 类（右对齐）');
+  assert.ok(versionTh.classList.contains('cc-money'), '数值列表头同步 cc-money 类（右对齐）');
   const versionTd = findAll(deviceTable, n => n.tagName === 'TD' && n.attributes['data-label'] === '版本')[0];
-  assert.ok(versionTd.classList.contains('num'), '数值单元格带 num 类（等宽数字 + 右对齐）');
-  /* 手机端卡片化：每个单元格都携带 data-label 列名 */
+  assert.ok(versionTd.classList.contains('cc-money'), '数值单元格带 cc-money 类（等宽数字 + 右对齐）');
+  /* 辅助技术 / 窄屏：每个单元格都携带 data-label 列名 */
   const labeledCells = findAll(deviceTable, n => n.tagName === 'TD' && n.attributes['data-label']);
   assert.ok(labeledCells.length >= rows.length * 6, 'data-label 覆盖全部数据单元格');
   const drawerRoot = documentStub.getElementById('drawer-root');
@@ -331,10 +331,10 @@ test('冒烟：设备列表渲染并可打开详情抽屉', async () => {
   await flush(8);
   assert.equal(drawerRoot.classList.contains('hidden'), false, '抽屉打开');
   const drawerText = textOf(drawerRoot);
-  for (const label of ['基本信息', '能力清单', '物料余量', '操作']) assert.ok(drawerText.includes(label), `抽屉包含 ${label}`);
-  assert.ok(drawerText.includes('重载配置'), '在线设备展示服务器允许的命令按钮');
+  for (const label of ['概览', '能力与物料', '技术信息']) assert.ok(drawerText.includes(label), `抽屉包含 ${label}`);
+  assert.ok(drawerText.includes('重载配置'), '在线设备展示服务器允许的命令入口');
   // 关闭抽屉
-  const closeBtn = findAll(drawerRoot, n => n.classList.contains('modal-close'))[0];
+  const closeBtn = findAll(drawerRoot, n => n.classList.contains('cc-layer-close'))[0];
   closeBtn.dispatch('click');
   await flush();
   assert.equal(drawerRoot.classList.contains('hidden'), true, '抽屉关闭');
@@ -353,7 +353,7 @@ test('冒烟：切换组织后导航与门店按新组织重载', async () => {
   globalThis.location.hash = '#/devices';
   fireHashChange();
   await flush(8);
-  const rows = findAll(documentStub.getElementById('device-list'), n => n.tagName === 'TR' && n.classList.contains('clickable'));
+  const rows = findAll(documentStub.getElementById('device-list'), n => n.tagName === 'TR' && n.classList.contains('is-clickable'));
   assert.equal(rows.length, 2, '新组织设备 2 台（租户隔离）');
 });
 
@@ -390,12 +390,16 @@ test('冒烟：OPERATOR 看不到利润与退款入口，订单抽屉正常打�
   inputs[1].value = 'secret123';
   findAll(authView, n => n.tagName === 'FORM')[0].dispatch('submit');
   await flush(8);
-  // 通过演示工具切换为 OPERATOR
+  // 通过演示工具切换为 OPERATOR（先打开演示面板）
+  const demoFab = findButtonByText(documentStub.getElementById('demo-tools'), '演示工具');
+  assert.ok(demoFab, '演示工具浮动按钮存在');
+  demoFab.dispatch('click');
+  await flush();
   const roleBtn = documentStub.querySelector('[data-role="OPERATOR"]');
-  assert.ok(roleBtn, '演示工具提供角色切换');
+  assert.ok(roleBtn, '演示面板提供角色切换');
   roleBtn.dispatch('click');
   await flush(10);
-  const navItems = findAll(documentStub.getElementById('side-nav'), n => n.classList.contains('nav-item'));
+  const navItems = findAll(documentStub.getElementById('side-nav'), n => n.classList.contains('cc-navitem'));
   assert.equal(navItems.length, 6, `OPERATOR 仅见 6 个导航项（实际 ${navItems.length}）`);
   const navText = textOf(documentStub.getElementById('side-nav'));
   assert.ok(!navText.includes('经营报表') && !navText.includes('收款账户') && !navText.includes('成员权限'), '无报表/账户/成员导航');
@@ -409,7 +413,7 @@ test('冒烟：OPERATOR 看不到利润与退款入口，订单抽屉正常打�
   globalThis.location.hash = '#/orders';
   fireHashChange();
   await flush(10);
-  const orderRows = findAll(documentStub.getElementById('workspace'), n => n.tagName === 'TR' && n.classList.contains('clickable'));
+  const orderRows = findAll(documentStub.getElementById('workspace'), n => n.tagName === 'TR' && n.classList.contains('is-clickable'));
   assert.ok(orderRows.length >= 3, `订单行 ≥3（实际 ${orderRows.length}）`);
   orderRows[0].dispatch('click');
   await flush(8);
@@ -418,7 +422,7 @@ test('冒烟：OPERATOR 看不到利润与退款入口，订单抽屉正常打�
   assert.ok(drawerText.includes('商品明细'), '订单抽屉包含商品明细');
   assert.ok(drawerText.includes('支付与退款'), '订单抽屉包含支付与退款');
   assert.ok(!drawerText.includes('发起退款'), 'OPERATOR 无退款入口');
-  const closeBtn = findAll(drawerRoot, n => n.classList.contains('modal-close'))[0];
+  const closeBtn = findAll(drawerRoot, n => n.classList.contains('cc-layer-close'))[0];
   closeBtn.dispatch('click');
   await flush();
   // 切换 TEST 环境 → 横幅显示
@@ -446,7 +450,7 @@ test('真实订单契约：退款成功、时间线字段与 DOM 节点正确渲
   const content = textOf(documentStub.getElementById('drawer-root'));
   for (const expected of ['无需支付', '已交付', '已支付', '退款成功', '设备确认完成', '2026/08/31']) assert.ok(content.includes(expected), expected);
   assert.doesNotMatch(content, /\[object |\bnull\b|\bundefined\b|退款失败/);
-  assert.ok(findAll(drawer.body, n => n.classList.contains('badge')).length >= 4);
+  assert.ok(findAll(drawer.body, n => n.classList.contains('cc-status')).length >= 4, '支付/制作/退款状态节点存在');
   drawer.close();
 });
 
@@ -458,6 +462,6 @@ test('退款上限缺失或异常时禁用金额与提交，不能把非法金�
     assert.ok(textOf(root).includes('无法计算可退上限'));
     assert.equal(findButtonByText(root, '确认退款').disabled, true);
     assert.equal(findAll(root, n => n.tagName === 'INPUT')[0].disabled, true);
-    findAll(root, n => n.classList.contains('modal-close'))[0].click();
+    findAll(root, n => n.classList.contains('cc-layer-close'))[0].click();
   }
 });

@@ -613,8 +613,8 @@ test('mailDisabled：成员列表仍可用，邀请按钮禁用且说明，不�
     assert.ok(shellText.includes('fin@company.com'), 'email 成员展示 email');
     assert.ok(!shellText.includes('null'), '不展示 null');
 
-    /* 邀请按钮禁用 + 说明（按钮文本经 innerHTML 注入静态 SVG+文字） */
-    const inviteBtn = findAll(workspace, n => n.tagName === 'BUTTON' && String(n.innerHTML || '').includes('邀请新成员'))[0];
+    /* 邀请按钮禁用 + 说明（按钮含静态 SVG 图标 + 文字） */
+    const inviteBtn = findAll(workspace, n => n.tagName === 'BUTTON' && textOf(n).includes('邀请新成员'))[0];
     assert.ok(inviteBtn, '邀请按钮存在（禁用态）');
     assert.equal(inviteBtn.disabled, true, '邀请按钮被禁用');
     assert.ok(shellText.includes('邮件服务未配置，此功能暂未开放'), '按钮旁给出说明');
