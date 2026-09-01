@@ -1239,21 +1239,24 @@ function buildShell() {
   const nav = $('side-nav');
   clearNode(nav);
   let lastGroup = '';
+  let groupNode = null;
   for (const def of VIEW_DEFS) {
     if (!can(def.perm)) continue;
     if (def.group !== lastGroup) {
       lastGroup = def.group;
-      nav.append(el('div', { class: 'cc-navgroup' },
-        el('div', { class: 'cc-navgroup-title' }, def.group)));
+      groupNode = el('div', { class: 'cc-navgroup' },
+        el('div', { class: 'cc-navgroup-title' }, def.group));
+      nav.append(groupNode);
     }
-    nav.append(el('button', {
+    groupNode.append(el('button', {
       class: 'cc-navitem',
       type: 'button',
+      title: def.label,
       'aria-current': state.view === def.id ? 'page' : null,
       onclick: () => { location.hash = `#/${def.id}`; },
     },
       el('span', { html: svgIcon(def.iconName, 20), class: 'n-icon', 'aria-hidden': 'true' }),
-      el('span', null, def.label)));
+      el('span', { class: 'cc-nav-label' }, def.label)));
   }
   const who = $('who');
   clearNode(who);
@@ -1536,12 +1539,12 @@ const VIEW_DEFS = [
   { id: 'dashboard', group: '经营', label: '总览', title: '经营总览', sub: '先处理影响营业的问题，再核对收入与利润。', perm: PERM.dashboard, iconName: 'dashboard', render: renderDashboardView },
   { id: 'orders', group: '经营', label: '订单', title: '订单', sub: '支付、制作进度与退款。', perm: PERM.ordersRead, iconName: 'orders', render: renderOrdersView },
   { id: 'reports', group: '经营', label: '经营报表', title: '经营报表', sub: '日 / 月 / 年口径、明细与 CSV 导出。', perm: PERM.reportsRead, iconName: 'report', render: renderReportsView },
-  { id: 'devices', group: '设备', label: '我的设备', title: '我的设备', sub: '资产、运维与远程命令。', perm: PERM.devicesRead, iconName: 'device', render: renderDevicesView },
-  { id: 'transfers', group: '设备', label: '设备转让', title: '设备转让', sub: '转让申请、阻断与确认。', perm: PERM.devicesTransfer, iconName: 'transfer', render: renderTransfersView },
-  { id: 'stores', group: '设备', label: '门店', title: '门店', sub: '经营场所与归档。', perm: PERM.storesRead, iconName: 'store', render: renderStoresView },
-  { id: 'prices', group: '设备', label: '商品价格', title: '商品价格', sub: '当前价与计划生效价。', perm: PERM.pricesRead, iconName: 'price', render: renderPricesView },
-  { id: 'materials', group: '成本', label: '物料·采购·库存', title: '物料、采购与库存', sub: '物料档案、采购入账、库存与出入库。', perm: PERM.inventoryRead, iconName: 'material', render: renderMaterialsView },
-  { id: 'expenses', group: '成本', label: '运营费用', title: '运营费用', sub: '租金、人工、水电与维护。', perm: PERM.costsRead, iconName: 'expense', render: renderExpensesView },
+  { id: 'devices', group: '资产', label: '我的设备', title: '我的设备', sub: '资产、运维与远程命令。', perm: PERM.devicesRead, iconName: 'device', render: renderDevicesView },
+  { id: 'stores', group: '资产', label: '门店', title: '门店', sub: '经营场所与归档。', perm: PERM.storesRead, iconName: 'store', render: renderStoresView },
+  { id: 'transfers', group: '资产', label: '设备转让', title: '设备转让', sub: '转让申请、阻断与确认。', perm: PERM.devicesTransfer, iconName: 'transfer', render: renderTransfersView },
+  { id: 'prices', group: '成本与商品', label: '商品价格', title: '商品价格', sub: '当前价与计划生效价。', perm: PERM.pricesRead, iconName: 'price', render: renderPricesView },
+  { id: 'materials', group: '成本与商品', label: '物料与库存', title: '物料、采购与库存', sub: '物料档案、采购入账、库存与出入库。', perm: PERM.inventoryRead, iconName: 'material', render: renderMaterialsView },
+  { id: 'expenses', group: '成本与商品', label: '运营费用', title: '运营费用', sub: '租金、人工、水电与维护。', perm: PERM.costsRead, iconName: 'expense', render: renderExpensesView },
   { id: 'members', group: '组织', label: '成员权限', title: '成员权限', sub: '角色、门店范围与邀请。', perm: PERM.membersRead, iconName: 'members', render: renderMembersView },
   { id: 'accounts', group: '组织', label: '收款账户', title: '收款账户', sub: '商户账户、校验与默认。', perm: PERM.paymentsRead, iconName: 'account', render: renderAccountsView },
   { id: 'settings', group: '组织', label: '组织设置', title: '组织设置', sub: '名称与时区。', perm: PERM.tenantManage, iconName: 'settings', render: renderSettingsView },

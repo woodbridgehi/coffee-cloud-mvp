@@ -298,8 +298,11 @@ test('冒烟：登录后外壳与 OWNER 全量导航渲染，总览加载', asyn
   assert.equal(shell.classList.contains('hidden'), false, '外壳可见');
   const navItems = findAll(documentStub.getElementById('side-nav'), n => n.classList.contains('cc-navitem'));
   assert.equal(navItems.length, 13, 'OWNER 可见 13 个导航项');
-  const navText = textOf(documentStub.getElementById('side-nav'));
-  for (const label of ['经营', '设备', '成本', '组织']) assert.ok(navText.includes(label), `分组 ${label}`);
+  const sideNav = documentStub.getElementById('side-nav');
+  const navText = textOf(sideNav);
+  for (const label of ['经营', '资产', '成本与商品', '组织']) assert.ok(navText.includes(label), `分组 ${label}`);
+  const navGroups = findAll(sideNav, n => n.classList.contains('cc-navgroup'));
+  assert.deepEqual(navGroups.map(group => findAll(group, n => n.classList.contains('cc-navitem')).length), [3, 3, 3, 4], '导航项归属于对应分组');
   const workspace = documentStub.getElementById('workspace');
   assert.ok(documentStub.getElementById('dash-cards'), '总览卡片区域存在');
   await flush(10);

@@ -591,9 +591,11 @@ details.cc-disc .cc-disc-body { padding: 4px 0 12px; }
 .cc-navgroup-title { font-size: 12px; line-height: 18px; font-weight: 600; color: var(--cc-text-disabled); padding: 0 12px 6px; letter-spacing: 0.4px; }
 .cc-navitem {
   display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 12px;
+  width: 100%; border: 0; background: transparent; appearance: none; cursor: pointer; text-align: left;
   border-radius: var(--cc-r-md); color: var(--cc-text-2); font-size: 14px; font-weight: 500;
   position: relative; text-decoration: none; transition: background var(--cc-t-hover), color var(--cc-t-hover);
 }
+.cc-navitem .n-icon { display: grid; place-items: center; width: 20px; height: 20px; flex: none; }
 .cc-navitem:hover { background: #F5EDDF; color: var(--cc-text); text-decoration: none; }
 .cc-navitem svg { flex: none; }
 .cc-navitem[aria-current="page"] { background: var(--cc-primary-subtle); color: var(--cc-primary-selected-fg); font-weight: 600; }
@@ -734,7 +736,7 @@ details.cc-disc .cc-disc-body { padding: 4px 0 12px; }
 /* Tablet 768–1023 */
 @media (max-width: 1023px) {
   .cc-side { width: var(--cc-rail); }
-  .cc-side .cc-brandname, .cc-side .cc-navgroup-title, .cc-side .cc-navitem span, .cc-side .cc-navitem .cc-badge, .cc-side .cc-navitem .cc-gate, .cc-side-foot { display: none; }
+  .cc-side .cc-brandname, .cc-side .cc-navgroup-title, .cc-side .cc-navitem .cc-nav-label, .cc-side .cc-navitem .cc-badge, .cc-side .cc-navitem .cc-gate, .cc-side-foot { display: none; }
   .cc-side .cc-navitem { justify-content: center; padding: 0; }
   .cc-side-brand { justify-content: center; padding: 0; }
   .cc-auth-main { padding: 32px 24px 48px; }
@@ -754,6 +756,9 @@ details.cc-disc .cc-disc-body { padding: 4px 0 12px; }
   .cc-content { padding: 0 16px calc(var(--cc-bottomnav) + 32px + env(safe-area-inset-bottom)); }
   .cc-bottomnav { display: block; }
   .cc-scopebar { position: static; }
+  .cc-scopebar .cc-scope-item { width: 100%; min-width: 0; }
+  .cc-scopebar .cc-scope-item > .cc-select,
+  .cc-scopebar .cc-scope-item > .cc-input { flex: 1; width: 100%; min-width: 0; max-width: 100%; }
   .cc-scopebar .cc-actions { margin-left: 0; width: 100%; }
   .cc-scopebar .cc-actions .cc-btn { flex: 1; }
   .cc-input, .cc-select, .cc-textarea { min-height: 48px; }

@@ -522,17 +522,21 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
   function buildNav() {
     const nav = $('side-nav');
     clear(nav);
+    const group = el('div', { class: 'cc-navgroup' },
+      el('div', { class: 'cc-navgroup-title' }, '平台运维'));
     for (const def of VIEW_DEFS) {
       if (!can(def.perm)) continue;
-      nav.append(el('button', {
+      group.append(el('button', {
         class: 'cc-navitem',
         type: 'button',
+        title: def.label,
         'aria-current': state.view === def.id ? 'page' : null,
         onclick: () => { location.hash = `#/${def.id}`; },
       },
         el('span', { class: 'n-icon', html: svgIcon(def.iconName, 20), 'aria-hidden': 'true' }),
-        el('span', null, def.label)));
+        el('span', { class: 'cc-nav-label' }, def.label)));
     }
+    if (group.querySelector('.cc-navitem')) nav.append(group);
     buildBottomNav();
   }
 
