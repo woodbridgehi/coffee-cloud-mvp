@@ -1815,7 +1815,7 @@ async function loadDashboardAlerts(container) {
   const data = await fetchDashboardSnapshot();
   clearNode(container);
   const alerts = (data && data.alerts) || [];
-  const head = container.closest('section');
+  const head = typeof container.closest === 'function' ? container.closest('section') : null;
   if (head) {
     const headEl = head.querySelector('.cc-section-head') || head.firstElementChild;
     if (headEl) {

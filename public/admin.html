@@ -5,104 +5,93 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#F6F0E5">
   <title>Coffee Cloud · 设备运营台</title>
-  <link rel="stylesheet" href="/assets/shared/coffee-ui.css?v=20260901-forest1">
-  <link rel="stylesheet" href="/assets/admin.css?v=20260901-forest1">
+  <link rel="stylesheet" href="/assets/shared/coffee-ui.css?v=20260902-cc1">
+  <link rel="stylesheet" href="/assets/admin.css?v=20260902-cc1">
+  <script src="/assets/shared/cc-icons.js?v=20260902-cc1"></script>
 </head>
-<body class="admin-body">
+<body class="admin-body" data-shell="admin">
 
-  <!-- 登录层（280px 说明 + 420px 表单分栏，手机单列） -->
-  <section id="login-view" class="login-wrap" aria-label="登录" data-od-id="admin-login-view">
-    <header class="login-brandbar">
-      <span class="login-mark" aria-hidden="true">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-          <path d="M4 9h12v6.5a4.5 4.5 0 0 1-4.5 4.5h-3A4.5 4.5 0 0 1 4 15.5V9Z" fill="currentColor" opacity=".92"/>
-          <path d="M16 10.5h1.8a2.7 2.7 0 0 1 0 5.4H16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-          <path d="M7.5 6c0-1.2 1-1.6 1-2.8M11 6c0-1.2 1-1.6 1-2.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" opacity=".7"/>
-        </svg>
-      </span>
-      <div>
-        <div class="login-eyebrow">Coffee Cloud</div>
-      </div>
-      <span class="login-brand-sub">设备运营台</span>
+  <!-- 登录层（cc-auth：280px 说明 + 420px 表单，手机单列；espresso 主题） -->
+  <section id="login-view" class="cc-auth cc-auth--platform" aria-label="登录" data-od-id="admin-login-view">
+    <header class="cc-auth-brandbar">
+      <span class="cc-logo" aria-hidden="true" data-cc-icon="coffee" data-size="16"></span>
+      <span class="cc-brandname">Coffee Cloud</span>
+      <span class="cc-brand-sub">设备运营台</span>
     </header>
 
-    <div class="login-main">
-      <div class="login-grid">
-        <aside class="login-aside">
-          <div class="login-kicker">Platform Operations</div>
+    <div class="cc-auth-main">
+      <div class="cc-auth-grid">
+        <aside class="cc-auth-aside" data-od-id="auth-aside">
+          <div class="cc-auth-kicker">Platform Operations</div>
           <h2>设备运营台 · Token 登录</h2>
           <p>面向平台运维与值班人员的设备控制台：终端连接、生命周期、订单异常与运营员权限。商户账号请使用客户运营后台入口。</p>
-          <ul class="login-points">
-            <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m5 12 5 5L20 7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>运营 Token 只保存在当前页面内存；刷新或关闭后需要重新输入</span></li>
-            <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m5 12 5 5L20 7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>权限决定可见视图与操作，登录后按 Token 角色渲染</span></li>
-            <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m5 12 5 5L20 7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>设备实时快照与账面数据分开展示，未知容量不画百分比</span></li>
+          <ul class="cc-auth-points">
+            <li><i data-cc-icon="check" data-size="16"></i><span>运营 Token 只保存在当前页面内存；刷新或关闭后需要重新输入</span></li>
+            <li><i data-cc-icon="check" data-size="16"></i><span>权限决定可见视图与操作，登录后按 Token 角色渲染</span></li>
+            <li><i data-cc-icon="check" data-size="16"></i><span>设备实时快照与账面数据分开展示，未知容量不画百分比</span></li>
           </ul>
         </aside>
 
-        <section class="login-form-col">
-          <h1>Token 登录</h1>
-          <p class="login-note">使用运营 Token 登录。当前页面不会将 Token 写入浏览器存储；刷新或关闭后需要重新输入，但不会撤销服务端 Token。</p>
-          <form id="login-form" class="login-form" autocomplete="off">
-            <label class="field">
-              <span class="field-label">运营 Token</span>
-              <input id="login-token" class="input" type="password" placeholder="粘贴管理员或运营员 Token" autocomplete="off" spellcheck="false" required>
-            </label>
-            <button id="login-submit" class="btn primary block" type="submit">登录</button>
-            <p id="login-error" class="form-error" role="alert"></p>
+        <section class="cc-auth-form" data-od-id="login-form">
+          <h1 class="cc-h1">Token 登录</h1>
+          <p class="cc-form-sub">使用运营 Token 登录；不会写入浏览器存储。</p>
+          <form id="login-form" autocomplete="off" novalidate>
+            <div class="cc-field">
+              <label class="cc-label" for="login-token">运营 Token</label>
+              <input id="login-token" class="cc-input" type="password" placeholder="粘贴管理员或运营员 Token" autocomplete="off" spellcheck="false" required>
+            </div>
+            <div class="cc-field" style="margin-top:24px">
+              <button id="login-submit" class="cc-btn cc-btn--primary cc-btn--lg cc-btn--block" type="submit">登录</button>
+            </div>
+            <p id="login-error" class="cc-error-text" role="alert"></p>
           </form>
+          <details class="cc-disc" style="margin-top:16px">
+            <summary><i data-cc-icon="chev-right" data-size="14" class="chev"></i>Token 安全说明</summary>
+            <div class="cc-disc-body cc-caption">
+              当前页面不会将 Token 写入浏览器存储；刷新或关闭后需要重新输入，但不会撤销服务端 Token。完整 Token 仅在创建时显示一次，云端只保存摘要。
+            </div>
+          </details>
         </section>
       </div>
     </div>
   </section>
 
   <!-- 应用外壳 -->
-  <div id="shell" class="shell hidden">
-    <div id="nav-veil" class="nav-veil hidden"></div>
-    <aside class="sidebar" data-od-id="admin-sidebar">
-      <div class="side-brand">
-        <span class="side-mark" aria-hidden="true">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-            <path d="M4 9h12v6.5a4.5 4.5 0 0 1-4.5 4.5h-3A4.5 4.5 0 0 1 4 15.5V9Z" fill="currentColor" opacity=".92"/>
-            <path d="M16 10.5h1.8a2.7 2.7 0 0 1 0 5.4H16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-            <path d="M7.5 6c0-1.2 1-1.6 1-2.8M11 6c0-1.2 1-1.6 1-2.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" opacity=".7"/>
-          </svg>
-        </span>
-        <div>
-          <div class="side-eyebrow">Coffee Cloud</div>
-          <div class="side-title">设备运营台</div>
-        </div>
+  <div id="shell" class="cc-shell hidden">
+    <aside class="cc-side" data-od-id="admin-sidebar">
+      <div class="cc-side-brand">
+        <span class="cc-logo" aria-hidden="true" data-cc-icon="coffee" data-size="16"></span>
+        <span class="cc-brandname">Coffee Cloud · 平台</span>
       </div>
-      <nav id="side-nav" class="side-nav" aria-label="主导航"></nav>
-      <div class="side-foot">
-        <div id="who" class="who"></div>
-        <button id="logout-btn" class="btn ghost small" type="button">退出登录</button>
+      <nav id="side-nav" class="cc-side-nav" aria-label="主导航"></nav>
+      <div class="cc-side-foot">
+        <div id="who" class="m-who"></div>
+        <button id="logout-btn" class="cc-btn cc-btn--ghost cc-btn--sm" type="button">退出登录</button>
       </div>
     </aside>
 
-    <div class="main-col">
-      <header class="topbar" data-od-id="admin-topbar">
-        <button id="hamburger" type="button" aria-label="打开导航">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-        </button>
-        <div class="topbar-title">
-          <h2 id="view-title" tabindex="-1">总览</h2>
-          <p id="view-sub"></p>
+    <div class="cc-main">
+      <header class="cc-top" data-od-id="admin-topbar">
+        <div class="cc-top-left">
+          <nav class="cc-crumb" aria-label="位置"><span>平台运维台</span></nav>
         </div>
-        <div class="topbar-side">
-          <span id="refresh-note" class="refresh-note"></span>
-          <button id="refresh-btn" class="btn secondary small" type="button">立即刷新</button>
+        <div class="cc-top-right">
+          <span id="refresh-note" class="cc-caption"></span>
+          <button id="refresh-btn" class="cc-btn cc-btn--secondary cc-btn--sm" type="button">立即刷新</button>
         </div>
       </header>
-      <main id="workspace" class="workspace" tabindex="-1" data-od-id="admin-workspace"></main>
+      <div class="cc-content">
+        <main id="workspace" class="m-workspace" tabindex="-1" data-od-id="admin-workspace"></main>
+      </div>
     </div>
   </div>
 
-  <!-- 移动端底部导航（由 admin.js 按权限填充） -->
-  <nav id="bottom-nav" class="bottom-nav hidden" aria-label="移动端快捷导航"></nav>
+  <!-- 移动端底部导航（由 admin.js 按权限填充；桌面端由 CSS 隐藏） -->
+  <nav id="bottom-nav" class="cc-bottomnav hidden" aria-label="移动端快捷导航"></nav>
 
-  <div id="toast-root" class="toast-root"></div>
-  <div id="modal-root" class="modal-root hidden" aria-hidden="true"></div>
+  <div id="toast-root" class="cc-toasts" role="status" aria-live="polite"></div>
+  <div id="modal-root" class="hidden" aria-hidden="true"></div>
 
-  <script type="module" src="/assets/admin.js?v=20260901-forest1"></script>
+  <script type="module" src="/assets/admin.js?v=20260902-cc1"></script>
 </body>
 </html>
