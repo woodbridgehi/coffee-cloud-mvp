@@ -675,7 +675,7 @@ function readFragmentToken() {
 function authShell(card, heading) {
   const wrap = $('auth-view');
   clearNode(wrap);
-  /* Light Fresh 认证分栏：280px 说明 + 420px 表单，手机单列（CSS 控制）。
+  /* Forest & Cream 认证分栏：280px 说明 + 420px 表单，手机单列（CSS 控制）。
      表单内容仍由 renderAuth 各分支产生，业务逻辑不变。 */
   wrap.append(
     el('header', { class: 'auth-brandbar' },

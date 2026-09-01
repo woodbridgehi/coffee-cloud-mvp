@@ -1,6 +1,6 @@
 /* ============================================================
-   Coffee Cloud · B 端客户运营后台（Light Fresh）
-   页面专属布局：外壳（224px 浅色侧栏 + 64px 顶栏 + 高密度工作区）、
+   Coffee Cloud · B 端客户运营后台（Forest & Cream）
+   页面专属布局：外壳（224px 奶油侧栏 + 64px 顶栏 + 高密度工作区）、
    认证分栏（280px 说明 + 420px 表单）、范围筛选条、演示工具。
    组件基础样式统一来自 /assets/shared/coffee-ui.css。
    390px 不横向溢出；尊重 prefers-reduced-motion。
@@ -50,6 +50,12 @@ body.m-body {
   font-variant-numeric: tabular-nums lining-nums;
 }
 
+body.m-body h1,
+body.m-body h2 {
+  font-family: var(--cc-font-display);
+  color: #17382D;
+}
+
 button { font: inherit; color: inherit; }
 h1, h2, h3, h4, p { margin: 0; }
 code { font-family: var(--font-mono); }
@@ -72,9 +78,9 @@ ul { margin: 0; }
   position: sticky; top: 0; z-index: 120;
   display: flex; align-items: center; justify-content: center; gap: 8px;
   padding: 8px 14px;
-  background: #F8F4FF;
-  border-bottom: 1px solid #E5DBFF;
-  color: #4E288E; font-size: 12.5px; font-weight: 600;
+  background: #F1E9DF;
+  border-bottom: 1px solid #D7B67E;
+  color: #5A3827; font-size: 12.5px; font-weight: 600;
   text-align: center;
 }
 .demo-banner svg { flex: none; }
@@ -83,7 +89,7 @@ ul { margin: 0; }
   display: flex; align-items: center; justify-content: center; gap: 8px;
   padding: 6px 14px;
   background: var(--cc-warning-subtle);
-  border-bottom: 1px solid #F2E3B4;
+  border-bottom: 1px solid #D7B67E;
   color: var(--cc-warning-selected-fg); font-size: 12.5px; font-weight: 600;
 }
 body:has(.demo-banner:not(.hidden)) .env-banner { top: 37px; }
@@ -126,14 +132,14 @@ body:has(.demo-banner:not(.hidden)) .env-banner { top: 37px; }
   font-size: 12px; font-weight: 600; letter-spacing: 1px;
   color: var(--cc-primary); text-transform: uppercase;
 }
-.auth-aside h2 { font-size: 20px; line-height: 28px; font-weight: 650; margin-top: 8px; }
+.auth-aside h2 { font-size: 20px; line-height: 28px; font-weight: 600; margin-top: 8px; }
 .auth-aside p { font-size: 13px; line-height: 20px; color: var(--muted); margin-top: 12px; }
 .auth-points { margin-top: 20px; display: grid; gap: 12px; list-style: none; padding: 0; }
 .auth-points li { display: flex; gap: 10px; font-size: 13px; line-height: 20px; color: var(--ink-2); }
 .auth-points svg { flex: none; margin-top: 2px; color: var(--cc-success); }
 
 .auth-form-col { width: 420px; max-width: 100%; flex: none; }
-.auth-heading { font-size: 24px; line-height: 32px; font-weight: 700; letter-spacing: -0.2px; }
+.auth-heading { font-size: 24px; line-height: 32px; font-weight: 600; letter-spacing: -0.2px; }
 .auth-note { color: var(--muted); font-size: 12.5px; margin-bottom: 16px; }
 .auth-form { display: grid; gap: 14px; margin-top: 20px; }
 .auth-links {
@@ -205,7 +211,7 @@ body:has(.demo-banner:not(.hidden)) .env-banner { top: 37px; }
   font-size: 13.5px; font-weight: 500; text-align: left; cursor: pointer;
   transition: background 0.12s ease, color 0.12s ease;
 }
-.nav-item:hover { background: #F3F5F8; color: var(--ink); }
+.nav-item:hover { background: #F5EDDF; color: var(--ink); }
 .nav-item.active {
   background: var(--cc-primary-subtle); color: var(--cc-primary-selected-fg); font-weight: 600;
 }
@@ -228,7 +234,7 @@ body:has(.demo-banner:not(.hidden)) .env-banner { top: 37px; }
   background: transparent; border: 0; cursor: pointer; color: var(--ink-2);
   align-items: center; justify-content: center;
 }
-#hamburger:hover { background: #F3F5F8; color: var(--ink); }
+#hamburger:hover { background: #F5EDDF; color: var(--ink); }
 
 .main-col { display: flex; flex-direction: column; min-width: 0; max-width: 100%; }
 
@@ -246,7 +252,7 @@ body:has(.demo-banner:not(.hidden)) .topbar { top: 36px; }
 body:has(.env-banner:not(.hidden)) .topbar { top: 32px; }
 body:has(.demo-banner:not(.hidden)):has(.env-banner:not(.hidden)) .topbar { top: 68px; }
 .topbar-title { min-width: 0; margin-right: auto; }
-.topbar-title h2 { font-size: 17px; letter-spacing: -0.01em; }
+.topbar-title h2 { font-size: 18px; font-weight: 600; letter-spacing: -0.01em; }
 .topbar-title p { font-size: 12px; color: var(--muted); margin-top: 1px; }
 
 /* 范围筛选（组织 / 门店 / 日期 / 环境）：允许换行，杜绝页面级横向滚动 */
@@ -346,9 +352,9 @@ body:has(.demo-banner:not(.hidden)):has(.env-banner:not(.hidden)) .topbar { top:
   max-width: min(360px, calc(100vw - 28px));
 }
 .demo-toggle {
-  background: #4E288E; color: #fff; border: 0; font-weight: 600;
+  background: #5A3827; color: #FFF9F0; border: 0; font-weight: 600;
 }
-.demo-toggle:hover { background: #3E2074; color: #fff; }
+.demo-toggle:hover { background: #4A2D1F; color: #FFF9F0; }
 .demo-panel {
   background: var(--panel);
   border: 1.5px dashed var(--cc-purple);

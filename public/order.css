@@ -1,5 +1,5 @@
 /* ============================================================
-   Woodbridge Coffee · 扫码下单 / 订单状态页（Light Fresh）
+   Woodbridge Coffee · 扫码下单 / 订单状态页（Forest & Cream）
    独立轻量消费者页面，不使用后台外壳：
    56px 设备信息条 + 单列内容 + Mobile 固定结算栏。
    移动端优先：360–430px 为主战场，向上兼容 960px 双栏。
@@ -50,6 +50,12 @@ body {
   color: var(--ink);
   background: var(--bg);
   font-variant-numeric: tabular-nums lining-nums;
+}
+
+body h1,
+body h2 {
+  font-family: var(--cc-font-display);
+  color: #17382D;
 }
 
 button { font: inherit; color: inherit; }
@@ -106,7 +112,7 @@ img { max-width: 100%; }
 .hero h1 {
   font-size: clamp(26px, 7vw, 32px);
   line-height: 1.2; letter-spacing: -0.02em;
-  margin: 6px 0 8px; font-weight: 700;
+  margin: 6px 0 8px; font-weight: 600;
 }
 .hero-sub { margin: 0; color: var(--muted); font-size: 13.5px; }
 
@@ -121,6 +127,7 @@ img { max-width: 100%; }
   border: 1px solid var(--divider);
   border-radius: var(--radius-lg);
   background: var(--surface);
+  box-shadow: var(--cc-shadow-1);
 }
 .machine-meta { display: flex; align-items: center; gap: 11px; min-width: 0; }
 
@@ -128,11 +135,11 @@ img { max-width: 100%; }
   width: 10px; height: 10px; flex: none;
   border-radius: 50%;
   background: var(--danger);
-  box-shadow: 0 0 0 4px rgba(185, 43, 104, 0.14);
+  box-shadow: 0 0 0 4px rgba(182, 76, 60, 0.14);
 }
 .status-dot.online {
   background: var(--success);
-  box-shadow: 0 0 0 4px rgba(8, 122, 85, 0.14);
+  box-shadow: 0 0 0 4px rgba(46, 118, 88, 0.14);
 }
 
 .machine-meta strong { display: block; font-size: 14.5px; }
@@ -173,7 +180,7 @@ img { max-width: 100%; }
   transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
   -webkit-tap-highlight-color: transparent;
 }
-.drink-card:hover { background: #F3F5F8; }
+.drink-card:hover { background: #F5EDDF; }
 .drink-card:active { transform: scale(0.99); }
 .drink-card.selected {
   border-color: var(--primary);
@@ -288,7 +295,7 @@ img { max-width: 100%; }
   align-items: center;
   gap: 12px;
   padding: 12px max(16px, calc((100vw - 928px) / 2)) calc(12px + env(safe-area-inset-bottom));
-  background: rgba(255, 255, 255, 0.94);
+  background: rgba(255, 249, 240, 0.94);
   -webkit-backdrop-filter: blur(14px);
   backdrop-filter: blur(14px);
   border-top: 1px solid var(--divider);
@@ -372,7 +379,7 @@ img { max-width: 100%; }
 
 .error-box {
   padding: 20px;
-  border: 1px solid #F3CBDE;
+  border: 1px solid #E5C1B6;
   border-radius: var(--radius-lg);
   background: var(--danger-subtle);
   color: var(--danger-deep);
@@ -396,6 +403,7 @@ img { max-width: 100%; }
   border: 1px solid var(--divider);
   border-radius: var(--radius-lg);
   padding: 22px 20px;
+  box-shadow: var(--cc-shadow-1);
 }
 .pay-order-card h1 { font-size: 22px; font-weight: 700; }
 .pay-order-card .lead { margin: 6px 0 0; color: var(--muted); font-size: 13.5px; }
@@ -421,6 +429,7 @@ img { max-width: 100%; }
   border-radius: var(--radius-lg);
   padding: 18px 18px 16px;
   text-align: center;
+  box-shadow: var(--cc-shadow-1);
 }
 .pay-panel-head {
   display: flex; align-items: center; justify-content: space-between;
@@ -492,6 +501,7 @@ img { max-width: 100%; }
   border-radius: var(--radius-lg);
   padding: 20px;
   text-align: center;
+  box-shadow: var(--cc-shadow-1);
 }
 .status-card > strong { font-size: 16px; display: block; margin-top: 2px; }
 .status-meta { font-size: 12px; color: var(--muted); margin: 6px 0 16px; line-height: 1.6; }
@@ -538,6 +548,7 @@ img { max-width: 100%; }
   border: 1px solid var(--divider);
   border-radius: var(--radius-lg);
   padding: 18px 20px;
+  box-shadow: var(--cc-shadow-1);
 }
 .steps-card h2 { font-size: 16px; font-weight: 650; margin-bottom: 14px; }
 
@@ -666,7 +677,7 @@ img { max-width: 100%; }
   width: 100%;
   padding: 12px 14px;
   border-radius: var(--radius-lg);
-  background: #17212B;
+  background: var(--cc-console-bg);
   color: #fff;
   font-size: 13px;
   line-height: 1.5;

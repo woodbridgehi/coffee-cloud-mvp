@@ -1,6 +1,6 @@
 /* ============================================================
-   Coffee Cloud · 设备运营台（Light Fresh）
-   高信息密度控制台：224px 浅色侧栏 + 64px 顶栏 + 浅灰工作区。
+   Coffee Cloud · 设备运营台（Forest & Cream / Espresso）
+   高信息密度控制台：224px 奶油侧栏 + 64px 顶栏 + 暖色工作区。
    Mobile：无侧栏（抽屉导航）+ 56px 顶栏 + 底部导航。
    组件基础样式统一来自 /assets/shared/coffee-ui.css。
    ============================================================ */
@@ -49,6 +49,12 @@ body.admin-body {
   font-variant-numeric: tabular-nums lining-nums;
 }
 
+body.admin-body h1,
+body.admin-body h2 {
+  font-family: var(--cc-font-display);
+  color: var(--cc-espresso);
+}
+
 button { font: inherit; color: inherit; }
 h1, h2, h3, h4, p { margin: 0; }
 code { font-family: var(--font-mono); }
@@ -95,14 +101,14 @@ code { font-family: var(--font-mono); }
   font-size: 12px; font-weight: 600; letter-spacing: 1px;
   color: var(--cc-info); text-transform: uppercase;
 }
-.login-aside h2 { font-size: 20px; line-height: 28px; font-weight: 650; margin-top: 8px; }
+.login-aside h2 { font-size: 20px; line-height: 28px; font-weight: 600; margin-top: 8px; }
 .login-aside p { font-size: 13px; line-height: 20px; color: var(--muted); margin-top: 12px; }
 .login-points { margin-top: 20px; display: grid; gap: 12px; list-style: none; padding: 0; }
 .login-points li { display: flex; gap: 10px; font-size: 13px; line-height: 20px; color: var(--ink-2); }
 .login-points svg { flex: none; margin-top: 2px; color: var(--cc-success); }
 
 .login-form-col { width: 420px; max-width: 100%; flex: none; }
-.login-form-col h1 { font-size: 24px; line-height: 32px; font-weight: 700; }
+.login-form-col h1 { font-size: 24px; line-height: 32px; font-weight: 600; }
 .login-note { color: var(--muted); font-size: 13px; margin: 6px 0 20px; line-height: 1.6; }
 .login-form { display: grid; gap: 14px; }
 
@@ -149,7 +155,7 @@ code { font-family: var(--font-mono); }
   font-size: 13.5px; font-weight: 500; text-align: left; cursor: pointer;
   transition: background 0.12s ease, color 0.12s ease;
 }
-.nav-item:hover { background: #F3F5F8; color: var(--ink); }
+.nav-item:hover { background: #F5EDDF; color: var(--ink); }
 .nav-item.active {
   background: var(--cc-primary-subtle); color: var(--cc-primary-selected-fg); font-weight: 600;
 }
@@ -183,7 +189,7 @@ code { font-family: var(--font-mono); }
   z-index: 50;
 }
 .topbar-title { min-width: 0; }
-.topbar-title h2 { font-size: 17px; }
+.topbar-title h2 { font-size: 18px; font-weight: 600; }
 .topbar-title p { font-size: 12px; color: var(--muted); margin-top: 1px; }
 .topbar-side { display: flex; align-items: center; gap: 12px; margin-left: auto; }
 .refresh-note { font-size: 12px; color: var(--muted); white-space: nowrap; }
@@ -194,7 +200,7 @@ code { font-family: var(--font-mono); }
   background: transparent; border: 0; cursor: pointer; color: var(--ink-2);
   align-items: center; justify-content: center;
 }
-#hamburger:hover { background: #F3F5F8; color: var(--ink); }
+#hamburger:hover { background: #F5EDDF; color: var(--ink); }
 .nav-veil { position: fixed; inset: 0; z-index: 105; background: var(--cc-overlay); }
 
 /* ---------- 工作区 ---------- */
@@ -213,7 +219,7 @@ code { font-family: var(--font-mono); }
 
 /* ---------- 统计 / 运营积压 ---------- */
 
-.stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 20px; }
+.stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg); box-shadow: var(--cc-shadow-1); padding: 20px; }
 .stat-grid .stat { padding: 4px 16px; border-left: 1px solid var(--line); }
 .stat-grid .stat:first-child { border-left: 0; padding-left: 0; }
 .stat-grid .stat:last-child { padding-right: 0; }
@@ -228,6 +234,7 @@ code { font-family: var(--font-mono); }
   border-radius: var(--radius-md);
   background: var(--panel);
   border: 1px solid var(--line);
+  box-shadow: var(--cc-shadow-1);
 }
 .ops-chip .oc-label { font-size: 12.5px; color: var(--ink-2); }
 .ops-chip .oc-value { font-size: 21px; font-weight: 650; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
@@ -279,8 +286,9 @@ code { font-family: var(--font-mono); }
 .audit-detail pre {
   margin: 8px 0 0;
   padding: 12px;
-  background: #17212B;
-  color: #E7EDF5;
+  background: var(--cc-console-bg);
+  color: var(--cc-console-fg);
+  border: 1px solid var(--cc-console-border);
   border-radius: var(--radius-md);
   overflow: auto;
   font-size: 12px;
@@ -291,17 +299,17 @@ code { font-family: var(--font-mono); }
 /* ---------- 秘密 / 权限 ---------- */
 
 .secret-box {
-  border: 1.5px dashed var(--cc-primary);
-  background: var(--cc-primary-subtle);
+  border: 1px solid var(--cc-console-border);
+  background: var(--cc-console-bg);
   border-radius: var(--radius-md);
   padding: 14px 16px;
 }
-.secret-box .s-label { font-size: 12px; color: var(--cc-primary-selected-fg); font-weight: 600; }
+.secret-box .s-label { font-size: 12px; color: var(--cc-console-muted); font-weight: 600; }
 .secret-box code {
   display: block;
   word-break: break-all;
   font-size: 14px;
-  color: var(--ink);
+  color: var(--cc-console-fg);
   margin: 8px 0 10px;
   user-select: all;
   -webkit-user-select: all;
@@ -312,7 +320,7 @@ code { font-family: var(--font-mono); }
 }
 
 .danger-zone {
-  border: 1px solid #F3CBDE; background: var(--cc-error-subtle); border-radius: var(--radius-md);
+  border: 1px solid #E5C1B6; background: var(--cc-error-subtle); border-radius: var(--radius-md);
   padding: 13px 15px; font-size: 13px; color: var(--cc-error-selected-fg); display: grid; gap: 10px;
 }
 

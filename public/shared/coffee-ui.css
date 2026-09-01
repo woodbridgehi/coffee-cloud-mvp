@@ -1,11 +1,10 @@
 /* ============================================================
-   Coffee Cloud · Light Fresh 设计系统（三套前端唯一视觉源头）
+   Coffee Cloud · Forest & Cream 设计系统（三套前端唯一视觉源头）
    ------------------------------------------------------------
-   依据 docs/UI_UX_REDESIGN_SPEC.md 与 docs/design-tokens.json，
-   吸收 OpenDesign assets/coffee-ui.css 的 Token 与组件能力：
-   - 白 / 浅灰基底，蓝色主操作，有限状态强调色
-   - 平面卡片 + 细边框，阴影只用于浮层（Modal / Drawer / Toast / Menu）
-   - 交互命中区域 ≥ 44px，焦点 2px 蓝 + 2px 白隔离，reduced-motion
+   依据 /Downloads/webpage 的最新 Open Design 原型：
+   - 森林深绿 × 奶油白 × espresso 暖棕 × 黄铜
+   - 商户与消费者使用 forest 主操作，平台端使用 espresso 主操作
+   - 交互命中区域 ≥ 44px，焦点 3px 黄铜，支持 reduced-motion
    命名空间：新 Token 一律 --cc- 前缀；同时保留旧页面在用的
    别名 Token（--cc-ink / --cc-espresso / --cc-caramel …）映射到
    新 palette，页面 CSS 通过别名消费，不互相污染。
@@ -18,77 +17,91 @@
 
 :root {
   /* ---- 字体 ---- */
-  --cc-font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
-    "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
-  --cc-font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
-  /* 展示字体：消费者页面标题使用；运营后台为数据密集界面，默认不使用 */
-  --cc-font-display: "Songti SC", "Noto Serif SC", Georgia, "Times New Roman", serif;
+  --cc-font-ui: "Inter", "Manrope", -apple-system, BlinkMacSystemFont, "Segoe UI",
+    "PingFang SC", "Source Han Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+  --cc-font-mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas,
+    "PingFang SC", monospace;
+  --cc-font-display: "Source Han Serif SC", "Noto Serif SC", "Songti SC",
+    "Iowan Old Style", Charter, Georgia, serif;
 
   /* ---- neutral ---- */
-  --cc-bg: #F7F9FC;             /* 页面底 */
-  --cc-surface: #FFFFFF;        /* 卡片 */
-  --cc-surface-2: #F7F9FC;      /* 次级面板 / 表头（与页面底同色系） */
-  --cc-border: #DDE3EC;
-  --cc-divider: #E9EDF3;
-  --cc-control-border: #7B8798;
+  --cc-bg: #F6F0E5;
+  --cc-surface: #FFF9F0;
+  --cc-surface-2: #F5EDDF;
+  --cc-border: #DDD3C4;
+  --cc-divider: #E9DFD0;
+  --cc-control-border: #8F7D5F;
 
   /* ---- semantic / state（default + subtle + selected-fg） ---- */
-  --cc-primary: #2457D6;
-  --cc-primary-hover: #1D49BB;
-  --cc-primary-pressed: #163A98;
-  --cc-primary-subtle: #F2F5FF;
-  --cc-primary-selected-fg: #163A98;
-  --cc-success: #087A55;  --cc-success-subtle: #EFFBF5;  --cc-success-selected-fg: #05523A;
-  --cc-warning: #8A6200;  --cc-warning-subtle: #FFF9E8;  --cc-warning-selected-fg: #5D4100;
-  --cc-error: #B92B68;    --cc-error-subtle: #FFF3F7;    --cc-error-selected-fg: #801846;
-  --cc-info: #08768B;     --cc-info-subtle: #F0FAFD;     --cc-info-selected-fg: #034F60;
-  --cc-purple: #7343C5;   --cc-purple-subtle: #F8F4FF;   --cc-purple-selected-fg: #4E288E;
+  --cc-primary: #123D31;
+  --cc-primary-hover: #0E3328;
+  --cc-primary-pressed: #0B2D24;
+  --cc-primary-subtle: #EFECE3;
+  --cc-primary-selected-fg: #0B2D24;
+  --cc-success: #2E7658;  --cc-success-subtle: #EAECE1;  --cc-success-selected-fg: #1F523B;
+  --cc-warning: #8F6217;  --cc-warning-subtle: #F9EDDD;  --cc-warning-selected-fg: #65440F;
+  --cc-error: #B64C3C;    --cc-error-subtle: #F9EBE1;    --cc-error-selected-fg: #823227;
+  --cc-info: #8A6432;     --cc-info-subtle: #F7EEE0;     --cc-info-selected-fg: #60441D;
+  --cc-purple: #8A5A3B;   --cc-purple-subtle: #F1E9DF;   --cc-purple-selected-fg: #4A2D1F;
 
   /* ---- 旧别名 → 新 palette（页面文件继续消费） ---- */
-  --cc-ink: #17212B;             /* 主文字 */
-  --cc-ink-2: #526174;           /* 次级文字 */
-  --cc-muted: #596579;           /* 弱化文字 */
-  --cc-text: #17212B;
-  --cc-text-2: #526174;
-  --cc-espresso: #2457D6;        /* 旧“深咖啡主操作” → 蓝色主操作 */
-  --cc-espresso-hi: #1D49BB;
-  --cc-caramel: #2457D6;         /* 旧“焦糖强调” → 蓝色强调 */
-  --cc-caramel-soft: #F2F5FF;
-  --cc-sage: #087A55;   --cc-sage-soft: #EFFBF5;
-  --cc-danger: #B92B68; --cc-danger-soft: #FFF3F7;
-  --cc-amber: #8A6200;  --cc-amber-soft: #FFF9E8;
-  --cc-azure: #08768B;  --cc-azure-soft: #F0FAFD;
-  --cc-line: #E9EDF3;
-  --cc-line-strong: #7B8798;
-  --cc-disabled-bg: #E8ECF2;
-  --cc-overlay: rgba(23, 33, 43, 0.36);
+  --cc-ink: #342F2A;
+  --cc-ink-2: #5F584F;
+  --cc-muted: #746D64;
+  --cc-text: #342F2A;
+  --cc-text-2: #746D64;
+  --cc-espresso: #5A3827;
+  --cc-espresso-hi: #4A2D1F;
+  --cc-caramel: #B78A52;
+  --cc-caramel-soft: #F1E9DF;
+  --cc-sage: #2E7658;   --cc-sage-soft: #EAECE1;
+  --cc-danger: #B64C3C; --cc-danger-soft: #F9EBE1;
+  --cc-amber: #8F6217;  --cc-amber-soft: #F9EDDD;
+  --cc-azure: #34795D;  --cc-azure-soft: #EAECE1;
+  --cc-line: #E9DFD0;
+  --cc-line-strong: #8F7D5F;
+  --cc-disabled-bg: #EBE3D3;
+  --cc-overlay: rgba(43, 30, 22, 0.42);
+  --cc-console-bg: #0D1713;
+  --cc-console-surface: #121F1A;
+  --cc-console-border: #2A3C34;
+  --cc-console-fg: #EDF2EE;
+  --cc-console-muted: #98A79F;
+  --cc-brass: #B78A52;
 
   /* ---- 圆角 ---- */
-  --cc-radius-lg: 12px;
-  --cc-radius-md: 8px;
+  --cc-radius-lg: 16px;
+  --cc-radius-md: 10px;
   --cc-radius-sm: 6px;
 
   /* ---- 阴影（仅浮层使用） ---- */
-  --cc-shadow-1: 0 1px 2px rgba(23, 33, 43, 0.06);
-  --cc-shadow-2: 0 2px 6px rgba(23, 33, 43, 0.08), 0 8px 24px rgba(23, 33, 43, 0.12);
+  --cc-shadow-1: 0 1px 2px rgba(52, 34, 25, 0.06);
+  --cc-shadow-2: 0 2px 8px rgba(52, 34, 25, 0.07), 0 18px 50px rgba(50, 34, 24, 0.12);
 
-  /* ---- 焦点环：2px 蓝 + 2px 白隔离 ---- */
-  --cc-focus-ring:
-    0 0 0 2px #FFFFFF,
-    0 0 0 4px #2457D6;
+  /* ---- 焦点环：3px 黄铜 ---- */
+  --cc-focus-ring: 0 0 0 3px #B78A52;
 
   /* ---- 布局 ---- */
   --cc-sidebar: 224px;
   --cc-header: 64px;
   --cc-header-compact: 56px;
-  --cc-bottomnav: 60px;
+  --cc-bottomnav: 64px;
+}
+
+/* 平台端使用 espresso，商户端和消费者端保留 forest。 */
+body.admin-body {
+  --cc-primary: #5A3827;
+  --cc-primary-hover: #4A2D1F;
+  --cc-primary-pressed: #3B2419;
+  --cc-primary-subtle: #F1E9DF;
+  --cc-primary-selected-fg: #3B2419;
 }
 
 /* ---- 基础盒子模型（三套页面统一） ---- */
 *, *::before, *::after { box-sizing: border-box; }
 
 :focus-visible {
-  outline: 2px solid var(--cc-primary);
+  outline: 3px solid var(--cc-brass);
   outline-offset: 2px;
 }
 
@@ -126,11 +139,11 @@
 .btn.primary:not(:disabled):hover { background: var(--cc-primary-hover); }
 .btn.primary:not(:disabled):active { background: var(--cc-primary-pressed); }
 .btn.secondary { background: var(--cc-surface); color: var(--cc-ink); border-color: var(--cc-control-border); }
-.btn.secondary:not(:disabled):hover { background: #F3F5F8; border-color: var(--cc-ink-2); }
+.btn.secondary:not(:disabled):hover { background: #F5EDDF; border-color: var(--cc-ink-2); }
 .btn.ghost { background: transparent; color: var(--cc-ink-2); border-color: transparent; }
-.btn.ghost:not(:disabled):hover { background: #F3F5F8; color: var(--cc-ink); }
+.btn.ghost:not(:disabled):hover { background: #F5EDDF; color: var(--cc-ink); }
 .btn.danger { background: var(--cc-error); color: #fff; }
-.btn.danger:not(:disabled):hover { background: #9C2057; }
+.btn.danger:not(:disabled):hover { background: #9C3F31; }
 .btn.small { min-height: 44px; padding: 0 12px; font-size: 12.5px; }
 .btn.block { width: 100%; }
 .btn.active { background: var(--cc-primary); color: #fff; }
@@ -206,12 +219,13 @@ textarea.input { resize: vertical; min-height: 84px; }
 .badge.outline { background: transparent; border: 1px solid var(--cc-border); color: var(--cc-ink-2); }
 .badge.outline::before { display: none; }
 
-/* ---------- 卡片（平面 + 细边框，无阴影） ---------- */
+/* ---------- 卡片（奶油纸面 + 暖棕浅投影） ---------- */
 
 .card {
   background: var(--cc-surface);
   border: 1px solid var(--cc-divider);
   border-radius: var(--cc-radius-lg);
+  box-shadow: var(--cc-shadow-1);
   min-width: 0; max-width: 100%;
 }
 .card-head {
@@ -277,13 +291,13 @@ table.grid tbody tr:last-child td { border-bottom: 0; }
 table.grid th.num, table.grid td.num { text-align: right; }
 table.grid td.num > .num { font-variant-numeric: tabular-nums; }
 table.grid tbody tr.clickable { cursor: pointer; transition: background 0.12s ease; }
-table.grid tbody tr.clickable:hover { background: #F3F5F8; }
+table.grid tbody tr.clickable:hover { background: #F5EDDF; }
 table.grid tbody tr.selected { background: var(--cc-primary-subtle); }
-table.grid tbody tr.expanded { background: #F3F5F8; }
+table.grid tbody tr.expanded { background: #F5EDDF; }
 table.grid tbody tr.totals-row td {
   background: var(--cc-surface-2); border-top: 2px solid var(--cc-border); font-weight: 600;
 }
-table.grid tbody tr.clickable:focus-visible { outline: 2px solid var(--cc-primary); outline-offset: -2px; }
+table.grid tbody tr.clickable:focus-visible { outline: 3px solid var(--cc-brass); outline-offset: -3px; }
 
 .cell-strong { font-weight: 600; color: var(--cc-ink); }
 .cell-sub { font-size: 11.5px; color: var(--cc-muted); margin-top: 2px; overflow-wrap: anywhere; }
@@ -450,7 +464,7 @@ table.grid tbody tr.clickable:focus-visible { outline: 2px solid var(--cc-primar
 .skeleton { padding: 16px; display: grid; gap: 12px; }
 .skel-row {
   height: 14px; border-radius: 7px;
-  background: linear-gradient(90deg, #E8ECF2 25%, #F3F6FA 45%, #E8ECF2 65%);
+  background: linear-gradient(90deg, #EBE3D3 25%, #F5EDDF 45%, #EBE3D3 65%);
   background-size: 240% 100%;
   animation: cc-shimmer 1.3s infinite;
 }
@@ -468,14 +482,14 @@ table.grid tbody tr.clickable:focus-visible { outline: 2px solid var(--cc-primar
 .toast {
   display: flex; gap: 10px; align-items: flex-start;
   padding: 12px 14px; border-radius: var(--cc-radius-lg);
-  background: #17212B;
+  background: var(--cc-console-bg);
   color: #fff; font-size: 13px; line-height: 1.5;
   box-shadow: var(--cc-shadow-2); cursor: pointer;
   animation: cc-toast-in 0.22s ease;
 }
 .toast .t-icon { flex: none; margin-top: 1px; display: grid; place-items: center; }
-.toast.success { background: #04553C; }
-.toast.error { background: #801846; }
+.toast.success { background: #1F523B; }
+.toast.error { background: #823227; }
 .toast.leaving { opacity: 0; transform: translateY(-6px); transition: opacity 0.25s, transform 0.25s; }
 @keyframes cc-toast-in { from { opacity: 0; transform: translateY(-8px); } }
 
@@ -510,7 +524,7 @@ table.grid tbody tr.clickable:focus-visible { outline: 2px solid var(--cc-primar
   display: grid; place-items: center; border-radius: var(--cc-radius-md);
   color: var(--cc-muted); cursor: pointer; flex: none;
 }
-.modal-close:hover { background: #F3F5F8; color: var(--cc-ink); }
+.modal-close:hover { background: #F5EDDF; color: var(--cc-ink); }
 .modal-body { padding: 17px 19px; display: grid; gap: 12px; }
 .modal-foot {
   display: flex; justify-content: flex-end; gap: 9px;
