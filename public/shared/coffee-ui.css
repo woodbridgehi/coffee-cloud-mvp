@@ -409,11 +409,12 @@ code, pre, .u-mono { font-family: var(--cc-mono); font-size: 13px; line-height: 
 /* ---------- Dialog ---------- */
 .cc-overlay {
   position: fixed; inset: 0; z-index: 90; background: var(--cc-overlay);
-  display: none; align-items: flex-start; justify-content: center; padding: 8vh 16px 16px; overflow-y: auto;
+  display: none; align-items: center; justify-content: center; padding: 16px; overflow-y: auto;
 }
 .cc-overlay.is-open { display: flex; }
 .cc-dialog {
   width: 100%; max-width: 480px; background: var(--cc-surface); border-radius: var(--cc-r-xl);
+  max-height: calc(100dvh - 32px); overflow-y: auto;
   box-shadow: var(--cc-elev-2); animation: cc-dialog var(--cc-t-dialog) var(--cc-ease-out);
 }
 .cc-dialog--440 { max-width: 440px; }

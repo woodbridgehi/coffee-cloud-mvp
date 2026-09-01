@@ -290,6 +290,7 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
   function openModal({ title, body, footer, wide, size, dismissible = true }) {
     closeModal();
     const root = $('modal-root');
+    root.classList.add('cc-overlay');
     const lastActive = document.activeElement;
     const handle = { root, card: null, onClose: null, lastActive };
     const close = () => {

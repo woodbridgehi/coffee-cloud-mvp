@@ -311,6 +311,46 @@ test('冒烟：登录后外壳与 OWNER 全量导航渲染，总览加载', asyn
   assert.ok(cardsText.includes('经营利润（估算）'), '利润卡片渲染');
 });
 
+test('冒烟：日期快捷项、手动日期与经营报表筛选只刷新当前视图', async () => {
+  const controls = documentStub.getElementById('top-controls');
+  const initialDateButton = findAll(controls, n => n.tagName === 'BUTTON' && textOf(n).includes('~'))[0];
+  assert.ok(initialDateButton, '日期区间按钮存在');
+  const initialLabel = textOf(initialDateButton);
+  initialDateButton.dispatch('click');
+  const todayButton = findButtonByText(controls, '今天');
+  assert.ok(todayButton, '日期弹层提供今天快捷项');
+  todayButton.dispatch('click');
+  await flush(10);
+  const refreshedControls = documentStub.getElementById('top-controls');
+  const refreshedDateButton = findAll(refreshedControls, n => n.tagName === 'BUTTON' && textOf(n).includes('~'))[0];
+  assert.notEqual(textOf(refreshedDateButton), initialLabel, '点击今天后日期标签更新');
+  refreshedDateButton.dispatch('click');
+  assert.equal(findButtonByText(refreshedControls, '今天').getAttribute('aria-pressed'), 'true', '重新打开后今天保持选中');
+
+  globalThis.location.hash = '#/reports';
+  fireHashChange();
+  await flush(10);
+  const workspace = documentStub.getElementById('workspace');
+  const reportControls = () => findAll(workspace, n => n.getAttribute('aria-label') === '统计粒度');
+  assert.equal(reportControls().length, 1, '初始只有一组报表控件');
+  findButtonByText(reportControls()[0], '月').dispatch('click');
+  await flush(10);
+  assert.equal(reportControls().length, 1, '切换粒度不会追加第二份报表');
+  assert.equal(findButtonByText(reportControls()[0], '月').getAttribute('aria-pressed'), 'true', '月粒度切换生效');
+
+  const metricSelect = findAll(workspace, n => n.tagName === 'SELECT' && n.getAttribute('aria-label') === '图表指标')[0];
+  metricSelect.value = 'materialCostMinor';
+  metricSelect.dispatch('change');
+  await flush(10);
+  assert.equal(reportControls().length, 1, '切换材料成本不会追加报表');
+
+  const reportStore = findAll(workspace, n => n.tagName === 'SELECT' && n.getAttribute('aria-label') === '门店筛选')[0];
+  reportStore.value = '';
+  reportStore.dispatch('change');
+  await flush(10);
+  assert.equal(reportControls().length, 1, '切换门店不会追加报表');
+});
+
 test('冒烟：设备列表渲染并可打开详情抽屉', async () => {
   globalThis.location.hash = '#/devices';
   fireHashChange();
@@ -462,6 +502,7 @@ test('退款上限缺失或异常时禁用金额与提交，不能把非法金�
   for (const [receivedMinor, refundedMinor] of [[null, 0], [100, undefined], ['', 0], [false, 0], [100, NaN], [100, 101]]) {
     views.openRefundModal({ id: 'refund-contract', receivedMinor, refundedMinor }, {});
     const root = documentStub.getElementById('modal-root');
+    assert.ok(root.classList.contains('cc-overlay'), '弹窗根节点始终具备居中遮罩类');
     assert.ok(textOf(root).includes('无法计算可退上限'));
     assert.equal(findButtonByText(root, '确认退款').disabled, true);
     assert.equal(findAll(root, n => n.tagName === 'INPUT')[0].disabled, true);

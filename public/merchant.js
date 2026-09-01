@@ -324,6 +324,7 @@ function layerCloseIcon(label = '关闭', onclick) {
 function openModal({ title, body, footer, wide, size, dismissible = true, onClose }) {
   closeModal();
   const root = $('modal-root');
+  root.classList.add('cc-overlay');
   const previous = document.activeElement;
   const close = () => {
     if (!activeModal || activeModal.root !== root) return;
@@ -1397,24 +1398,26 @@ function buildShellControls() {
     if (!isValidRange(fromInput.value, toInput.value)) { rangeError.textContent = '开始日期不能晚于结束日期'; return; }
     rangeError.textContent = '';
     state.period = { from: fromInput.value, to: toInput.value };
-    rangeBtn.replaceChildren(document.createTextNode(rangeBtnLabel()));
     closePopover(pop);
+    buildShellControls();
     reloadView();
   };
+  const today = todayInTz(tz());
   const quickRow = el('div', { class: 'cc-seg', 'data-seg': true, role: 'group', 'aria-label': '快捷区间' },
-    [['today', '今天'], ['last7', '近 7 天'], ['thisMonth', '本月'], ['thisYear', '本年']].map(([kind, label]) =>
-      el('button', {
+    [['today', '今天'], ['last7', '近 7 天'], ['thisMonth', '本月'], ['thisYear', '本年']].map(([kind, label]) => {
+      const period = rangeShortcut(kind, today);
+      return el('button', {
         class: 'cc-btn cc-btn--ghost cc-btn--sm', type: 'button',
-        style: 'min-height:36px', 'aria-pressed': kind === 'last7' ? 'true' : 'false',
+        style: 'min-height:36px',
+        'aria-pressed': state.period.from === period.from && state.period.to === period.to ? 'true' : 'false',
         onclick: () => {
-          state.period = rangeShortcut(kind, todayInTz(tz()));
-          fromInput.value = state.period.from;
-          toInput.value = state.period.to;
-          rangeBtn.replaceChildren(document.createTextNode(rangeBtnLabel()));
+          state.period = period;
           closePopover(pop);
+          buildShellControls();
           reloadView();
         },
-      }, label)));
+      }, label);
+    }));
   const pop = openPopoverAttach(rangeBtn, el('div', { style: 'display:grid;gap:12px;min-width:280px' },
     quickRow,
     el('div', { class: 'm-formgrid' },
@@ -3465,6 +3468,7 @@ const REPORT_METRICS = [
 ];
 
 function renderReportsView(root) {
+  clearNode(root);
   state.reportGrain = state.reportGrain || 'DAY';
   state.reportMetric = state.reportMetric || 'netCashMinor';
   const grainSeg = el('div', { class: 'cc-seg', role: 'group', 'aria-label': '统计粒度' },
