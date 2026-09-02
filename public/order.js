@@ -610,17 +610,65 @@ function renderOrder(order) {
       ? `单杯计划约 ${Math.ceil(order.production.plannedDurationSeconds / 60)} 分钟`
       : '等待设备返回计划时长';
 
+function flavorPillsFor(productName) {
+  const name = String(productName || '').toLowerCase();
+  if (name.includes('拿铁') || name.includes('latte')) {
+    return `<div class="flavor-pills">
+      <span class="flavor-pill">🌰 坚果可可</span>
+      <span class="flavor-pill">🥛 丝滑厚乳</span>
+      <span class="flavor-pill">🍯 焦糖回甘</span>
+    </div>
+    <div class="recipe-bar-wrap">
+      <div class="recipe-bar-label"><span>配方比例</span><span>浓缩 25% · 鲜奶 60% · 奶沫 15%</span></div>
+      <div class="recipe-bar"><div class="recipe-bar-part espresso" style="width:25%"></div><div class="recipe-bar-part milk" style="width:60%"></div><div class="recipe-bar-part foam" style="width:15%"></div></div>
+    </div>`;
+  }
+  if (name.includes('美式') || name.includes('americano')) {
+    return `<div class="flavor-pills">
+      <span class="flavor-pill">🍫 浓郁黑巧</span>
+      <span class="flavor-pill">🌰 坚果原香</span>
+      <span class="flavor-pill">☕ 经典醇厚</span>
+    </div>
+    <div class="recipe-bar-wrap">
+      <div class="recipe-bar-label"><span>配方比例</span><span>意式浓缩 35% · 清润水 65%</span></div>
+      <div class="recipe-bar"><div class="recipe-bar-part espresso" style="width:35%"></div><div class="recipe-bar-part water" style="width:65%"></div></div>
+    </div>`;
+  }
+  if (name.includes('浓缩') || name.includes('espresso')) {
+    return `<div class="flavor-pills">
+      <span class="flavor-pill">🔥 9 bar 精萃</span>
+      <span class="flavor-pill">✨ 黄金 Crema</span>
+      <span class="flavor-pill">🍫 厚重可可</span>
+    </div>`;
+  }
+  return `<div class="flavor-pills">
+    <span class="flavor-pill">🌿 臻选产区</span>
+    <span class="flavor-pill">☕ 新鲜现磨</span>
+    <span class="flavor-pill">✨ 馥郁香醇</span>
+  </div>`;
+}
+
+function barcodeMarkup() {
+  const widths = [2, 1, 3, 1, 2, 4, 1, 2, 1, 3, 2, 1, 4, 1, 2, 3, 1, 2, 1, 3, 2, 1, 4, 1, 2];
+  return `<div class="ticket-barcode" aria-hidden="true">${widths.map(w => `<span style="width:${w}px"></span>`).join('')}</div>`;
+}
+
   app.innerHTML = `
     ${baseHeader(terminal ? 'idle' : '', terminal ? '状态已确认' : '实时同步中', `订单 ${esc(order.orderNo)}`)}
     <main class="page-main">
       ${bannerFor(order)}
       <div class="status-grid">
-        <section class="status-card" aria-label="制作进度">
+        <section class="status-card ticket-card" aria-label="制作进度">
+          <div class="ticket-header-ribbon">
+            <span>WOODBRIDGE ROASTERY</span>
+            <span>ORDER NO. ${esc(order.orderNo)}</span>
+          </div>
           <div class="pickup-card" aria-label="取餐码">
-            <span class="pc-label">取杯口令 / 取单号</span>
+            <span class="pc-label">ORDER NO. / 取杯口令</span>
             <strong class="pc-code">${esc(pickupCodeFor(order))}</strong>
             <span class="pc-sub">请在设备出杯口前凭此号核对取杯</span>
           </div>
+          ${flavorPillsFor(order.product?.name)}
           <div class="progress-wrap">
             <div class="progress-ring" style="--progress:${percent * 3.6}deg" role="img" aria-label="整杯进度 ${percent}%">
               <div><strong>${percent}%</strong><small>整杯进度</small></div>
@@ -636,6 +684,7 @@ function renderOrder(order) {
           ${milestoneMarkup(order)}
           <button class="btn-secondary" id="refresh">刷新状态</button>
           ${order.status === 'READY' ? `<a href="/order?device_id=${encodeURIComponent(order.deviceId || '')}" class="btn-primary" style="text-decoration:none;display:flex;align-items:center;justify-content:center;margin-top:10px">再点一杯</a>` : ''}
+          ${barcodeMarkup()}
           <p class="pay-hint" style="margin-top:10px">${terminal ? '最终状态已存档，实时更新已停止' : '制作状态实时刷新，请保持页面打开'}</p>
         </section>
         <section class="status-steps">
