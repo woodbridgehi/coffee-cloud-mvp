@@ -105,44 +105,75 @@ function baseHeader(pillClass, pillText, sub) {
   </header>`;
 }
 
-/* 杯型 SVG：按设备上报的 visual.profile 绘制，纯装饰 */
+/* 杯型 SVG：按设备上报的 visual.profile 绘制，富有层次与微质感 */
 function drinkArt(profileId) {
   const uid = `dg-${profileId}-${++artSeq}`;
   const themes = {
-    americano: { c1: '#7a4c2c', c2: '#412314', surface: '#5d3a21', scale: 1, deco: '' },
-    espresso: { c1: '#4c2a17', c2: '#2a1409', surface: '#3a1e0f', scale: 0.8, deco: '' },
+    americano: {
+      c1: '#6f3d1b', c2: '#351a0b', surface: '#542d13', scale: 1,
+      crema: '<ellipse cx="44" cy="30" rx="19.5" ry="4.5" fill="#a47148" opacity=".7"/>',
+      deco: '<path d="M24 38v44" stroke="rgba(255,255,255,.2)" stroke-width="2.5" stroke-linecap="round"/>',
+    },
+    espresso: {
+      c1: '#442211', c2: '#220e05', surface: '#36190a', scale: 0.82,
+      crema: '<ellipse cx="44" cy="30" rx="17" ry="4" fill="#915b32" opacity=".85"/>',
+      deco: '<ellipse cx="44" cy="30" rx="9" ry="2.2" fill="#c38852" opacity=".6"/>',
+    },
     'iced-latte': {
-      c1: '#c9a279', c2: '#8a5c39', surface: '#dcc3a4', scale: 1,
-      deco: `<g opacity=".85">
-        <rect x="30" y="42" width="13" height="13" rx="3" fill="#ffffff" opacity=".75" transform="rotate(12 36 48)"/>
-        <rect x="42" y="52" width="12" height="12" rx="3" fill="#ffffff" opacity=".6" transform="rotate(-14 48 58)"/>
+      c1: '#ba8e63', c2: '#784c2a', surface: '#cda882', scale: 1,
+      crema: '<ellipse cx="44" cy="30" rx="19.5" ry="4.5" fill="#f5ede3" opacity=".95"/>',
+      deco: `<g opacity=".9">
+        <rect x="29" y="40" width="13" height="13" rx="3.5" fill="#ffffff" opacity=".8" transform="rotate(12 35 46)"/>
+        <rect x="43" y="52" width="13" height="13" rx="3.5" fill="#ffffff" opacity=".7" transform="rotate(-15 49 58)"/>
+        <path d="M24 38v48" stroke="rgba(255,255,255,.28)" stroke-width="2.5" stroke-linecap="round"/>
+        <ellipse cx="44" cy="30" rx="12" ry="2.6" fill="#8e5a32" opacity=".4"/>
       </g>`,
     },
     'hazelnut-special': {
-      c1: '#9c6236', c2: '#5a3418', surface: '#b07a48', scale: 1,
+      c1: '#8c5328', c2: '#4a250c', surface: '#a36d3b', scale: 1,
+      crema: '<ellipse cx="44" cy="30" rx="19.5" ry="4.5" fill="#f8eedf"/>',
       deco: `<g>
-        <ellipse cx="44" cy="27" rx="16" ry="6" fill="#f7ead8"/>
-        <path d="M32 25c4 3 9 3 13 1s9-2 12 1" stroke="#c98d4e" stroke-width="2.2" fill="none" stroke-linecap="round"/>
+        <path d="M30 29c4 3 9 3 14 1s9-2 13 1" stroke="#b87b3a" stroke-width="2.2" fill="none" stroke-linecap="round"/>
+        <circle cx="44" cy="27" r="2" fill="#834617" opacity=".7"/>
+        <path d="M24 38v48" stroke="rgba(255,255,255,.24)" stroke-width="2.5" stroke-linecap="round"/>
       </g>`,
     },
-    generic: { c1: '#8a6a4e', c2: '#4e3421', surface: '#6d5136', scale: 1, deco: '' },
+    generic: {
+      c1: '#7d5c3f', c2: '#422815', surface: '#63472c', scale: 1,
+      crema: '<ellipse cx="44" cy="30" rx="19.5" ry="4.5" fill="#dfcfbe" opacity=".8"/>',
+      deco: '<path d="M24 38v48" stroke="rgba(255,255,255,.2)" stroke-width="2.5" stroke-linecap="round"/>',
+    },
   };
   const t = themes[profileId] || themes.generic;
-  const w = Math.round(62 * t.scale), h = Math.round(84 * t.scale);
+  const w = Math.round(64 * t.scale), h = Math.round(86 * t.scale);
   return `<svg width="${w}" height="${h}" viewBox="0 0 88 118" aria-hidden="true">
     <defs><linearGradient id="${uid}" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="${t.c1}"/><stop offset="1" stop-color="${t.c2}"/>
     </linearGradient></defs>
     <ellipse cx="44" cy="109" rx="27" ry="4.5" fill="#00000014"/>
     <g transform="translate(${44 - 44 * t.scale} ${109 - 109 * t.scale}) scale(${t.scale})">
-      <path d="M67 44c13 0 15 17 2 22" fill="none" stroke="#f3e7d6" stroke-width="6.5" stroke-linecap="round"/>
+      <path d="M67 44c13 0 15 17 2 22" fill="none" stroke="#e8dcce" stroke-width="6.5" stroke-linecap="round"/>
       <path d="M20 30h48v60a10 10 0 0 1-10 10H30a10 10 0 0 1-10-10V30Z" fill="url(#${uid})"/>
       <path d="M20 30h48v8H20z" fill="#fdf8f0" opacity=".92"/>
       <ellipse cx="44" cy="30" rx="24" ry="6.5" fill="#fffdf8"/>
       <ellipse cx="44" cy="30" rx="18.5" ry="4.4" fill="${t.surface}"/>
-      ${t.deco}
+      ${t.crema || ''}
+      ${t.deco || ''}
     </g>
   </svg>`;
+}
+
+function pickupCodeFor(order) {
+  const raw = String(order?.orderNo || order?.orderId || '').trim();
+  if (!raw) return '—';
+  const hyphenParts = raw.split('-');
+  if (hyphenParts.length >= 2) {
+    const last = hyphenParts[hyphenParts.length - 1];
+    return last.length >= 4 ? last.slice(0, 4).toUpperCase() : last.toUpperCase();
+  }
+  const digits = raw.match(/\d{3,4}$/);
+  if (digits) return digits[0];
+  return raw.slice(-4).toUpperCase();
 }
 
 const iconClock = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -225,7 +256,7 @@ function renderMenu() {
         </div>
         <div class="stock-summary">
           <strong>${totalRemaining}</strong>
-          <small>预计可售杯数</small>
+          <small>预计可售杯数*</small>
         </div>
       </section>
       <div class="section-title">
@@ -234,6 +265,7 @@ function renderMenu() {
       </div>
       ${menu.products.length ? `<section class="drink-list">${menu.products.map(card).join('')}</section>`
         : `<section class="center-state" style="min-height:32vh"><p>设备尚未上报可售饮品，请稍后重试。</p></section>`}
+      <p class="stock-footnote">* 预计可售杯数为各配方当前理论上限之和；由于共享咖啡豆与鲜奶，实际总杯数以先下单扣减为准。</p>
       <div class="notice">${online
         ? '付款由支付宝处理，云端确认支付成功后才会向设备派发制作任务。支付完成后请保持订单状态页打开，直到取杯。'
         : '当前为内部联调模式（免支付），下单会真实触发模拟终端制作，仅供验收使用。'}</div>
@@ -454,9 +486,9 @@ function statusNote(order) {
     case 'QUEUED': return `前方还有 ${Math.max(0, (order.queuePosition || 1) - 1)} 杯，制作按队列顺序自动派发。`;
     case 'DISPATCHED': return '制作指令已派发，正在等待设备接收。';
     case 'ACCEPTED': return '设备已接受任务并预留整杯原料，即将开始制作。';
-    case 'MAKING': return '机器人正在制作，请保持页面打开，完成后及时取杯。';
-    case 'HOLD': return '设备回报结果待确认。系统不会在物理结果不确定时自动退款，运营人员正在对账。';
-    case 'READY': return '请前往设备取杯，共享物料余量已同步扣减。';
+    case 'MAKING': return '咖啡师机器人正在现磨现制，完成后请及时取杯。';
+    case 'HOLD': return '设备状态正在自检核验，请留意本页更新，工作人员将为您跟进处理。';
+    case 'READY': return '现磨咖啡已制作完成，请前往设备出杯口取杯，小心烫手。';
     case 'FAILED': return order.failure?.message || '设备未能完成本次制作，系统将按明确失败策略处理退款。';
     case 'REFUNDED': return '款项已按原路退回支付账户，到账时间以支付平台记录为准。';
     case 'CANCELLED': return '订单已取消，未产生扣款。';
@@ -470,7 +502,7 @@ function bannerFor(order) {
     const redirect = order.paymentMode === 'TEST_FREE'
       ? '<span id="ready-countdown" class="ready-countdown">6 秒后自动返回扫码页</span>' : '';
     return `<div class="banner ready"><span class="b-icon">${iconCheck}</span><div>
-      <strong>制作完成</strong><p>请前往设备取杯。设备中的共享物料余量已同步扣减。${redirect}</p></div></div>`;
+      <strong>制作完成</strong><p>现磨咖啡已制作完成，请前往设备出杯口取杯，小心烫手。${redirect}</p></div></div>`;
   }
   if (order.status === 'FAILED') {
     return `<div class="banner failed"><span class="b-icon">${iconAlert}</span><div>
@@ -478,7 +510,7 @@ function bannerFor(order) {
   }
   if (order.status === 'HOLD') {
     return `<div class="banner hold"><span class="b-icon">${iconAlert}</span><div>
-      <strong>设备结果待确认</strong><p>系统不会在物理结果不确定时自动退款，运营人员正在对账，请留意本页状态更新。</p></div></div>`;
+      <strong>设备自检核验中</strong><p>系统正在确认物理制作结果，如有疑问请向工作人员出示此页面。</p></div></div>`;
   }
   if (order.status === 'REFUNDED') {
     return `<div class="banner info"><span class="b-icon">${iconInfo}</span><div>
@@ -600,6 +632,11 @@ function renderOrder(order) {
       ${bannerFor(order)}
       <div class="status-grid">
         <section class="status-card" aria-label="制作进度">
+          <div class="pickup-card" aria-label="取餐码">
+            <span class="pc-label">取杯口令 / 取单号</span>
+            <strong class="pc-code">${esc(pickupCodeFor(order))}</strong>
+            <span class="pc-sub">请在设备出杯口前凭此号核对取杯</span>
+          </div>
           <div class="progress-wrap">
             <div class="progress-ring" style="--progress:${percent * 3.6}deg" role="img" aria-label="整杯进度 ${percent}%">
               <div><strong>${percent}%</strong><small>整杯进度</small></div>

@@ -7,34 +7,35 @@
    ============================================================ */
 
 :root {
-  --font-ui: var(--cc-font-ui);
-  --font-mono: var(--cc-font-mono);
+  --font-ui: var(--cc-font, Inter, Manrope, -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif);
+  --font-mono: var(--cc-mono, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace);
+  --font-display: var(--cc-font-display, "Source Han Serif SC", "Noto Serif SC", Georgia, serif);
 
-  --bg: var(--cc-bg);
-  --surface: var(--cc-surface);
-  --ink: var(--cc-ink);
-  --ink-2: var(--cc-ink-2);
-  --muted: var(--cc-muted);
+  --bg: var(--cc-bg, #F6F0E5);
+  --surface: var(--cc-surface, #FFF9F0);
+  --ink: var(--cc-text, #342F2A);
+  --ink-2: var(--cc-text-2, #746D64);
+  --muted: var(--cc-text-2, #746D64);
 
-  --primary: var(--cc-primary);
-  --primary-hover: var(--cc-primary-hover);
-  --primary-subtle: var(--cc-primary-subtle);
+  --primary: var(--cc-primary, #123D31);
+  --primary-hover: var(--cc-primary-hover, #0E3328);
+  --primary-subtle: var(--cc-primary-subtle, #EFECE3);
 
-  --success: var(--cc-success);
-  --success-deep: var(--cc-success-selected-fg);
-  --success-subtle: var(--cc-success-subtle);
-  --danger: var(--cc-error);
-  --danger-deep: var(--cc-error-selected-fg);
-  --danger-subtle: var(--cc-error-subtle);
-  --warning: var(--cc-warning);
-  --warning-deep: var(--cc-warning-selected-fg);
-  --warning-subtle: var(--cc-warning-subtle);
+  --success: var(--cc-success, #2E7658);
+  --success-deep: var(--cc-success-selected-fg, #1F523B);
+  --success-subtle: var(--cc-success-subtle, #EAECE1);
+  --danger: var(--cc-error, #B64C3C);
+  --danger-deep: var(--cc-error-selected-fg, #823227);
+  --danger-subtle: var(--cc-error-subtle, #F9EBE1);
+  --warning: var(--cc-warning, #8F6217);
+  --warning-deep: var(--cc-warning-selected-fg, #65440F);
+  --warning-subtle: var(--cc-warning-subtle, #F9EDDD);
 
-  --line: var(--cc-line);
-  --divider: var(--cc-divider);
-  --radius-lg: var(--cc-radius-lg);
-  --radius-md: var(--cc-radius-md);
-  --radius-sm: var(--cc-radius-sm);
+  --line: var(--cc-border, #DDD3C4);
+  --divider: var(--cc-divider, #E9DFD0);
+  --radius-lg: var(--cc-r-lg, 16px);
+  --radius-md: var(--cc-r-md, 10px);
+  --radius-sm: var(--cc-r-sm, 6px);
 }
 
 html { -webkit-text-size-adjust: 100%; }
@@ -721,4 +722,46 @@ img { max-width: 100%; }
 
 @media (min-width: 560px) {
   .page-main { padding-inline: 24px; }
+}
+
+/* ---------- 取单码卡片（大字突出）与口径说明 ---------- */
+.pickup-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 16px 20px;
+  margin-bottom: 20px;
+  border-radius: var(--radius-lg, 16px);
+  background: radial-gradient(circle at 50% 30%, rgba(183,138,82,.14) 0, rgba(18,61,49,.05) 100%);
+  border: 1.5px solid #b78a52;
+  box-shadow: 0 4px 16px rgba(52,34,25,.06);
+  text-align: center;
+}
+.pickup-card .pc-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--primary);
+}
+.pickup-card .pc-code {
+  font-family: var(--font-mono);
+  font-size: clamp(34px, 9vw, 44px);
+  font-weight: 700;
+  line-height: 1.15;
+  color: #17382D;
+  letter-spacing: 0.08em;
+  margin: 4px 0 2px;
+}
+.pickup-card .pc-sub {
+  font-size: 12px;
+  color: var(--muted);
+}
+.stock-footnote {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 12px 2px 18px;
+  line-height: 1.5;
 }
