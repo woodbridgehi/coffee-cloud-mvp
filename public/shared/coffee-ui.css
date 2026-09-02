@@ -109,6 +109,8 @@ code, pre, .u-mono { font-family: var(--cc-mono); font-size: 13px; line-height: 
 .u-muted { color: var(--cc-text-2); }
 .u-break { word-break: break-all; }
 .u-hidden { display: none !important; }
+/* Native hidden panels must win over component display rules such as .cc-stack. */
+[hidden] { display: none !important; }
 
 /* Typography scale —— display/h1/h2 衬线 + 标题绿；大数值等宽 */
 .cc-display { font-family: var(--cc-font-display); font-size: 30px; line-height: 40px; font-weight: 600; color: var(--cc-title); }

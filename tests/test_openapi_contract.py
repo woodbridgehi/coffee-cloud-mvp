@@ -66,6 +66,7 @@ def test_admin_page_is_a_fleet_dashboard() -> None:
     html = (ROOT / "public" / "admin.html").read_text(encoding="utf-8")
     script = (ROOT / "public" / "admin.js").read_text(encoding="utf-8")
     styles = (ROOT / "public" / "admin.css").read_text(encoding="utf-8")
+    shared_styles = (ROOT / "public" / "shared" / "coffee-ui.css").read_text(encoding="utf-8")
     assert '/assets/admin.css' in html
     assert '/assets/admin.js' in html
     assert "运营总览" in script
@@ -74,3 +75,4 @@ def test_admin_page_is_a_fleet_dashboard() -> None:
     assert "REFRESH_INTERVAL_MS" in script
     assert "/api/v1/admin/session" in script
     assert "cc-side" in styles
+    assert "[hidden]" in shared_styles
