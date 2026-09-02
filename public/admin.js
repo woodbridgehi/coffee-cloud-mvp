@@ -1036,6 +1036,8 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
       kv('门店', detail.storeName || '待首次安装'),
       kv('地区 / 时区', detail.cityCode && detail.timezone ? `${detail.cityCode} · ${detail.timezone}` : '待首次安装'),
       kv('资料状态', detail.profileComplete ? `已完成 · ${detail.profileSource || '—'}` : '待设备首次安装'),
+      kv('接入状态', detail.provisioningStatus || 'LEGACY'),
+      kv('身份类型', detail.deviceIdentityKind || '旧版凭证'),
       kv('实例', detail.instanceId),
       kv('软件版本', detail.softwareVersion),
       kv('活跃启动 ID', detail.activeBootId, true),

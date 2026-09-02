@@ -12,8 +12,9 @@ from .admin_access import AdminAccessRepository
 from .workers import WorkerRepository
 from .dispatch import DispatchRepository
 from .telemetry import TelemetryRepository
+from .simulator_pairing import SimulatorPairingRepository
 
 __all__ = [
     "AdminAccessRepository", "CommandRepository", "DeviceMessageRepository", "IdentityRepository", "MqttGatewayRepository",
-    "DispatchRepository", "OrderRepository", "PaymentRepository", "SystemRepository", "TelemetryRepository", "TerminalRepository", "WorkerRepository",
+    "DispatchRepository", "OrderRepository", "PaymentRepository", "SimulatorPairingRepository", "SystemRepository", "TelemetryRepository", "TerminalRepository", "WorkerRepository",
 ]

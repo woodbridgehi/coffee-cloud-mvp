@@ -483,6 +483,11 @@ test('冒烟：OPERATOR 看不到利润与退款入口，订单抽屉正常打�
 
 test('真实订单契约：退款成功、时间线字段与 DOM 节点正确渲染，无 null 占位', () => {
   const drawer = views.openDrawer({ title: '契约测试订单' });
+  const drawerRoot = documentStub.getElementById('drawer-root');
+  assert.equal(findAll(drawerRoot, n => n.classList.contains('cc-drawer') && n.classList.contains('is-open')).length, 1,
+    '抽屉面板带设计系统要求的 is-open 状态');
+  assert.equal(findAll(drawerRoot, n => n.classList.contains('cc-drawer-overlay') && n.classList.contains('is-open')).length, 1,
+    '抽屉遮罩带设计系统要求的 is-open 状态');
   views.paintOrderDrawer(drawer, {
     id: 'contract-order', paymentStatus: 'NOT_REQUIRED', productionStatus: 'READY',
     totalMinor: 1200, receivedMinor: 1200, refundedMinor: 300, allowedActions: [],

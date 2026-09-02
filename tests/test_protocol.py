@@ -3,7 +3,16 @@ from datetime import datetime, timezone
 import pytest
 from pydantic import ValidationError
 
-from app.protocol import AdminDeviceCreateRequest, DeviceOnboardingProfile, DeviceEvent, Heartbeat, TaskAck, canonical_digest
+from app.protocol import (
+    AdminDeviceCreateRequest,
+    DeviceOnboardingProfile,
+    DeviceEvent,
+    Heartbeat,
+    SimulatorBootstrapRequest,
+    SimulatorProvisionRequest,
+    TaskAck,
+    canonical_digest,
+)
 from app.security import bearer_token, hash_token, tokens_equal
 
 
@@ -56,4 +65,18 @@ def test_new_device_identity_and_onboarding_profile_are_constrained() -> None:
         DeviceOnboardingProfile(
             deviceName="测试", storeId="store-cn-sh-001", storeName="测试", cityCode="CN-SH",
             timezone="Asia/Taipei",
+        )
+
+
+def test_simulator_pairing_requests_require_a_simulator_serial_and_proof() -> None:
+    request = SimulatorBootstrapRequest(
+        serialNumber="SIM-7F20E8A1", publicKeyPem="-" * 100, nonce="n" * 16, proof="p" * 32,
+    )
+    assert request.serialNumber == "SIM-7F20E8A1"
+    assert SimulatorProvisionRequest(
+        serialNumber="SIM-7F20E8A1", nonce="n" * 16, proof="p" * 32, deviceToken="t" * 32,
+    ).deviceToken == "t" * 32
+    with pytest.raises(ValidationError):
+        SimulatorBootstrapRequest(
+            serialNumber="CB-2026-001", publicKeyPem="-" * 100, nonce="n" * 16, proof="p" * 32,
         )

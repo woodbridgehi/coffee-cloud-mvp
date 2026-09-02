@@ -24,7 +24,9 @@ const context = vm.createContext({
   location: { pathname: '/order', search: '', hash: '', href: '' },
   sessionStorage: { getItem: () => null, setItem() {}, removeItem() {} },
   setTimeout: () => 0,
+  setInterval: () => 0,
   clearTimeout() {},
+  clearInterval() {},
   alert() {},
 });
 const source = fs.readFileSync(new URL('../public/order.js', import.meta.url), 'utf8');
@@ -66,6 +68,16 @@ test('keeps the payment DOM and QR node stable across status polls', () => {
   assert.equal(afterFirst, before + 1);
   assert.equal(app.writes, afterFirst);
   assert.match(app.innerHTML, /二维码加载后保持不变/);
+});
+
+test('software simulator ready state shows a six-second return countdown', () => {
+  context.renderOrder({
+    orderNo: 'QA-READY-001', status: 'READY', paymentMode: 'TEST_FREE', deviceId: 'coffee-bot-003',
+    totalAmountMinor: 1000, currency: 'CNY', product: { name: '美式' },
+    production: { overallProgress: 1, plannedDurationSeconds: 10 },
+  });
+  assert.match(app.innerHTML, /ready-countdown/);
+  assert.match(app.innerHTML, /6 秒后自动返回扫码页/);
 });
 
 test('uses one SSE stream instead of production status polling', () => {

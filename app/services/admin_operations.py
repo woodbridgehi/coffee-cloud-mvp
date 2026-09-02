@@ -35,6 +35,8 @@ class AdminOperationsService:
             "profileCompletedAt": iso(row.get("profile_completed_at")),
             "profileComplete": bool(row.get("profile_completed_at")),
             "lifecycleStatus": row["lifecycle_status"], "online": online,
+            "provisioningStatus": row.get("provisioning_status", "LEGACY"),
+            "deviceIdentityKind": row.get("device_identity_kind"),
             "connectionStatus": "online" if online else "offline",
             "hasEverConnected": bool(row["last_connected_at"] or row["last_seen_at"]),
             "registeredAt": iso(row["created_at"]), "lastSeenAt": iso(row["last_seen_at"]),

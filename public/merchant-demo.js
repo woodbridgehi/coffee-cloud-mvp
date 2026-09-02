@@ -623,7 +623,8 @@ export function createDemoAdapter() {
       await gate();
       requireSession();
       void idempotencyKey;
-      if (body.claimCode !== 'CLAIM-DEMO-OK') throw err(404, 'CLAIM_INVALID', '认领码不存在或已被使用');
+      const pairingCode = body.pairingCode || body.claimCode;
+      if (pairingCode !== 'PAIR-DEMO-OK' && pairingCode !== 'CLAIM-DEMO-OK') throw err(404, 'PAIRING_INVALID', '配对码不存在或已被使用');
       const store = db.stores.find(s => s.id === body.storeId && s.tenantId === currentTenantId());
       if (!store) throw err(404, 'STORE_NOT_FOUND', '门店不存在或没有访问权限');
       const device = {

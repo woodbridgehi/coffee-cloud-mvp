@@ -582,6 +582,34 @@ MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (16, "merchant-operating-ledger", MERCHANT_ACCOUNTING_SCHEMA),
     (17, "merchant-runtime-rls", MERCHANT_RLS_SCHEMA),
     (18, "merchant-username-registration", MERCHANT_USERNAME_SCHEMA),
+    (19, "simulator-device-pairing", """
+        alter table terminal add column if not exists provisioning_status text not null default 'LEGACY';
+        alter table terminal add column if not exists device_identity_kind text;
+
+        create table if not exists device_bootstrap_identity (
+            terminal_id bigint primary key references terminal(id) on delete cascade,
+            public_key_pem text not null,
+            public_key_fingerprint char(64) not null unique,
+            created_at timestamptz not null default now(),
+            last_verified_at timestamptz
+        );
+
+        create table if not exists device_pairing_session (
+            id uuid primary key,
+            terminal_id bigint not null references terminal(id) on delete cascade,
+            provisioned_credential_id bigint references terminal_credential(id),
+            pairing_code_hash char(64) not null unique,
+            status text not null check(status in ('PENDING','CLAIMED','PROVISIONED','EXPIRED','CANCELLED')),
+            expires_at timestamptz not null,
+            claimed_at timestamptz,
+            provisioned_at timestamptz,
+            created_at timestamptz not null default now()
+        );
+        create index if not exists ix_device_pairing_session_terminal
+            on device_pairing_session(terminal_id, created_at desc);
+        create index if not exists ix_device_pairing_session_pending
+            on device_pairing_session(status, expires_at);
+    """),
 )
 
 

@@ -127,6 +127,33 @@ class ActivationCodeRequest(BaseModel):
     ttlSeconds: int | None = Field(default=None, ge=60, le=86400)
 
 
+class SimulatorBootstrapRequest(BaseModel):
+    """Development-only software identity proof for the desktop simulator.
+
+    A physical device will later replace this proof with mTLS backed by its
+    secure element. Keeping this request separate prevents a simulator key
+    from becoming a production hardware credential by accident.
+    """
+
+    serialNumber: str = Field(min_length=8, max_length=128, pattern=r"^SIM-[A-Z0-9-]{5,120}$")
+    publicKeyPem: str = Field(min_length=100, max_length=4096)
+    nonce: str = Field(min_length=16, max_length=256)
+    proof: str = Field(min_length=32, max_length=1024)
+
+
+class SimulatorProvisionRequest(BaseModel):
+    serialNumber: str = Field(min_length=8, max_length=128, pattern=r"^SIM-[A-Z0-9-]{5,120}$")
+    nonce: str = Field(min_length=16, max_length=256)
+    proof: str = Field(min_length=32, max_length=1024)
+    deviceToken: str = Field(min_length=32, max_length=512)
+
+
+class SimulatorSessionStatusRequest(BaseModel):
+    serialNumber: str = Field(min_length=8, max_length=128, pattern=r"^SIM-[A-Z0-9-]{5,120}$")
+    nonce: str = Field(min_length=16, max_length=256)
+    proof: str = Field(min_length=32, max_length=1024)
+
+
 class AdminDeviceCreateRequest(BaseModel):
     deviceId: str = Field(min_length=1, max_length=128, pattern=DEVICE_ID_PATTERN)
     serialNumber: str = Field(min_length=1, max_length=128, pattern=SERIAL_NUMBER_PATTERN)

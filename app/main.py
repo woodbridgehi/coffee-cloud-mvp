@@ -28,6 +28,7 @@ from .protocol import (
     AdminOperatorUpdateRequest, AdminTokenCreateRequest, CommandCreateRequest, CommandResult,
     CredentialRotationRequest, DeviceEvent, Heartbeat, PaymentCreateRequest, PublicOrderCreateRequest,
     RefundCreateRequest, Snapshot, TaskAck, DeviceLifecycleUpdateRequest,
+    SimulatorBootstrapRequest, SimulatorProvisionRequest, SimulatorSessionStatusRequest,
 )
 from .security import tokens_equal
 from .settings import get_settings
@@ -37,6 +38,7 @@ from .db import UnitOfWork
 from .services.admin_operations import AdminOperationsService
 from .services.device_messages import DeviceMessageService
 from .services.device_identity import DeviceIdentityService
+from .services.simulator_pairing import SimulatorPairingService
 from .services.commands import CommandService
 from .services.command_state import transition_command as service_transition_command
 from .services.mqtt_gateway import MqttGatewayService
@@ -468,6 +470,38 @@ def activate_device(payload: ActivationRequest) -> dict[str, Any]:
     )
 
 
+@app.post("/api/v1/simulator-bootstrap/sessions", tags=["simulator-pairing"])
+def simulator_bootstrap_session(payload: SimulatorBootstrapRequest) -> dict[str, Any]:
+    """Create a short-lived merchant pairing session for a software simulator.
+
+    This endpoint is explicitly disabled unless SIMULATOR_BOOTSTRAP_ENABLED is
+    set. Production hardware will use a separate mTLS path.
+    """
+    return simulator_pairing_service.create_session(payload)
+
+
+@app.get("/api/v1/simulator-bootstrap/sessions/{session_id}", tags=["simulator-pairing"])
+def simulator_bootstrap_status(
+    session_id: uuid.UUID,
+    serial_number: str = Query(alias="serialNumber", min_length=8, max_length=128),
+    nonce: str = Query(min_length=16, max_length=256),
+    proof: str = Query(min_length=32, max_length=1024),
+) -> dict[str, Any]:
+    return simulator_pairing_service.session_status(
+        session_id,
+        SimulatorSessionStatusRequest(
+            serialNumber=serial_number, nonce=nonce, proof=proof,
+        ),
+    )
+
+
+@app.post("/api/v1/simulator-bootstrap/sessions/{session_id}/complete", tags=["simulator-pairing"])
+def simulator_bootstrap_complete(
+    session_id: uuid.UUID, payload: SimulatorProvisionRequest
+) -> dict[str, Any]:
+    return simulator_pairing_service.provision(session_id, payload)
+
+
 @app.post("/api/v1/devices/{device_id}/mqtt-credentials/rotate", tags=["device-identity"])
 def rotate_mqtt_credential(device_id: str, identity: DeviceIdentity) -> dict[str, Any]:
     credential = device_identity_service.issue_mqtt_credential(identity)
@@ -677,6 +711,9 @@ system_service = SystemService(unit_of_work, SERVICE_VERSION, logger)
 admin_access_service = AdminAccessService(unit_of_work, settings)
 device_identity_service = DeviceIdentityService(
     unit_of_work, settings=settings, provisioner_factory=emqx_provisioner, logger=logger
+)
+simulator_pairing_service = SimulatorPairingService(
+    unit_of_work, settings=settings, device_identity=device_identity_service
 )
 production_service = ProductionService(settings, payment_provider=payment_provider)
 order_adjudication_service = OrderAdjudicationService(unit_of_work, production_service)

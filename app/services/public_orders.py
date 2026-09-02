@@ -48,6 +48,12 @@ class PublicOrderService:
             raise ServiceError(404, "device not found")
         return terminal
 
+    def _payment_mode(self, terminal: dict[str, Any]) -> str:
+        if (self.settings.simulator_bootstrap_enabled
+                and terminal.get("device_identity_kind") == "SIMULATOR_SOFTWARE"):
+            return self.settings.simulator_payment_mode
+        return self.settings.public_payment_mode
+
     @staticmethod
     def _authenticate(repository: OrderRepository, order_id: uuid.UUID, token: str | None, *, for_update: bool = False) -> dict[str, Any]:
         if not token:
@@ -99,15 +105,16 @@ class PublicOrderService:
         with self.uow.transaction() as connection:
             terminals = TerminalRepository(connection)
             terminal = self._terminal(terminals, identifier)
+            payment_mode = self._payment_mode(terminal)
             capabilities = terminals.snapshot(terminal["id"], "capabilities")
             inventory = terminals.snapshot(terminal["id"], "inventory")
             menu = public_menu(
                 terminal, capabilities, inventory, self.settings.offline_threshold_seconds,
                 self.settings.default_product_price_minor, self.settings.payment_currency,
-                self.settings.public_payment_mode,
+                payment_mode,
             )
             if getattr(self.settings,'merchant_enabled',False):
-                menu = apply_merchant_catalog(connection,terminal,menu,self.settings.public_payment_mode)
+                menu = apply_merchant_catalog(connection,terminal,menu,payment_mode)
         return {**menu,"serverTime":iso(utc_now())}
 
     def create(
@@ -115,14 +122,15 @@ class PublicOrderService:
     ) -> dict[str, Any]:
         if not idempotency_key or len(idempotency_key) > 160:
             raise ServiceError(400, "Idempotency-Key is required and must be <= 160 characters")
-        if payload.paymentMode != self.settings.public_payment_mode:
-            raise ServiceError(409, "payment mode changed; refresh the menu")
         digest = canonical_digest(payload.model_dump(mode="json"))
         with self.uow.transaction() as connection:
             terminals = TerminalRepository(connection)
             orders = OrderRepository(connection)
             payments = PaymentRepository(connection)
             terminal = self._terminal(terminals, identifier, for_update=True)
+            payment_mode = self._payment_mode(terminal)
+            if payload.paymentMode != payment_mode:
+                raise ServiceError(409, "payment mode changed; refresh the menu")
             access_token = derive_order_access_token(
                 self.settings.order_access_secret or self.settings.admin_token,
                 terminal["device_id"], idempotency_key,
@@ -137,10 +145,10 @@ class PublicOrderService:
             menu = public_menu(
                 terminal, capabilities, inventory, self.settings.offline_threshold_seconds,
                 self.settings.default_product_price_minor, self.settings.payment_currency,
-                self.settings.public_payment_mode,
+                payment_mode,
             )
             if getattr(self.settings,'merchant_enabled',False):
-                menu = apply_merchant_catalog(connection,terminal,menu,self.settings.public_payment_mode)
+                menu = apply_merchant_catalog(connection,terminal,menu,payment_mode)
             product = next((item for item in menu["products"] if item["recipeId"] == payload.recipeId), None)
             if not product or product["recipeVersion"] != payload.recipeVersion:
                 raise ServiceError(409, "recipe is missing or version changed; refresh the menu")

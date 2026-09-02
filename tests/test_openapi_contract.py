@@ -73,4 +73,4 @@ def test_admin_page_is_a_fleet_dashboard() -> None:
     assert "/api/v1/admin/devices" in script
     assert "REFRESH_INTERVAL_MS" in script
     assert "/api/v1/admin/session" in script
-    assert "sidebar" in styles
+    assert "cc-side" in styles

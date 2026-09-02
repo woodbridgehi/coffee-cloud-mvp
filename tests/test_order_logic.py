@@ -1,7 +1,9 @@
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 from app.order_logic import device_progress, order_state_for_event, public_menu
 from app.security import derive_order_access_token
+from app.services.public_orders import PublicOrderService
 
 
 def terminal() -> dict:
@@ -66,3 +68,14 @@ def test_device_authoritative_progress_is_separate_from_step_progress() -> None:
     legacy_overall, legacy_step = device_progress({"progress": 0.1}, current_overall=0.8)
     assert legacy_overall == 0.8
     assert legacy_step == 0.1
+
+
+def test_software_simulator_uses_its_own_payment_mode() -> None:
+    service = object.__new__(PublicOrderService)
+    service.settings = SimpleNamespace(
+        simulator_bootstrap_enabled=True,
+        simulator_payment_mode="TEST_FREE",
+        public_payment_mode="ONLINE",
+    )
+    assert service._payment_mode({"device_identity_kind": "SIMULATOR_SOFTWARE"}) == "TEST_FREE"
+    assert service._payment_mode({"device_identity_kind": "HARDWARE_CERTIFICATE"}) == "ONLINE"

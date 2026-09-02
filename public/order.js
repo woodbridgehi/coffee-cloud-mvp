@@ -25,6 +25,7 @@ let submitting = false;
 let orderStreamAbort = null;
 let orderStreamReconnectTimer = null;
 let orderStreamTerminal = false;
+let readyRedirectTimer = null;
 let artSeq = 0;
 let paymentQrCache = { paymentId: null, url: null, loadedAt: 0, loading: false };
 
@@ -466,8 +467,10 @@ function statusNote(order) {
 
 function bannerFor(order) {
   if (order.status === 'READY') {
+    const redirect = order.paymentMode === 'TEST_FREE'
+      ? '<span id="ready-countdown" class="ready-countdown">6 秒后自动返回扫码页</span>' : '';
     return `<div class="banner ready"><span class="b-icon">${iconCheck}</span><div>
-      <strong>制作完成</strong><p>请前往设备取杯。设备中的共享物料余量已同步扣减。</p></div></div>`;
+      <strong>制作完成</strong><p>请前往设备取杯。设备中的共享物料余量已同步扣减。${redirect}</p></div></div>`;
   }
   if (order.status === 'FAILED') {
     return `<div class="banner failed"><span class="b-icon">${iconAlert}</span><div>
@@ -486,6 +489,28 @@ function bannerFor(order) {
       <strong>${orderLabel(order.status)}</strong><p>${esc(statusNote(order))}</p></div></div>`;
   }
   return '';
+}
+
+function scheduleReadyRedirect(order) {
+  if (readyRedirectTimer) {
+    clearInterval(readyRedirectTimer);
+    readyRedirectTimer = null;
+  }
+  if (order.status !== 'READY' || order.paymentMode !== 'TEST_FREE' || !order.deviceId) return;
+  let remaining = 6;
+  const update = () => {
+    const node = document.getElementById('ready-countdown');
+    if (node) node.textContent = remaining > 0 ? `${remaining} 秒后自动返回扫码页` : '正在返回扫码页…';
+    if (remaining <= 0) {
+      clearInterval(readyRedirectTimer);
+      readyRedirectTimer = null;
+      location.href = `/order?device_id=${encodeURIComponent(order.deviceId)}`;
+      return;
+    }
+    remaining -= 1;
+  };
+  update();
+  readyRedirectTimer = setInterval(update, 1000);
 }
 
 function renderOrder(order) {
@@ -607,6 +632,7 @@ function renderOrder(order) {
       </footer>
     </main>`;
   document.getElementById('refresh').onclick = loadOrder;
+  scheduleReadyRedirect(order);
 }
 
 function renderError(message, retry = false) {

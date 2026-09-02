@@ -56,13 +56,22 @@ class MerchantAssets:
         result = {'id': str(row['id']), 'deviceId': row['device_id'], 'serialNumber': row['serial_number'],
                   'name': row.get('device_name') or row['device_id'], 'storeId': str(row['merchant_store_id']) if row['merchant_store_id'] else None,
                   'storeName': store['name'] if store else '未分配门店', 'lifecycle': 'ARCHIVED' if row['lifecycle_status']=='RETIRED' else row['lifecycle_status'],
-                  'online': online, 'lastSeenAt': row['last_seen_at'], 'ownershipVersion': row['ownership_version'],
+                  'online': online, 'lastSeenAt': row['last_seen_at'], 'provisioningStatus': row.get('provisioning_status', 'LEGACY'),
+                  'deviceIdentityKind': row.get('device_identity_kind'), 'ownershipVersion': row['ownership_version'],
                   'version': row['merchant_version'], 'allowedActions': actions}
         if detail:
             snapshots = {r['snapshot_type']: r['payload_json'] for r in c.execute('select snapshot_type,payload_json from terminal_snapshot where terminal_id=%s', (row['id'],)).fetchall()}
             job = c.execute("select task_id,status from production_job where terminal_id=%s and status in ('PENDING','DISPATCHED','ACCEPTED','EXECUTING','HOLD') order by created_at desc limit 1", (row['id'],)).fetchone()
-            result.update(capabilities=snapshots.get('capabilities', {}).get('recipes', []),
-                          inventory=snapshots.get('inventory', {}).get('materials', []), alerts=[],
+            capability_snapshot = snapshots.get('capabilities', {})
+            capabilities = capability_snapshot.get('products') or capability_snapshot.get('recipes') or []
+            capabilities = [{**item, 'id': item.get('id') or item.get('recipeId'),
+                             'estimatedSeconds': item.get('estimatedSeconds') or item.get('estimatedDurationSeconds')}
+                            for item in capabilities]
+            inventory = [{**item, 'availableQuantity': item.get('availableQuantity', item.get('available')),
+                          'onHandQuantity': item.get('onHandQuantity', item.get('onHand')),
+                          'reservedQuantity': item.get('reservedQuantity', item.get('reserved'))}
+                         for item in snapshots.get('inventory', {}).get('materials', [])]
+            result.update(capabilities=capabilities, inventory=inventory, alerts=[],
                           currentJob={'id': job['task_id'], 'status': job['status']} if job else None)
         return result
 
@@ -126,24 +135,39 @@ class MerchantAssets:
         return {'claimCode': code, 'expiresAt': expires, 'deviceId': row['device_id']}
 
     def claim(self, token, data, csrf, key, request_id):
-        code = text_field(data, 'claimCode', 128)
+        pairing = bool(data.get('pairingCode'))
+        code = text_field(data, 'pairingCode' if pairing else 'claimCode', 128)
         with self.service.identity(token, 'devices.claim', csrf=csrf, sensitive=True) as (c, p):
             def execute():
-                claim = c.execute('select * from merchant_device_claim where code_hash=%s and consumed_at is null and expires_at>now() for update', (token_hash(code),)).fetchone()
-                if not claim: raise MerchantError(409, 'CLAIM_INVALID', '认领码无效、已使用或已过期')
+                if pairing:
+                    claim = c.execute("""select * from device_pairing_session
+                        where pairing_code_hash=%s and status='PENDING' and expires_at>now() for update""", (token_hash(code),)).fetchone()
+                    if not claim: raise MerchantError(409, 'PAIRING_INVALID', '配对码无效、已使用或已过期')
+                else:
+                    claim = c.execute('select * from merchant_device_claim where code_hash=%s and consumed_at is null and expires_at>now() for update', (token_hash(code),)).fetchone()
+                    if not claim: raise MerchantError(409, 'CLAIM_INVALID', '认领码无效、已使用或已过期')
                 device = c.execute('select * from terminal where id=%s for update', (claim['terminal_id'],)).fetchone()
                 if device['tenant_id'] != LEGACY_TENANT or device['ownership_frozen'] or self.blocking(c, device['id']):
-                    raise MerchantError(409, 'CLAIM_INVALID', '设备已分配或有未处理业务，请联系平台')
+                    raise MerchantError(409, 'PAIRING_INVALID' if pairing else 'CLAIM_INVALID', '设备已分配或有未处理业务，请联系平台')
                 store = self.store(c, p, data.get('storeId'))
                 c.execute('update merchant_device_ownership set valid_until=now() where terminal_id=%s and valid_until is null', (device['id'],))
                 row = c.execute("""update terminal set tenant_id=%s,merchant_store_id=%s,device_name=%s,
-                    ownership_version=ownership_version+1,merchant_version=merchant_version+1 where id=%s returning *""",
-                    (p['tenant_id'], store['id'], text_field(data, 'name'), device['id'])).fetchone()
+                    store_name=coalesce(store_name,%s),profile_source=coalesce(profile_source,%s),
+                    profile_completed_at=coalesce(profile_completed_at,now()),
+                    provisioning_status=case when %s then 'CLAIMED_PENDING_PROVISION' else provisioning_status end,
+                    ownership_version=ownership_version+1,merchant_version=merchant_version+1,updated_at=now()
+                    where id=%s returning *""",
+                    (p['tenant_id'], store['id'], text_field(data, 'name'), store['name'],
+                     'MERCHANT_PAIRING' if pairing else 'MERCHANT_CLAIM', pairing, device['id'])).fetchone()
                 c.execute('insert into merchant_device_ownership(terminal_id,tenant_id,store_id,version) values(%s,%s,%s,%s)', (row['id'], p['tenant_id'], store['id'], row['ownership_version']))
-                c.execute('update merchant_device_claim set consumed_at=now(),consumed_by=%s where id=%s', (p['tenant_id'], claim['id']))
-                self.service.audit(c,p,'device.claim','device',row['device_id'],request_id)
+                if pairing:
+                    c.execute("""update device_pairing_session set status='CLAIMED',claimed_at=now()
+                        where id=%s""", (claim['id'],))
+                else:
+                    c.execute('update merchant_device_claim set consumed_at=now(),consumed_by=%s where id=%s', (p['tenant_id'], claim['id']))
+                self.service.audit(c,p,'device.pair' if pairing else 'device.claim','device',row['device_id'],request_id)
                 return self.payload(c,p,row)
-            return self.idempotent(c,p,'device.claim',key, data,execute)
+            return self.idempotent(c,p,'device.pair' if pairing else 'device.claim',key, data,execute)
 
     def update(self, token, device_id, data, csrf, request_id, *, lifecycle=False):
         with self.service.scoped(token, 'devices.manage', csrf=csrf, sensitive=lifecycle) as (c,p):

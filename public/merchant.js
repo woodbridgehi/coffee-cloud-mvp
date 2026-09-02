@@ -378,7 +378,7 @@ function openDrawer({ title, sub, content, footer, onClose }) {
     if (onClose) onClose();
     if (previous && previous.focus) previous.focus();
   };
-  const panel = el('aside', { class: 'cc-drawer', role: 'dialog', 'aria-modal': 'true', 'aria-label': title });
+  const panel = el('aside', { class: 'cc-drawer is-open', role: 'dialog', 'aria-modal': 'true', 'aria-label': title });
   const body = el('div', { class: 'cc-drawer-body' }, content);
   const foot = el('footer', { class: 'cc-drawer-foot' }, footer || []);
   panel.append(
@@ -389,7 +389,7 @@ function openDrawer({ title, sub, content, footer, onClose }) {
       layerCloseIcon('关闭详情', close)),
     body,
     foot);
-  const veil = el('div', { class: 'cc-drawer-overlay', onclick: close });
+  const veil = el('div', { class: 'cc-drawer-overlay is-open', onclick: close });
   root.classList.remove('hidden');
   root.setAttribute('aria-hidden', 'false');
   root.replaceChildren(veil, panel);
@@ -1924,7 +1924,7 @@ async function loadDeviceList(container) {
   if (!filtered.length) {
     container.append(el('div', { class: 'cc-tablewrap' },
       el('div', { style: 'padding:8px 0' }, emptyState(items.length ? '没有符合筛选条件的设备' : '还没有设备',
-        items.length ? '调整筛选条件后重试' : (can(PERM.devicesClaim) ? '使用「认领设备」录入出厂资产认领码接入设备' : '需要 devices.claim 权限认领设备')))));
+        items.length ? '调整筛选条件后重试' : (can(PERM.devicesClaim) ? '打开设备首次安装页，输入显示的配对码并选择门店即可接入设备' : '需要 devices.claim 权限认领设备')))));
     return;
   }
   const rows = filtered.map(device => el('tr', {
@@ -1953,11 +1953,11 @@ async function loadDeviceList(container) {
 }
 
 function openClaimModal() {
-  const claimCode = el('input', { class: 'cc-input u-mono', placeholder: '出厂资产认领码', autocomplete: 'off', required: true });
+  const claimCode = el('input', { class: 'cc-input u-mono', placeholder: '设备屏幕显示的配对码，如 7K4M-92QP', autocomplete: 'off', required: true });
   const storeSel = el('select', { class: 'cc-select' }, storeOptions('', { allLabel: '请选择门店' }));
   const name = el('input', { class: 'cc-input', placeholder: '例如：大堂 1 号机', maxlength: '60' });
   const errorNode = el('p', { class: 'cc-error-text', role: 'alert' });
-  const submit = el('button', { class: 'cc-btn cc-btn--primary', type: 'button' }, '认领');
+  const submit = el('button', { class: 'cc-btn cc-btn--primary', type: 'button' }, '确认配对');
   submit.addEventListener('click', () => form.requestSubmit());
   const idem = newIdemScope();
   const form = el('form', {
@@ -1965,17 +1965,17 @@ function openClaimModal() {
       event.preventDefault();
       clearFieldErrors(form);
       errorNode.textContent = '';
-      if (!claimCode.value.trim()) { showFieldErrors(form, { claimCode: '请填写认领码' }); return; }
-      busy(submit, '认领中…');
+      if (!claimCode.value.trim()) { showFieldErrors(form, { pairingCode: '请填写配对码' }); return; }
+      busy(submit, '配对中…');
       try {
         const device = await adapter.claimDevice({
-          claimCode: claimCode.value.trim(), storeId: storeSel.value || undefined, name: name.value.trim() || undefined,
+          pairingCode: claimCode.value.trim(), storeId: storeSel.value || undefined, name: name.value.trim() || undefined,
         }, idem.current());
         modal.close();
-        toast(`设备 ${device.deviceId} 已认领到「${device.storeName || '门店'}」`, 'success');
+        toast(`设备 ${device.deviceId} 已配对到「${device.storeName || '门店'}」，正在等待设备完成凭证领取`, 'success');
         reloadView();
       } catch (error) {
-        unbusy(submit, '认领');
+        unbusy(submit, '确认配对');
         showFieldErrors(form, error.fields, errorNode, describeMerchantError(error));
         idem.reset();
       }
@@ -1983,13 +1983,13 @@ function openClaimModal() {
   },
     el('div', { class: 'cc-alert cc-alert--info', style: 'margin-bottom:16px' },
       el('span', { html: svgIcon('info', 16), 'aria-hidden': 'true' }),
-      el('div', { class: 'cc-alert-body' }, el('div', { class: 'cc-alert-desc' }, '认领码是出厂资产的归属凭据，不是设备 HTTP / MQTT 激活凭据；每个认领码只能使用一次。'))),
-    fieldWrap('资产认领码', claimCode, { dataField: 'claimCode', required: true }),
+      el('div', { class: 'cc-alert-body' }, el('div', { class: 'cc-alert-desc' }, '配对码由设备首次安装页生成，短时有效且只能使用一次。确认后设备会自动领取 HTTP 和 MQTT 凭证，无需向商户暴露密钥。'))),
+    fieldWrap('设备配对码', claimCode, { dataField: 'pairingCode', required: true }),
     fieldWrap('归属门店', storeSel, { dataField: 'storeId', required: true }),
-    fieldWrap('设备名称', name),
+    fieldWrap('设备名称', name, { dataField: 'name', required: true }),
     errorNode);
   const modal = openModal({
-    title: '认领出厂设备', body: [form], size: '520',
+    title: '配对新设备', body: [form], size: '520',
     footer: [el('button', { class: 'cc-btn cc-btn--secondary', type: 'button', onclick: () => modal.close() }, '取消'), submit],
   });
 }
@@ -2052,6 +2052,8 @@ function paintDeviceDrawer(drawer, device) {
       kv('最近心跳', fmtDateTime(device.lastSeenAt, tz()), { mono: true }),
       kv('归属版本', `v${device.ownershipVersion}`),
       kv('数据版本', `v${device.version}`),
+      kv('接入状态', device.provisioningStatus === 'PROVISIONED' ? '已自动接入' : device.provisioningStatus === 'CLAIMED_PENDING_PROVISION' ? '已认领，等待设备领取凭证' : device.provisioningStatus || '传统设备'),
+      kv('设备身份', device.deviceIdentityKind === 'SIMULATOR_SOFTWARE' ? '模拟器软件身份' : device.deviceIdentityKind || '传统设备'),
       kv('当前任务', device.currentJob ? `${device.currentJob.status}${device.currentJob.productName ? ' · ' + device.currentJob.productName : ''}` : '无'),
       kv('告警数', String((device.alerts || []).length))),
     (device.alerts || []).length ? el('div', null,
@@ -2385,6 +2387,7 @@ async function loadTransfers(container) {
   }
   const rows = items.map(transfer => {
     const actions = [];
+    const accountReady = account.status === 'VALIDATED' || account.status === 'ACTIVE';
     if (transfer.status === 'PENDING_RECIPIENT' && transfer.direction === 'IN' && can(PERM.devicesTransfer)) {
       actions.push(el('button', {
         class: 'cc-btn cc-btn--primary cc-btn--sm', type: 'button',
@@ -2670,7 +2673,10 @@ async function loadOrdersPage(container) {
   filters.cursor = nextCursor;
   clearNode(container);
   if (!filters.items.length) {
-    container.append(el('div', { class: 'cc-tablewrap' }, emptyState('没有符合条件的订单', '调整状态、设备或范围条日期 / 门店 / 环境筛选后重试')));
+    const hint = state.environment === 'LIVE'
+      ? '当前显示正式数据；模拟器免支付订单属于测试数据，请将上方数据环境切换为“测试”。也可调整状态、设备、日期或门店筛选。'
+      : '调整状态、设备或范围条日期 / 门店筛选后重试';
+    container.append(el('div', { class: 'cc-tablewrap' }, emptyState('没有符合条件的订单', hint)));
     $('orders-more')?.classList.add('hidden');
     return;
   }
@@ -3845,15 +3851,15 @@ async function loadAccounts(container) {
     const actions = [];
     if (can(PERM.paymentsManage)) {
       actions.push(el('button', { class: 'cc-btn cc-btn--secondary cc-btn--sm', type: 'button', onclick: () => validateAccountFlow(account) }, '校验'));
-      if (!account.isDefault && account.status === 'ACTIVE') actions.push(el('button', { class: 'cc-btn cc-btn--secondary cc-btn--sm', type: 'button', onclick: () => setDefaultAccountFlow(account) }, '设为默认'));
-      if (account.status === 'ACTIVE' && !account.isDefault) actions.push(el('button', { class: 'cc-btn cc-btn--ghost cc-btn--sm', type: 'button', onclick: () => disableAccountFlow(account) }, '停用'));
+      if (!account.isDefault && accountReady) actions.push(el('button', { class: 'cc-btn cc-btn--secondary cc-btn--sm', type: 'button', onclick: () => setDefaultAccountFlow(account) }, '设为默认'));
+      if (accountReady && !account.isDefault) actions.push(el('button', { class: 'cc-btn cc-btn--ghost cc-btn--sm', type: 'button', onclick: () => disableAccountFlow(account) }, '停用'));
     }
     return el('tr', null,
       tdl(el('div', null,
         el('div', { class: 'cell-main' }, account.label),
         el('div', { class: 'cell-sub' }, `${PROVIDER_LABEL[account.provider] || account.provider} · appId ${account.appIdMasked || '—'} · 商户 ${account.merchantIdMasked || '—'}`)), '账户'),
       tdl(tagPill(ACCOUNT_ENV, account.environment), '环境'),
-      tdl(account.status === 'ACTIVE' ? el('span', { class: 'cc-tag cc-tag--green' }, '启用') : el('span', { class: 'cc-tag' }, '停用'), '状态'),
+      tdl(accountReady ? el('span', { class: 'cc-tag cc-tag--green' }, '已校验') : el('span', { class: 'cc-tag' }, account.status === 'DISABLED' ? '停用' : '待校验'), '状态'),
       tdl(account.isDefault ? el('span', { class: 'cc-tag cc-tag--blue' }, '默认收款') : el('span', { class: 'u-muted' }, '—'), '默认'),
       tdl(el('span', { class: 'u-mono' }, fmtDateTime(account.configuredAt, tz())), '配置时间'),
       tdl(actions.length ? el('div', { class: 'm-row-actions' }, actions) : el('span', { class: 'u-muted' }, '只读'), '操作'));
