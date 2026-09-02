@@ -331,7 +331,7 @@ class ProductionService:
         message_id = f"cmd-{uuid.uuid4()}"
         command = {
             "messageId": message_id, "type": "MAKE_DRINK", "taskId": job["task_id"],
-            "orderId": str(job["order_id"]), "recipeId": job["recipe_id"],
+            "orderId": str(job["order_id"]), "orderNo": order["order_no"], "recipeId": job["recipe_id"],
             "recipeVersion": job["recipe_version"], "expiresAt": expires_at.isoformat().replace("+00:00", "Z"),
         }
         commands = CommandRepository(connection)

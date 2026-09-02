@@ -499,10 +499,8 @@ function statusNote(order) {
 
 function bannerFor(order) {
   if (order.status === 'READY') {
-    const redirect = order.paymentMode === 'TEST_FREE'
-      ? '<span id="ready-countdown" class="ready-countdown">6 秒后自动返回扫码页</span>' : '';
     return `<div class="banner ready"><span class="b-icon">${iconCheck}</span><div>
-      <strong>制作完成</strong><p>现磨咖啡已制作完成，请前往设备出杯口取杯，小心烫手。${redirect}</p></div></div>`;
+      <strong>制作完成</strong><p>现磨咖啡已制作完成，请前往设备出杯口取杯，小心烫手。</p></div></div>`;
   }
   if (order.status === 'FAILED') {
     return `<div class="banner failed"><span class="b-icon">${iconAlert}</span><div>
@@ -528,21 +526,7 @@ function scheduleReadyRedirect(order) {
     clearInterval(readyRedirectTimer);
     readyRedirectTimer = null;
   }
-  if (order.status !== 'READY' || order.paymentMode !== 'TEST_FREE' || !order.deviceId) return;
-  let remaining = 6;
-  const update = () => {
-    const node = document.getElementById('ready-countdown');
-    if (node) node.textContent = remaining > 0 ? `${remaining} 秒后自动返回扫码页` : '正在返回扫码页…';
-    if (remaining <= 0) {
-      clearInterval(readyRedirectTimer);
-      readyRedirectTimer = null;
-      location.href = `/order?device_id=${encodeURIComponent(order.deviceId)}`;
-      return;
-    }
-    remaining -= 1;
-  };
-  update();
-  readyRedirectTimer = setInterval(update, 1000);
+  // 手机端作为顾客移动设备凭证，制作完成后永久保留取杯口令与订单详情，不自动跳走
 }
 
 function renderOrder(order) {
@@ -651,6 +635,7 @@ function renderOrder(order) {
           <div class="status-meta">${esc(statusNote(order))}</div>
           ${milestoneMarkup(order)}
           <button class="btn-secondary" id="refresh">刷新状态</button>
+          ${order.status === 'READY' ? `<a href="/order?device_id=${encodeURIComponent(order.deviceId || '')}" class="btn-primary" style="text-decoration:none;display:flex;align-items:center;justify-content:center;margin-top:10px">再点一杯</a>` : ''}
           <p class="pay-hint" style="margin-top:10px">${terminal ? '最终状态已存档，实时更新已停止' : '制作状态实时刷新，请保持页面打开'}</p>
         </section>
         <section class="status-steps">

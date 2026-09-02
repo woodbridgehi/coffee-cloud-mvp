@@ -70,14 +70,16 @@ test('keeps the payment DOM and QR node stable across status polls', () => {
   assert.match(app.innerHTML, /二维码加载后保持不变/);
 });
 
-test('software simulator ready state shows a six-second return countdown', () => {
+test('customer order ready state retains details and provides manual reorder without auto redirect', () => {
   context.renderOrder({
     orderNo: 'QA-READY-001', status: 'READY', paymentMode: 'TEST_FREE', deviceId: 'coffee-bot-003',
     totalAmountMinor: 1000, currency: 'CNY', product: { name: '美式' },
     production: { overallProgress: 1, plannedDurationSeconds: 10 },
   });
-  assert.match(app.innerHTML, /ready-countdown/);
-  assert.match(app.innerHTML, /6 秒后自动返回扫码页/);
+  assert.match(app.innerHTML, /制作完成/);
+  assert.match(app.innerHTML, /取杯口令/);
+  assert.match(app.innerHTML, /再点一杯/);
+  assert.doesNotMatch(app.innerHTML, /6 秒后自动返回/);
 });
 
 test('uses one SSE stream instead of production status polling', () => {

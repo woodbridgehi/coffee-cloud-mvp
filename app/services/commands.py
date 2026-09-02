@@ -117,9 +117,11 @@ class CommandService:
         return payload
 
     def create_debug_order(self, identity: dict[str, Any], recipe_id: str | None) -> dict[str, Any]:
+        debug_order_no = f"C{utc_now().strftime('%m%d')}-{secrets.token_hex(3).upper()}"
         command = {
             "messageId": f"cmd-{uuid.uuid4()}", "type": "MAKE_DRINK",
             "taskId": f"task-{uuid.uuid4()}", "orderId": f"debug-{uuid.uuid4()}",
+            "orderNo": debug_order_no,
             "recipeId": recipe_id, "expiresAt": iso(utc_now() + timedelta(minutes=5)),
         }
         self.create_raw(identity, command)
