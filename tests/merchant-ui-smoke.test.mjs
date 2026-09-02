@@ -375,6 +375,21 @@ test('冒烟：设备列表渲染并可打开详情抽屉', async () => {
   assert.equal(drawerRoot.classList.contains('hidden'), false, '抽屉打开');
   const drawerText = textOf(drawerRoot);
   for (const label of ['概览', '能力与物料', '技术信息']) assert.ok(drawerText.includes(label), `抽屉包含 ${label}`);
+  const tabs = findAll(drawerRoot, n => n.getAttribute('role') === 'tab');
+  const panels = findAll(drawerRoot, n => n.tagName === 'SECTION' && n.id.startsWith('device-detail-panel-'));
+  assert.equal(tabs.length, 3, '设备详情包含三个可交互标签');
+  assert.equal(panels.length, 3, '设备详情包含三个对应面板');
+  const capabilitiesTab = tabs.find(tab => textOf(tab) === '能力与物料');
+  const capabilitiesPanel = panels.find(panel => panel.id.endsWith('-cap'));
+  capabilitiesTab.dispatch('click');
+  assert.equal(capabilitiesTab.getAttribute('aria-selected'), 'true', '能力与物料标签被选中');
+  assert.equal(capabilitiesPanel.hidden, false, '能力与物料面板显示');
+  assert.equal(panels.find(panel => panel.id.endsWith('-ov')).hidden, true, '概览面板隐藏');
+  const techTab = tabs.find(tab => textOf(tab) === '技术信息');
+  const techPanel = panels.find(panel => panel.id.endsWith('-tech'));
+  techTab.dispatch('click');
+  assert.equal(techTab.getAttribute('aria-selected'), 'true', '技术信息标签被选中');
+  assert.equal(techPanel.hidden, false, '技术信息面板显示');
   assert.ok(drawerText.includes('重载配置'), '在线设备展示服务器允许的命令入口');
   // 关闭抽屉
   const closeBtn = findAll(drawerRoot, n => n.classList.contains('cc-layer-close'))[0];

@@ -2019,15 +2019,24 @@ function drawerTabs(panels) {
   const bar = el('div', { class: 'cc-tabs', role: 'tablist' });
   const activate = panel => {
     for (const p of panels) {
-      p.node.hidden = p.id !== panel.id;
-      p.tab.setAttribute('aria-selected', p.id === panel.id ? 'true' : 'false');
-      p.tab.tabIndex = p.id === panel.id ? 0 : -1;
+      const selected = p.id === panel.id;
+      p.node.hidden = !selected;
+      p.node.classList.toggle('is-active', selected);
+      p.tab.setAttribute('aria-selected', selected ? 'true' : 'false');
+      p.tab.tabIndex = selected ? 0 : -1;
     }
   };
-  for (const p of panels) {
-    p.tab.addEventListener('click', () => activate(p));
+  for (const [index, p] of panels.entries()) {
+    const panelId = `device-detail-panel-${p.id}`;
+    p.node.id = panelId;
+    p.tab.id = `${panelId}-tab`;
+    p.tab.setAttribute('aria-controls', panelId);
+    p.tab.addEventListener('click', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      activate(p);
+    });
     p.tab.addEventListener('keydown', event => {
-      const index = panels.indexOf(p);
       let next = null;
       if (event.key === 'ArrowRight') next = panels[(index + 1) % panels.length];
       if (event.key === 'ArrowLeft') next = panels[(index - 1 + panels.length) % panels.length];
@@ -2097,7 +2106,6 @@ function paintDeviceDrawer(drawer, device) {
       kv('ownershipVersion', `v${device.ownershipVersion}`, { mono: true }),
       kv('version（资料版本）', `v${device.version}`, { mono: true })));
 
-  for (const p of [overview, caps, tech]) p.node.hidden = true;
   overview.tab = el('button', { class: 'cc-tab', type: 'button', role: 'tab' }, '概览');
   caps.tab = el('button', { class: 'cc-tab', type: 'button', role: 'tab' }, '能力与物料');
   tech.tab = el('button', { class: 'cc-tab', type: 'button', role: 'tab' }, '技术信息');
