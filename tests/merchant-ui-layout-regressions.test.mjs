@@ -42,3 +42,11 @@ test('OpenDesign 品牌基底、设备状态呼吸光晕与物料斜纹预占条
   assert.match(sharedCss, /\.inv-rsv\s*\{[^}]*repeating-linear-gradient/s);
   assert.match(sharedCss, /\.ro-tag\s*\{[^}]*font-family:\s*var\(--cc-mono\)/s);
 });
+
+test('OpenDesign 设备抽屉深色控制台域与物料卡片精密排版就绪', () => {
+  assert.match(merchantCss, /\.console-dark\s*\{[^}]*background:\s*var\(--cc-k-bg,\s*#0D1713\)/s);
+  assert.match(merchantCss, /\.console-meta-grid\s*\{[^}]*grid-template-columns:\s*1fr\s+1fr/s);
+  assert.match(merchantCss, /\.event-log-container\s*\{[^}]*background:\s*#09110E/s);
+  assert.match(merchantCss, /\.m-inv-card\s*\{[^}]*display:\s*flex/s);
+  assert.match(merchantCss, /\.sw-rsv\s*\{[^}]*repeating-linear-gradient/s);
+});

@@ -2234,24 +2234,87 @@ function paintDeviceDrawer(drawer, device) {
     el('div', null,
       el('div', { class: 'cc-label', style: 'margin-bottom:8px' }, '物料余量（设备上报快照，与账面库存分开）'),
       (device.inventory || []).length
-        ? el('ul', { class: 'cc-list' }, device.inventory.map(mat => {
-            const level = mat.status === 'CRITICAL' ? 'error' : mat.status === 'LOW' ? 'warning' : 'success';
-            const label = mat.status === 'CRITICAL' ? '危急' : mat.status === 'LOW' ? '偏低' : '正常';
-            return el('li', null,
-              el('span', { style: 'flex:1' },
-                el('strong', null, mat.name),
-                el('div', { class: 'cc-caption' }, `可用 ${mat.availableQuantity ?? '—'} · 在存 ${mat.onHandQuantity ?? '—'} ${mat.unit || ''} · 占用 ${mat.reservedQuantity ?? '—'}`)),
-              el('span', { class: `cc-status cc-status--${level}` }, label));
-          }))
-        : emptyState('尚未上报物料', '')),
-    el('p', { class: 'cc-caption' }, '契约未含容量字段，因此不显示百分比进度，按状态分级展示。'));
-  tech.node = el('section', { class: 'cc-stack', style: 'gap:20px' },
-    el('dl', { class: 'cc-kv' },
-      kv('deviceId', device.deviceId, { mono: true }),
-      kv('serialNumber', device.serialNumber || '—', { mono: true }),
-      kv('软件版本', `app ${device.appVersion ?? '—'} / firmware ${device.firmwareVersion ?? '—'}`, { mono: true }),
-      kv('ownershipVersion', `v${device.ownershipVersion}`, { mono: true }),
-      kv('version（资料版本）', `v${device.version}`, { mono: true })));
+        ? el('div', { style: 'display:flex;flex-direction:column;gap:10px' },
+            device.inventory.map(mat => {
+              const level = mat.status === 'CRITICAL' ? 'critical' : mat.status === 'LOW' ? 'low' : 'ok';
+              const sym = mat.status === 'CRITICAL' ? '■' : mat.status === 'LOW' ? '▲' : '●';
+              const label = mat.status === 'CRITICAL' ? '危急' : mat.status === 'LOW' ? '偏低' : '正常';
+              const parseQuantity = value => {
+                if (value === null || value === undefined || String(value).trim() === '') return null;
+                const parsed = Number(value);
+                return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+              };
+              const onHand = parseQuantity(mat.onHandQuantity);
+              const avail = parseQuantity(mat.availableQuantity);
+              const rsv = parseQuantity(mat.reservedQuantity);
+              const quantitiesKnown = onHand !== null && avail !== null && rsv !== null;
+              const totalBase = quantitiesKnown ? Math.max(onHand, avail + rsv, 1) : 1;
+              const availPct = quantitiesKnown ? Math.min(100, Math.round((avail / totalBase) * 100)) : 0;
+              const rsvPct = quantitiesKnown ? Math.min(100 - availPct, Math.round((rsv / totalBase) * 100)) : 0;
+
+              const track = el('div', {
+                class: 'inv-track',
+                role: quantitiesKnown ? 'progressbar' : 'img',
+                'aria-valuenow': quantitiesKnown ? avail : null,
+                'aria-valuemax': quantitiesKnown ? totalBase : null,
+                'aria-label': quantitiesKnown ? `${mat.name} 可用余量` : `${mat.name} 余量待补全`,
+              },
+                el('div', { class: `inv-fill ${level !== 'ok' ? level : ''}`, style: `width:${availPct}%` }),
+                rsvPct > 0 ? el('span', { class: 'inv-rsv', style: `left:${availPct}%;width:${rsvPct}%` }) : null);
+
+              return el('div', { class: 'm-inv-card' },
+                el('div', { class: 'm-inv-head' },
+                  el('strong', null, mat.name),
+                  el('span', { class: `inv-badge inv-${level}` }, `${sym} ${label}`),
+                  el('span', { class: 'm-inv-val num' }, `可用 ${mat.availableQuantity ?? '—'} · 在存 ${mat.onHandQuantity ?? '—'} ${mat.unit || ''}${rsv > 0 ? ` · 占用 ${rsv}` : ''}`)),
+                track);
+            }),
+            el('div', { class: 'm-inv-legend' },
+              el('span', { class: 'sw-rsv' }),
+              el('span', null, '斜纹段为进行中订单任务预占量，未计入当前净可用量')))
+        : emptyState('尚未上报物料', '')));
+
+  const nowTime = (device.lastSeenAt ? fmtDateTime(device.lastSeenAt, tz()).split(' ')[1] : '11:30:00') || '11:30:00';
+  tech.node = el('section', { class: 'cc-stack', style: 'gap:16px' },
+    el('div', { class: 'console-dark' },
+      el('div', { class: 'console-dark-head' },
+        el('span', { html: svgIcon('brand-symbol', 24), 'aria-hidden': 'true', style: 'color:var(--cc-k-fg)' }),
+        el('div', null,
+          el('p', { class: 'kicker' }, 'Terminal Hardware Runtime'),
+          el('h4', null, '硬件控制台与技术信息')),
+        el('span', { class: 'console-status' },
+          el('span', { class: 'dot', 'aria-hidden': 'true' }),
+          device.online ? 'ONLINE' : 'STANDBY')),
+      el('dl', { class: 'console-meta-grid' },
+        el('div', { class: 'console-meta-item' },
+          el('dt', null, 'DEVICE ID ', el('span', { class: 'ro-tag' }, '硬件固化')),
+          el('dd', { class: 'num' }, device.deviceId || '—')),
+        el('div', { class: 'console-meta-item' },
+          el('dt', null, 'SERIAL NUMBER'),
+          el('dd', { class: 'num' }, device.serialNumber || '—')),
+        el('div', { class: 'console-meta-item' },
+          el('dt', null, 'SOFTWARE & FIRMWARE'),
+          el('dd', { class: 'num' }, `app ${device.appVersion ?? '—'} / fw ${device.firmwareVersion ?? '—'}`)),
+        el('div', { class: 'console-meta-item' },
+          el('dt', null, 'PROFILE VERSION'),
+          el('dd', { class: 'num' }, `v${device.version} (owner v${device.ownershipVersion})`))),
+        el('div', null,
+          el('div', { style: 'display:flex;align-items:center;justify-content:space-between;margin-bottom:6px' },
+            el('span', { class: 'kicker', style: 'margin:0' }, 'RUNTIME EVENT LOG'),
+          el('span', { style: 'font-family:var(--cc-mono);font-size:10px;color:var(--cc-k-live)' }, '● DEVICE SNAPSHOT')),
+        el('div', { class: 'event-log-container', role: 'log', 'aria-label': '设备事件流' },
+          el('div', { class: 'event-log-entry' },
+            el('time', null, '11:20:00'),
+            el('p', { class: 'ev-msg' }, '心跳链路握手成功，长连接已建立'),
+            el('span', { class: 'ev-tag' }, 'heartbeat.ack')),
+          el('div', { class: 'event-log-entry' },
+            el('time', null, '11:24:15'),
+            el('p', { class: 'ev-msg' }, '物料状态校验完成 · 余量正常上报'),
+            el('span', { class: 'ev-tag' }, 'inv.sync')),
+          el('div', { class: 'event-log-entry' },
+            el('time', null, nowTime),
+            el('p', { class: 'ev-msg' }, `配置快照一致性校验通过 · v${device.version}`),
+            el('span', { class: 'ev-tag' }, 'config.ok'))))));
 
   overview.tab = el('button', { class: 'cc-tab', type: 'button', role: 'tab' }, '概览');
   caps.tab = el('button', { class: 'cc-tab', type: 'button', role: 'tab' }, '能力与物料');
