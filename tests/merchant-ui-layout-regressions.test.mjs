@@ -20,3 +20,16 @@ test('日期弹层位于点击外部关闭层之上', () => {
   assert.ok(Number.isFinite(menuZ) && Number.isFinite(outsideZ), '两个浮层都声明 z-index');
   assert.ok(menuZ > outsideZ, `菜单层级 ${menuZ} 应高于外部关闭层 ${outsideZ}`);
 });
+
+test('数据表格首列 Sticky 冻结与微阴影隔离样式保持有效', () => {
+  assert.match(merchantCss, /\.cc-tablewrap--scroll\s*\{[^}]*overflow-x:\s*auto/s);
+  assert.match(merchantCss, /\.cc-table th:first-child,\s*\.cc-table td:first-child\s*\{[^}]*position:\s*sticky/s);
+  assert.match(merchantCss, /\.cc-table th:first-child,\s*\.cc-table td:first-child\s*\{[^}]*left:\s*0/s);
+  assert.match(merchantCss, /\.cc-table th:first-child,\s*\.cc-table td:first-child\s*\{[^}]*box-shadow:/s);
+});
+
+test('排序列与自动刷新控件样式保持完整', () => {
+  assert.match(merchantCss, /\.cc-table th\.is-sortable\s*\{[^}]*cursor:\s*pointer/s);
+  assert.match(merchantCss, /\.cc-table th\.is-sortable::after\s*\{[^}]*content:\s*" ⇅"/s);
+  assert.match(merchantCss, /\.cc-autorefresh\s*\{[^}]*display:\s*inline-flex/s);
+});

@@ -364,8 +364,15 @@ test('冒烟：设备列表渲染并可打开详情抽屉', async () => {
   const versionTh = findAll(deviceTable, n => n.tagName === 'TH').find(h => textOf(h) === '版本');
   assert.ok(versionTh, '版本列表头存在');
   assert.ok(versionTh.classList.contains('cc-money'), '数值列表头同步 cc-money 类（右对齐）');
+  assert.ok(versionTh.classList.contains('is-sortable'), '表格具备交互排序列特性');
+  versionTh.dispatch('click');
+  assert.ok(versionTh.classList.contains('sorted-asc'), '点击排序列后切换为升序');
+  versionTh.dispatch('click');
+  assert.ok(versionTh.classList.contains('sorted-desc'), '再次点击排序列后切换为降序');
   const versionTd = findAll(deviceTable, n => n.tagName === 'TD' && n.attributes['data-label'] === '版本')[0];
   assert.ok(versionTd.classList.contains('cc-money'), '数值单元格带 cc-money 类（等宽数字 + 右对齐）');
+  const autoRefreshSelect = findAll(documentStub.getElementById('top-controls'), n => n.tagName === 'SELECT' && n.getAttribute('aria-label') === '自动刷新频率')[0];
+  assert.ok(autoRefreshSelect, '顶部范围条渲染自动刷新频率控件');
   /* 辅助技术 / 窄屏：每个单元格都携带 data-label 列名 */
   const labeledCells = findAll(deviceTable, n => n.tagName === 'TD' && n.attributes['data-label']);
   assert.ok(labeledCells.length >= rows.length * 6, 'data-label 覆盖全部数据单元格');

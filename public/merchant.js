@@ -217,7 +217,69 @@ const state = {
   demoEmailUnavailable: false,
   authConfig: null,      // 非敏感认证配置（注册模式/密码长度/邮件能力），刷新与失效会话均保留
   authConfigError: null, // 配置获取失败时的错误对象（诚实展示，不臆测模式）
+  autoRefreshInterval: 30000,
+  autoRefreshTimer: null,
 };
+
+const AUTO_REFRESH_INTERVALS = new Set([0, 15000, 30000, 60000]);
+
+/* 自动刷新引擎（带可见性感知与表单/弹窗避让） */
+function initAutoRefreshPref() {
+  try {
+    if (typeof localStorage !== 'undefined' && localStorage) {
+      const saved = localStorage.getItem('merchant_auto_refresh_ms');
+      const value = Number(saved);
+      if (saved !== null && AUTO_REFRESH_INTERVALS.has(value)) {
+        state.autoRefreshInterval = value;
+      }
+    }
+  } catch (_) {}
+}
+
+function startAutoRefresh() {
+  stopAutoRefresh();
+  if (!state.autoRefreshInterval || state.autoRefreshInterval <= 0) return;
+  state.autoRefreshTimer = setInterval(triggerAutoRefresh, state.autoRefreshInterval);
+  if (state.autoRefreshTimer && typeof state.autoRefreshTimer.unref === 'function') {
+    state.autoRefreshTimer.unref();
+  }
+}
+
+function stopAutoRefresh() {
+  if (state.autoRefreshTimer) clearInterval(state.autoRefreshTimer);
+  state.autoRefreshTimer = null;
+}
+
+function setAutoRefreshInterval(ms) {
+  const value = Number(ms);
+  state.autoRefreshInterval = AUTO_REFRESH_INTERVALS.has(value) ? value : 30000;
+  try {
+    if (typeof localStorage !== 'undefined' && localStorage) {
+      localStorage.setItem('merchant_auto_refresh_ms', String(state.autoRefreshInterval));
+    }
+  } catch (_) {}
+  startAutoRefresh();
+  buildShellControls();
+}
+
+function triggerAutoRefresh() {
+  if (!state.session) return;
+  if (typeof document !== 'undefined') {
+    if (document.visibilityState !== 'visible') return;
+    if (activeModal || activeDrawer) return;
+    const activeEl = document.activeElement;
+    if (activeEl && ['INPUT', 'TEXTAREA'].includes(activeEl.tagName)) return;
+  }
+  reloadView();
+}
+
+if (typeof document !== 'undefined' && document.addEventListener) {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && state.session && state.autoRefreshInterval > 0) {
+      triggerAutoRefresh();
+    }
+  });
+}
 
 function can(perm) { return state.permissions.has(perm); }
 function tz() { return state.session && state.session.tenant ? (state.session.tenant.timezone || 'Asia/Shanghai') : 'Asia/Shanghai'; }
@@ -608,16 +670,89 @@ async function loadRegion(container, loader) {
 /* ---------------- 简单表格（cc-table） ---------------- */
 
 function makeTable({ headers, rows, responsive = true, minTable = 760, dense = false }) {
-  /* 数值列判定：该列所有数据单元格均带 cc-money 类时，表头同步右对齐 */
+  /* 数值列判定：该列所有数据单元格均带 cc-money 或 num 类时，表头同步右对齐 */
   const numericColumns = headers.map((_, index) => {
     if (!rows.length) return false;
     return rows.every(row => {
       const cell = row.children && row.children[index];
-      return Boolean(cell && cell.nodeType === 1 && cell.classList.contains('cc-money'));
+      return Boolean(cell && cell.nodeType === 1 && (cell.classList.contains('cc-money') || cell.classList.contains('num')));
     });
   });
-  const thead = el('thead', null, el('tr', null, headers.map((h, i) => el('th', { scope: 'col', class: numericColumns[i] ? 'cc-money' : null }, h))));
-  const tbody = el('tbody', null, rows);
+
+  const rowList = rows.slice();
+  let currentSortIndex = -1;
+  let currentSortAsc = true;
+  const tbody = el('tbody', null, rowList);
+
+  const thElements = headers.map((h, i) => {
+    const isSortable = rows.length > 1;
+    const thClasses = [numericColumns[i] ? 'cc-money' : null, isSortable ? 'is-sortable' : null].filter(Boolean).join(' ') || null;
+    const th = el('th', {
+      scope: 'col',
+      class: thClasses,
+      role: isSortable ? 'button' : null,
+      tabindex: isSortable ? '0' : null,
+      'aria-label': isSortable ? `${h}，点击排序` : null,
+    }, h);
+
+    if (isSortable) {
+      const doSort = () => {
+        if (currentSortIndex === i) {
+          currentSortAsc = !currentSortAsc;
+        } else {
+          currentSortIndex = i;
+          currentSortAsc = true;
+        }
+
+        thElements.forEach((otherTh, otherIdx) => {
+          if (otherIdx === currentSortIndex) {
+            otherTh.classList.remove('sorted-asc', 'sorted-desc');
+            otherTh.classList.add(currentSortAsc ? 'sorted-asc' : 'sorted-desc');
+          } else {
+            otherTh.classList.remove('sorted-asc', 'sorted-desc');
+          }
+        });
+
+        rowList.sort((a, b) => {
+          const cellA = a.children && a.children[i];
+          const cellB = b.children && b.children[i];
+          const textA = (cellA ? cellA.textContent : '').trim();
+          const textB = (cellB ? cellB.textContent : '').trim();
+
+          const cleanNumA = textA.replace(/^[¥$€\s]+/, '').replace(/,/g, '');
+          const cleanNumB = textB.replace(/^[¥$€\s]+/, '').replace(/,/g, '');
+          const numA = parseFloat(cleanNumA);
+          const numB = parseFloat(cleanNumB);
+          if (!isNaN(numA) && !isNaN(numB) && !textA.includes('~') && !textA.includes('—')) {
+            return currentSortAsc ? numA - numB : numB - numA;
+          }
+
+          const dateA = Date.parse(textA);
+          const dateB = Date.parse(textB);
+          if (!isNaN(dateA) && !isNaN(dateB) && textA.length >= 10 && textB.length >= 10) {
+            return currentSortAsc ? dateA - dateB : dateB - dateA;
+          }
+
+          return currentSortAsc ? textA.localeCompare(textB, 'zh-Hans-CN') : textB.localeCompare(textA, 'zh-Hans-CN');
+        });
+
+        clearNode(tbody);
+        tbody.append(...rowList);
+      };
+
+      th.addEventListener('click', doSort);
+      th.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          doSort();
+        }
+      });
+    }
+
+    return th;
+  });
+
+  const thead = el('thead', null, el('tr', null, thElements));
   return el('div', { class: 'cc-tablewrap cc-tablewrap--scroll' },
     el('table', { class: `cc-table${dense ? ' cc-table--dense' : ''}`, style: minTable ? `min-width:${minTable}px` : '' }, thead, tbody));
 }
@@ -1150,7 +1285,9 @@ async function enterShell(session) {
   updateEnvBanner();
   buildShell();
   await refreshStores();
+  initAutoRefreshPref();
   buildShellControls();
+  startAutoRefresh();
   if (!location.hash || !findViewDef(location.hash.replace(/^#\//, '').split('?')[0])) {
     const fallback = VIEW_DEFS.find(def => can(def.perm));
     location.hash = fallback ? `#/${fallback.id}` : '#/dashboard';
@@ -1161,6 +1298,7 @@ async function enterShell(session) {
 
 function forceLogout(message) {
   state.epoch += 1;
+  stopAutoRefresh();
   adapter.abortAll();
   adapter.clearSession();
   state.session = null;
@@ -1428,6 +1566,14 @@ function buildShellControls() {
       el('span', { class: 'cc-caption' }, `时区 ${tz()} · 结束日含当日`),
       el('button', { class: 'cc-btn cc-btn--primary cc-btn--sm', type: 'button', onclick: applyRange }, '应用'))));
 
+  /* 自动刷新 */
+  const autoId = uid('autorefresh');
+  const autoSelect = el('select', { id: autoId, class: 'cc-select', 'aria-label': '自动刷新频率' },
+    [[0, '自动刷新: 关'], [15000, '自动刷新: 15s'], [30000, '自动刷新: 30s'], [60000, '自动刷新: 60s']].map(([ms, label]) =>
+      el('option', { value: ms, selected: state.autoRefreshInterval === ms }, label)));
+  autoSelect.addEventListener('change', () => setAutoRefreshInterval(Number(autoSelect.value)));
+  const autoWrap = el('div', { class: 'cc-autorefresh' }, autoSelect);
+
   /* 数据环境 */
   const envSeg = el('div', { class: 'cc-seg cc-envseg', role: 'group', 'aria-label': '数据环境' },
     el('button', { type: 'button', 'aria-pressed': state.environment === 'LIVE' ? 'true' : 'false', onclick: () => setEnvironment('LIVE') }, '正式'),
@@ -1438,6 +1584,7 @@ function buildShellControls() {
     el('div', { class: 'cc-scope-item' }, el('label', { for: orgId }, '组织'), orgSelect),
     el('div', { class: 'cc-scope-item' }, el('label', { for: storeId }, '门店'), storeSelect),
     el('div', { class: 'cc-scope-item' }, el('span', { class: 'cc-caption' }, '日期'), pop.wrap),
+    el('div', { class: 'cc-scope-item' }, autoWrap),
     el('div', { class: 'cc-actions' }, envWrap));
 }
 

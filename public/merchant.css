@@ -60,11 +60,85 @@
 .m-alert-actions { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
 
 /* ---------- 表格补充 ---------- */
+/* 首列水平 Sticky 冻结与微阴影隔离 */
+.cc-tablewrap--scroll {
+  position: relative;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.cc-table th:first-child,
+.cc-table td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: var(--cc-surface, #FFFFFF);
+  box-shadow: 2px 0 6px -1px rgba(0, 0, 0, 0.06);
+}
+.cc-table thead th:first-child {
+  z-index: 3;
+  background: var(--cc-surface-muted, #F8F5EE);
+}
+.cc-table tr.is-clickable:hover td:first-child {
+  background: var(--cc-hover, #F5EFE6);
+}
+.cc-table tr.is-selected td:first-child {
+  background: var(--cc-selected, #EDE3D2);
+}
+
+/* 表头交互式排序列 */
+.cc-table th.is-sortable {
+  cursor: pointer;
+  user-select: none;
+  transition: background-color .15s ease;
+}
+.cc-table th.is-sortable:hover {
+  background: var(--cc-hover, #F5EFE6);
+}
+.cc-table th.is-sortable::after {
+  content: " ⇅";
+  display: inline-block;
+  font-size: 11px;
+  color: var(--cc-text-2, #6B655C);
+  opacity: .45;
+  vertical-align: middle;
+}
+.cc-table th.is-sortable.sorted-asc::after {
+  content: " ▲";
+  color: var(--cc-primary, #123D31);
+  opacity: 1;
+  font-weight: 700;
+}
+.cc-table th.is-sortable.sorted-desc::after {
+  content: " ▼";
+  color: var(--cc-primary, #123D31);
+  opacity: 1;
+  font-weight: 700;
+}
+
 /* 合计行：浅底上置 */
 .cc-table tr.m-totals td { background: var(--cc-bg); border-top: 1px solid var(--cc-control-border); font-weight: 600; }
 /* 行内操作列按钮排列 */
 .m-row-actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
 .cc-table td .m-row-actions { justify-content: flex-start; }
+
+/* 自动刷新切换器 */
+.cc-autorefresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--cc-text-2, #6B655C);
+}
+.cc-autorefresh select {
+  height: 32px;
+  padding: 0 8px;
+  border-radius: var(--cc-r-sm, 6px);
+  border: 1px solid var(--cc-control-border, #E4DCCB);
+  background: var(--cc-surface, #FFFFFF);
+  font-size: 12px;
+  color: var(--cc-text, #17382D);
+  cursor: pointer;
+}
 
 /* 加载更多 */
 .m-loadmore { display: flex; justify-content: center; margin-top: 16px; }
