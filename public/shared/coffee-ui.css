@@ -177,6 +177,68 @@ code, pre, .u-mono { font-family: var(--cc-mono); font-size: 13px; line-height: 
 .cc-btn .cc-spin { animation: cc-rotate 0.9s linear infinite; }
 @keyframes cc-rotate { to { transform: rotate(360deg); } }
 
+/* ---------- OpenDesign 两段式二次布防按钮 (Armed Buttons) ---------- */
+.cc-btn-armed {
+  font-family: var(--cc-mono);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 6px 14px;
+  border-radius: var(--cc-r-sm, 6px);
+  border: 1px solid;
+  background: transparent;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: background 0.16s ease, color 0.16s ease, border-color 0.16s ease, transform 0.1s ease;
+}
+.cc-btn-armed:active { transform: scale(0.98); }
+.cc-btn-armed--warn {
+  border-color: rgba(237, 177, 88, 0.45);
+  color: var(--cc-k-warn, #EDB158);
+}
+.cc-btn-armed--warn:hover {
+  background: rgba(237, 177, 88, 0.1);
+  border-color: var(--cc-k-warn, #EDB158);
+}
+.cc-btn-armed--warn.is-armed {
+  background: var(--cc-k-warn, #EDB158) !important;
+  color: #241703 !important;
+  border-color: var(--cc-k-warn, #EDB158) !important;
+  font-weight: 600;
+  animation: armedPulseWarn 1.6s ease-in-out infinite;
+}
+.cc-btn-armed--crit {
+  border-color: rgba(255, 119, 102, 0.5);
+  color: var(--cc-k-crit, #FF7766);
+}
+.cc-btn-armed--crit:hover {
+  background: rgba(255, 119, 102, 0.1);
+  border-color: var(--cc-k-crit, #FF7766);
+}
+.cc-btn-armed--crit.is-armed {
+  background: var(--cc-k-crit, #FF7766) !important;
+  color: #2B0600 !important;
+  border-color: var(--cc-k-crit, #FF7766) !important;
+  font-weight: 600;
+  animation: armedPulseCrit 1.6s ease-in-out infinite;
+}
+@keyframes armedPulseWarn {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(237, 177, 88, 0.4); }
+  50% { box-shadow: 0 0 0 4px rgba(237, 177, 88, 0.15); }
+}
+@keyframes armedPulseCrit {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 119, 102, 0.4); }
+  50% { box-shadow: 0 0 0 4px rgba(255, 119, 102, 0.15); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cc-btn-armed--warn.is-armed,
+  .cc-btn-armed--crit.is-armed {
+    animation: none !important;
+  }
+}
+
 /* ---------- Fields ---------- */
 .cc-field { display: block; }
 .cc-field + .cc-field { margin-top: 16px; }

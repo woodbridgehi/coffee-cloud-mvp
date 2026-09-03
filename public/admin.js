@@ -287,12 +287,12 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
 
   const MODAL_FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
-  function openModal({ title, body, footer, wide, size, dismissible = true }) {
+  function openModal({ title, body, footer, wide, size, dismissible = true, onClose }) {
     closeModal();
     const root = $('modal-root');
     root.classList.add('cc-overlay');
     const lastActive = document.activeElement;
-    const handle = { root, card: null, onClose: null, lastActive };
+    const handle = { root, card: null, onClose: onClose || null, lastActive };
     const close = () => {
       if (!activeModal || activeModal.root !== root) return;
       activeModal = null;
@@ -334,7 +334,10 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
   }
 
   function closeModal() {
-    if (activeModal) activeModal.root.onclick = null;
+    if (activeModal) {
+      activeModal.root.onclick = null;
+      if (activeModal.onClose) activeModal.onClose();
+    }
     const root = $('modal-root');
     root.classList.add('hidden');
     root.classList.remove('is-open');
@@ -376,21 +379,91 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
         input.addEventListener('input', () => { confirmBtn.disabled = input.value.trim() !== requireText; });
         body.push(field('请输入确认文字', input));
       }
-      const done = result => { modal.close(); resolve(result); };
-      confirmBtn = el('button', {
-        class: `cc-btn ${danger ? 'cc-btn--danger' : 'cc-btn--primary'}`,
-        type: 'button',
-        disabled: Boolean(requireText),
-        onclick: () => done(true),
-      }, confirmText);
+      let cleanup = () => {};
+      const done = result => { cleanup(); modal.close(); resolve(result); };
+      if (danger && !requireText) {
+        confirmBtn = el('button', {
+          class: 'cc-btn-armed cc-btn-armed--crit',
+          type: 'button',
+        }, confirmText);
+        let timer = null;
+        let remaining = 5;
+        cleanup = () => { if (timer) clearInterval(timer); timer = null; };
+        confirmBtn.addEventListener('click', () => {
+          if (confirmBtn.classList.contains('is-armed')) {
+            done(true);
+          } else {
+            confirmBtn.classList.add('is-armed');
+            confirmBtn.textContent = `已布防 · 再次点击确认 (${remaining}s)`;
+            timer = setInterval(() => {
+              remaining -= 1;
+              if (remaining <= 0) {
+                if (timer) clearInterval(timer);
+                confirmBtn.classList.remove('is-armed');
+                confirmBtn.textContent = confirmText;
+                remaining = 5;
+              } else {
+                confirmBtn.textContent = `已布防 · 再次点击确认 (${remaining}s)`;
+              }
+            }, 1000);
+            if (timer && typeof timer.unref === 'function') timer.unref();
+          }
+        });
+      } else {
+        confirmBtn = el('button', {
+          class: `cc-btn ${danger ? 'cc-btn--danger' : 'cc-btn--primary'}`,
+          type: 'button',
+          disabled: Boolean(requireText),
+          onclick: () => done(true),
+        }, confirmText);
+      }
       const modal = openModal({
         title, body, size: '440',
+        onClose: cleanup,
         footer: [
           el('button', { class: 'cc-btn cc-btn--secondary', type: 'button', onclick: () => done(false) }, cancelText),
           confirmBtn,
         ],
       });
     });
+  }
+
+  /* OpenDesign 两段式布防按钮 */
+  function makeArmedButton({ text, armedText, onConfirm, danger = false, countdownSec = 5, classNames = '' }) {
+    const btn = el('button', {
+      class: `cc-btn-armed ${danger ? 'cc-btn-armed--crit' : 'cc-btn-armed--warn'} ${classNames}`.trim(),
+      type: 'button',
+    }, text);
+    let timer = null;
+    let remaining = countdownSec;
+    const reset = () => {
+      if (timer) clearInterval(timer);
+      timer = null;
+      btn.classList.remove('is-armed');
+      btn.textContent = text;
+    };
+    btn.addEventListener('click', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (btn.classList.contains('is-armed')) {
+        reset();
+        onConfirm();
+      } else {
+        btn.classList.add('is-armed');
+        remaining = countdownSec;
+        btn.textContent = `${armedText || '已布防 · 再次点击执行'} (${remaining}s)`;
+        timer = setInterval(() => {
+          remaining -= 1;
+          if (remaining <= 0) {
+            reset();
+          } else {
+            btn.textContent = `${armedText || '已布防 · 再次点击执行'} (${remaining}s)`;
+          }
+        }, 1000);
+        if (timer && typeof timer.unref === 'function') timer.unref();
+      }
+    });
+    return btn;
   }
 
   /* 一次性秘密展示（激活码 / 新运营 Token）：暗色控制台域，关闭后不再出现 */

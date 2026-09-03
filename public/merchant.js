@@ -492,6 +492,45 @@ function confirmModal({ title, message, confirmText = '确认', cancelText = '�
   });
 }
 
+/* ---------------- OpenDesign 两段式布防按钮（Armed State） ---------------- */
+
+function makeArmedButton({ text, armedText, onConfirm, danger = false, countdownSec = 5, classNames = '' }) {
+  const btn = el('button', {
+    class: `cc-btn-armed ${danger ? 'cc-btn-armed--crit' : 'cc-btn-armed--warn'} ${classNames}`.trim(),
+    type: 'button',
+  }, text);
+  let timer = null;
+  let remaining = countdownSec;
+  const reset = () => {
+    if (timer) clearInterval(timer);
+    timer = null;
+    btn.classList.remove('is-armed');
+    btn.textContent = text;
+  };
+  btn.addEventListener('click', event => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (btn.classList.contains('is-armed')) {
+      reset();
+      onConfirm();
+    } else {
+      btn.classList.add('is-armed');
+      remaining = countdownSec;
+      btn.textContent = `${armedText || '已布防 · 再次点击执行'} (${remaining}s)`;
+      timer = setInterval(() => {
+        remaining -= 1;
+        if (remaining <= 0) {
+          reset();
+        } else {
+          btn.textContent = `${armedText || '已布防 · 再次点击执行'} (${remaining}s)`;
+        }
+      }, 1000);
+      if (timer && typeof timer.unref === 'function') timer.unref();
+    }
+  });
+  return btn;
+}
+
 /* ---------------- 表单字段错误（422 fields → 行内提示） ---------------- */
 
 function clearFieldErrors(scope) {
@@ -2275,6 +2314,21 @@ function paintDeviceDrawer(drawer, device) {
         : emptyState('尚未上报物料', '')));
 
   const nowTime = (device.lastSeenAt ? fmtDateTime(device.lastSeenAt, tz()).split(' ')[1] : '11:30:00') || '11:30:00';
+  const allowedDeviceActions = new Set(Array.isArray(device.allowedActions) ? device.allowedActions : []);
+  const armedCommandDefs = [
+    { command: 'CLEAN', text: '清洗管路', armedText: '已布防 · 再次点击立即清洗' },
+    { command: 'RESTART_APP', text: '重启应用', armedText: '已布防 · 再次点击立即重启', danger: true },
+  ];
+  const armedButtons = armedCommandDefs
+    .filter(def => allowedDeviceActions.has(`COMMAND_${def.command}`))
+    .map(def => makeArmedButton({
+      ...def,
+      countdownSec: 5,
+      onConfirm: () => sendDeviceCommandFlow(device, def.command, { skipConfirm: true }),
+    }));
+  const hardwareControls = can(PERM.commands)
+    ? (armedButtons.length ? armedButtons : el('span', { style: 'font-family:var(--cc-mono);font-size:11px;color:var(--cc-k-mut,#687870)' }, '当前设备未开放清洗或重启命令'))
+    : el('span', { style: 'font-family:var(--cc-mono);font-size:11px;color:var(--cc-k-mut,#687870)' }, '当前账号无硬件命令下发权限');
   tech.node = el('section', { class: 'cc-stack', style: 'gap:16px' },
     el('div', { class: 'console-dark' },
       el('div', { class: 'console-dark-head' },
@@ -2314,7 +2368,12 @@ function paintDeviceDrawer(drawer, device) {
           el('div', { class: 'event-log-entry' },
             el('time', null, nowTime),
             el('p', { class: 'ev-msg' }, `配置快照一致性校验通过 · v${device.version}`),
-            el('span', { class: 'ev-tag' }, 'config.ok'))))));
+            el('span', { class: 'ev-tag' }, 'config.ok')))),
+      el('div', { style: 'margin-top:14px;padding-top:14px;border-top:1px solid var(--cc-k-border,#2A3C34)' },
+        el('div', { style: 'display:flex;align-items:center;justify-content:space-between;margin-bottom:8px' },
+          el('span', { class: 'kicker', style: 'margin:0' }, 'HARDWARE CONTROLS · ARMED OPS'),
+          el('span', { style: 'font-family:var(--cc-mono);font-size:10px;color:var(--cc-k-mut,#687870)' }, '两段式防误触')),
+        el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;align-items:center' }, hardwareControls))));
 
   overview.tab = el('button', { class: 'cc-tab', type: 'button', role: 'tab' }, '概览');
   caps.tab = el('button', { class: 'cc-tab', type: 'button', role: 'tab' }, '能力与物料');
@@ -2516,16 +2575,18 @@ function openTransferRequestModal(device) {
   });
 }
 
-async function sendDeviceCommandFlow(device, command) {
-  const confirmed = await confirmModal({
-    title: `下发命令 · ${COMMAND_LABEL[command] || command}`,
-    message: el('div', null,
-      el('p', { style: 'margin:0 0 6px' }, `即将向设备「${device.name || device.deviceId}」（门店：${device.storeName || '—'}）下发 ${COMMAND_LABEL[command] || command}。`),
-      el('p', { class: 'cc-caption', style: 'margin:0' }, command === 'RESTART_APP' ? '重启会中断进行中的制作，进行中订单可能进入待人工确认状态。' : '命令经设备命令通道下发，受理后异步执行。')),
-    confirmText: '确认下发',
-    danger: command === 'RESTART_APP',
-  });
-  if (!confirmed) return;
+async function sendDeviceCommandFlow(device, command, { skipConfirm = false } = {}) {
+  if (!skipConfirm) {
+    const confirmed = await confirmModal({
+      title: `下发命令 · ${COMMAND_LABEL[command] || command}`,
+      message: el('div', null,
+        el('p', { style: 'margin:0 0 6px' }, `即将向设备「${device.name || device.deviceId}」（门店：${device.storeName || '—'}）下发 ${COMMAND_LABEL[command] || command}。`),
+        el('p', { class: 'cc-caption', style: 'margin:0' }, command === 'RESTART_APP' ? '重启会中断进行中的制作，进行中订单可能进入待人工确认状态。' : '命令经设备命令通道下发，受理后异步执行。')),
+      confirmText: '确认下发',
+      danger: command === 'RESTART_APP',
+    });
+    if (!confirmed) return;
+  }
   const slot = $('command-status-slot');
   if (!slot) return;
   clearNode(slot);
@@ -2537,6 +2598,16 @@ async function sendDeviceCommandFlow(device, command) {
   try {
     const result = await adapter.sendDeviceCommand(device.id, { command, parameters: {}, ownershipVersion: device.ownershipVersion }, newIdemScope().current());
     commandId = result.id;
+    const drawerRoot = $('drawer-root');
+    const logContainer = drawerRoot?.querySelector('.event-log-container');
+    if (logContainer) {
+      const nowStr = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+      logContainer.append(el('div', { class: 'event-log-entry' },
+        el('time', null, nowStr),
+        el('p', { class: 'ev-msg' }, `指令已受理 · ${COMMAND_LABEL[command] || command}`),
+        el('span', { class: 'ev-tag' }, `cmd.${(command || '').toLowerCase()}`)));
+      logContainer.scrollTop = logContainer.scrollHeight;
+    }
   } catch (error) {
     clearNode(slot);
     slot.append(el('div', { class: 'cc-alert cc-alert--error', style: 'padding:10px 12px' },

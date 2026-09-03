@@ -50,3 +50,11 @@ test('OpenDesign 设备抽屉深色控制台域与物料卡片精密排版就绪
   assert.match(merchantCss, /\.m-inv-card\s*\{[^}]*display:\s*flex/s);
   assert.match(merchantCss, /\.sw-rsv\s*\{[^}]*repeating-linear-gradient/s);
 });
+
+test('OpenDesign 两段式布防按钮（Armed Buttons）样式与脉冲动画就绪', () => {
+  assert.match(sharedCss, /\.cc-btn-armed\s*\{[^}]*display:\s*inline-flex/s);
+  assert.match(sharedCss, /\.cc-btn-armed--warn\.is-armed\s*\{[^}]*background:\s*var\(--cc-k-warn/s);
+  assert.match(sharedCss, /\.cc-btn-armed--crit\.is-armed\s*\{[^}]*background:\s*var\(--cc-k-crit/s);
+  assert.match(sharedCss, /@keyframes armedPulseWarn/);
+  assert.match(sharedCss, /@keyframes armedPulseCrit/);
+});
