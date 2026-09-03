@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 120" fill="none">
+  <title>Coffee Terminal — Compact Lockup</title>
+  <g transform="translate(52,4) scale(.875)">
+    <rect x="17" y="15" width="25" height="35" rx="7" stroke="#17382D" stroke-width="4"/>
+    <path d="M42 27a7 7 0 0 1 0 12" stroke="#17382D" stroke-width="4"/>
+    <path d="M24.5 27h11" stroke="#B78A52" stroke-width="4" stroke-linecap="round"/>
+  </g>
+  <text x="80" y="86" text-anchor="middle" font-family="Inter, Manrope, 'SF Pro Display', 'Helvetica Neue', Arial, sans-serif" font-size="17" font-weight="700" letter-spacing="4.5" fill="#17382D" textLength="104" lengthAdjust="spacing">COFFEE</text>
+  <text x="80" y="110" text-anchor="middle" font-family="Inter, Manrope, 'SF Pro Display', 'Helvetica Neue', Arial, sans-serif" font-size="17" font-weight="700" letter-spacing="4.5" fill="#17382D" textLength="122" lengthAdjust="spacing">TERMINAL</text>
+</svg>

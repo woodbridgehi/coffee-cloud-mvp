@@ -66,3 +66,14 @@ test('OpenDesign 品牌标志（brand-symbol）在侧栏与登录页容器中正
   assert.match(merchantHtml, /<span class="cc-logo"[^>]*data-cc-icon="brand-symbol"/);
   assert.match(adminHtml, /<span class="cc-logo"[^>]*data-cc-icon="brand-symbol"/);
 });
+
+test('OpenDesign 侧栏与顶栏豆格阵列（bean-grid）品牌水印底纹就绪', () => {
+  const sharedCssCurrent = readFileSync(new URL('../public/shared/coffee-ui.css', import.meta.url), 'utf8');
+  assert.match(sharedCssCurrent, /--cc-watermark-bean:\s*url\("data:image\/svg\+xml/);
+  assert.match(sharedCssCurrent, /\.cc-side::before\s*\{[^}]*background-image:\s*var\(--cc-watermark-bean\)/s);
+  assert.match(sharedCssCurrent, /\.cc-side::before\s*\{[^}]*pointer-events:\s*none/s);
+  assert.match(sharedCssCurrent, /\.cc-top::before\s*\{[^}]*background-image:\s*var\(--cc-watermark-bean\)/s);
+  assert.match(sharedCssCurrent, /\.cc-top::before\s*\{[^}]*pointer-events:\s*none/s);
+  assert.match(sharedCssCurrent, /\.cc-side > \*\s*\{[^}]*z-index:\s*1/s);
+  assert.match(sharedCssCurrent, /\.cc-top > \*\s*\{[^}]*z-index:\s*1/s);
+});

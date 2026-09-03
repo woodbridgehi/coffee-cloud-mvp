@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 160" fill="none">
+  <defs>
+    <pattern id="bm-grid" width="24" height="24" patternUnits="userSpaceOnUse">
+      <path d="M24 0v24H0" stroke="#17382D" stroke-width=".7" fill="none" opacity=".22"/>
+    </pattern>
+    <pattern id="bm-grid-cross" width="96" height="96" patternUnits="userSpaceOnUse">
+      <circle cx="48" cy="48" r="7" stroke="#B78A52" stroke-width="1" fill="none" opacity=".5"/>
+      <path d="M48 37v22M37 48h22" stroke="#B78A52" stroke-width="1" opacity=".5"/>
+    </pattern>
+  </defs>
+  <rect width="240" height="160" fill="url(#bm-grid)"/>
+  <rect width="240" height="160" fill="url(#bm-grid-cross)"/>
+</svg>

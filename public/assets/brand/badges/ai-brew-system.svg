@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 140 140" fill="none">
+  <title>AI Brew System Seal</title>
+  <circle cx="70" cy="70" r="66" stroke="#17382D" stroke-width="1.5"/>
+  <circle cx="70" cy="70" r="58" stroke="#17382D" stroke-width="2.4" stroke-dasharray="3 27.37" opacity=".55"/>
+  <path id="bm-arc-top" d="M22 70a48 48 0 0 1 96 0" fill="none"/>
+  <path id="bm-arc-btm" d="M22 70a48 48 0 0 0 96 0" fill="none"/>
+  <text font-family="'JetBrains Mono','SF Mono',Menlo,Consolas,monospace" font-size="9.5" letter-spacing="2.6" fill="#17382D">
+    <textPath href="#bm-arc-top" startOffset="50%" text-anchor="middle">AI BREW SYSTEM</textPath>
+  </text>
+  <text font-family="'JetBrains Mono','SF Mono',Menlo,Consolas,monospace" font-size="9.5" letter-spacing="2.6" fill="#17382D">
+    <textPath href="#bm-arc-btm" startOffset="50%" text-anchor="middle">COFFEE TERMINAL</textPath>
+  </text>
+  <circle cx="22" cy="70" r="2" fill="#B78A52"/><circle cx="118" cy="70" r="2" fill="#B78A52"/>
+  <g transform="translate(50.2,50.5) scale(.6)">
+    <rect x="17" y="15" width="25" height="35" rx="7" stroke="#17382D" stroke-width="5.6"/>
+    <path d="M42 27a7 7 0 0 1 0 12" stroke="#17382D" stroke-width="5.6"/>
+    <path d="M24.5 27h11" stroke="#B78A52" stroke-width="5.6" stroke-linecap="round"/>
+  </g>
+</svg>

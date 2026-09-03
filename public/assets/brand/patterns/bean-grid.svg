@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 168" fill="none">
+  <defs>
+    <pattern id="bm-bean" width="48" height="56" patternUnits="userSpaceOnUse">
+      <g stroke="#17382D" stroke-width="1.1" fill="none" opacity=".38">
+        <ellipse cx="16" cy="18" rx="6" ry="8"/>
+        <path d="M16 10c-2.6 2.8 2.6 11.2 0 16"/>
+        <ellipse cx="40" cy="46" rx="6" ry="8"/>
+        <path d="M40 38c-2.6 2.8 2.6 11.2 0 16"/>
+      </g>
+    </pattern>
+  </defs>
+  <rect width="240" height="168" fill="url(#bm-bean)"/>
+</svg>

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 160" fill="none">
+  <defs>
+    <pattern id="bm-motion" width="120" height="80" patternUnits="userSpaceOnUse">
+      <g stroke="#17382D" stroke-width="1.2" fill="none" opacity=".38">
+        <path d="M-6 16h56q14 0 14 14v20q0 14 14 14h48"/>
+        <path d="M54 96v-20q0-14 14-14h52"/>
+      </g>
+      <circle cx="70" cy="50" r="2.4" fill="#B78A52" opacity=".55"/>
+    </pattern>
+  </defs>
+  <rect width="240" height="160" fill="url(#bm-motion)"/>
+</svg>

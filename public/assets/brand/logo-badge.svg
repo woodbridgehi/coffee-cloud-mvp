@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <title>Coffee Terminal — Device Badge</title>
+  <rect x="4" y="4" width="56" height="56" rx="14" stroke="#B78A52" stroke-width="2.2"/>
+  <rect x="20" y="18" width="19" height="27" rx="5.5" stroke="#FFF9F0" stroke-width="3"/>
+  <path d="M39 26a5.5 5.5 0 0 1 0 11" stroke="#FFF9F0" stroke-width="3"/>
+  <path d="M25.5 26h8.5" stroke="#D7B67E" stroke-width="3" stroke-linecap="round"/>
+</svg>

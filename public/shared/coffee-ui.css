@@ -80,12 +80,16 @@
   --cc-t-dialog: 280ms; --cc-t-drawer: 340ms; --cc-t-status: 200ms; --cc-t-chart: 300ms;
   --cc-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --cc-ease-in: cubic-bezier(0.2, 0.7, 0.2, 1);
+
+  /* brand watermark —— 豆格阵列底纹（源自 brand-marks.html pat-bean 规范 §04） */
+  --cc-watermark-bean: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='56' viewBox='0 0 48 56' fill='none'%3E%3Cg stroke='%2317382D' stroke-width='1.1' fill='none' opacity='0.38'%3E%3Cellipse cx='16' cy='18' rx='6' ry='8'/%3E%3Cpath d='M16 10c-2.6 2.8 2.6 11.2 0 16'/%3E%3Cellipse cx='40' cy='46' rx='6' ry='8'/%3E%3Cpath d='M40 38c-2.6 2.8 2.6 11.2 0 16'/%3E%3C/g%3E%3C/svg%3E");
 }
 
 /* ---------- 平台端主题：espresso 主操作色绑定 ---------- */
 body[data-shell="admin"], .cc-auth--platform {
   --cc-primary: #5A3827; --cc-primary-hover: #4A2D1F; --cc-primary-pressed: #3B2419;
   --cc-primary-subtle: #F1E9DF; --cc-primary-selected-bg: #E1D6CB; --cc-primary-selected-fg: #3B2419;
+  --cc-watermark-bean: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='56' viewBox='0 0 48 56' fill='none'%3E%3Cg stroke='%23342219' stroke-width='1.1' fill='none' opacity='0.38'%3E%3Cellipse cx='16' cy='18' rx='6' ry='8'/%3E%3Cpath d='M16 10c-2.6 2.8 2.6 11.2 0 16'/%3E%3Cellipse cx='40' cy='46' rx='6' ry='8'/%3E%3Cpath d='M40 38c-2.6 2.8 2.6 11.2 0 16'/%3E%3C/g%3E%3C/svg%3E");
 }
 
 /* ---------- Base ---------- */
@@ -726,6 +730,12 @@ details.cc-disc .cc-disc-body { padding: 4px 0 12px; }
   border-right: 1px solid var(--cc-divider); display: flex; flex-direction: column;
   position: sticky; top: 0; height: 100dvh; overflow-y: auto; z-index: 40;
 }
+.cc-side::before {
+  content: ""; position: absolute; inset: 0; min-height: 100%; pointer-events: none;
+  background-image: var(--cc-watermark-bean); background-size: 48px 56px; background-repeat: repeat;
+  opacity: 0.14; mix-blend-mode: multiply; z-index: 0;
+}
+.cc-side > * { position: relative; z-index: 1; }
 .cc-side-brand { display: flex; align-items: center; gap: 11px; height: 64px; padding: 0 20px; flex: none; }
 .cc-side-brand .cc-logo {
   width: 32px; height: 32px; border-radius: var(--cc-r-md); background: var(--cc-primary);
@@ -778,6 +788,12 @@ details.cc-disc .cc-disc-body { padding: 4px 0 12px; }
   padding: 0 24px; background: var(--cc-surface); border-bottom: 1px solid var(--cc-divider);
   position: sticky; top: 0; z-index: 50;
 }
+.cc-top::before {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background-image: var(--cc-watermark-bean); background-size: 48px 56px; background-repeat: repeat;
+  opacity: 0.12; mix-blend-mode: multiply; z-index: 0;
+}
+.cc-top > * { position: relative; z-index: 1; }
 .cc-top .cc-top-left { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .cc-top .cc-top-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 .cc-orgbtn {

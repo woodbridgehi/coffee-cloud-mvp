@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 140 140" fill="none">
+  <title>Autonomous Coffee Stamp</title>
+  <circle cx="70" cy="70" r="66" stroke="#17382D" stroke-width="1.5"/>
+  <circle cx="70" cy="70" r="55" stroke="#17382D" stroke-width="1" opacity=".6"/>
+  <path d="M70 4v8" stroke="#B78A52" stroke-width="2" stroke-linecap="round"/>
+  <path id="bm-stamp-top" d="M26 70a44 44 0 0 1 88 0" fill="none"/>
+  <path id="bm-stamp-btm" d="M26 70a44 44 0 0 0 88 0" fill="none"/>
+  <text font-family="'JetBrains Mono','SF Mono',Menlo,Consolas,monospace" font-size="9" letter-spacing="2.4" fill="#17382D">
+    <textPath href="#bm-stamp-top" startOffset="50%" text-anchor="middle">AUTONOMOUS COFFEE</textPath>
+  </text>
+  <text font-family="'JetBrains Mono','SF Mono',Menlo,Consolas,monospace" font-size="9" letter-spacing="2.4" fill="#17382D">
+    <textPath href="#bm-stamp-btm" startOffset="50%" text-anchor="middle">FRESHLY MADE</textPath>
+  </text>
+  <ellipse cx="70" cy="70" rx="10" ry="13" stroke="#17382D" stroke-width="2.4"/>
+  <path d="M70 57c-6 6.5 6 19.5 0 26" stroke="#17382D" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="70" cy="57" r="2.6" fill="#B78A52"/>
+</svg>

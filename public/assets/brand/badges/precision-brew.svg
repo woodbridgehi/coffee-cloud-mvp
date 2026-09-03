@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 232 76" fill="none">
+  <title>Precision Brew Label</title>
+  <rect x="2" y="2" width="228" height="72" rx="12" stroke="#17382D" stroke-width="1.6"/>
+  <circle cx="34" cy="38" r="12.5" stroke="#17382D" stroke-width="2"/>
+  <path d="M34 25.5v3.5M46.5 38H43M34 50.5V47M21.5 38H25" stroke="#17382D" stroke-width="1.6" stroke-linecap="round"/>
+  <path d="M34 38l-7.5-7.5" stroke="#B78A52" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="34" cy="38" r="2.4" fill="#B78A52"/>
+  <text x="58" y="35" font-family="Inter, Manrope, 'Helvetica Neue', Arial, sans-serif" font-size="13.5" font-weight="700" letter-spacing="2.2" fill="#17382D">PRECISION BREW</text>
+  <text x="58" y="52" font-family="'JetBrains Mono','SF Mono',Menlo,Consolas,monospace" font-size="8" letter-spacing="1.4" fill="#746D64">AUTONOMOUS EXTRACTION</text>
+</svg>

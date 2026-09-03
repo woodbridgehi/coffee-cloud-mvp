@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <title>Coffee Terminal — CT Monogram</title>
+  <path d="M50.6 18.5A23 23 0 1 0 50.6 45.5" stroke="#17382D" stroke-width="4"/>
+  <path d="M21.5 24.5h21" stroke="#17382D" stroke-width="4" stroke-linecap="round"/>
+  <path d="M32 24.5V37" stroke="#17382D" stroke-width="4" stroke-linecap="round"/>
+  <rect x="28.5" y="40.5" width="7" height="5.5" rx="1.6" fill="#B78A52"/>
+</svg>
