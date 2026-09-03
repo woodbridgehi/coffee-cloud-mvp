@@ -58,3 +58,11 @@ test('OpenDesign 两段式布防按钮（Armed Buttons）样式与脉冲动画�
   assert.match(sharedCss, /@keyframes armedPulseWarn/);
   assert.match(sharedCss, /@keyframes armedPulseCrit/);
 });
+
+test('OpenDesign 品牌标志（brand-symbol）在侧栏与登录页容器中正确挂载 SVG', () => {
+  const iconsJs = readFileSync(new URL('../public/shared/cc-icons.js', import.meta.url), 'utf8');
+  assert.match(iconsJs, /querySelectorAll\('\[data-cc-icon\]'\)/);
+  assert.match(iconsJs, /el\.innerHTML\s*=\s*html/);
+  assert.match(merchantHtml, /<span class="cc-logo"[^>]*data-cc-icon="brand-symbol"/);
+  assert.match(adminHtml, /<span class="cc-logo"[^>]*data-cc-icon="brand-symbol"/);
+});

@@ -931,7 +931,7 @@ function authShell(card, heading, subText) {
   clearNode(wrap);
   wrap.append(
     el('header', { class: 'cc-auth-brandbar' },
-      el('span', { class: 'cc-logo', html: svgIcon('coffee', 16), 'aria-hidden': 'true' }),
+      el('span', { class: 'cc-logo', html: svgIcon('brand-symbol', 16), 'aria-hidden': 'true' }),
       el('span', { class: 'cc-brandname' }, 'Coffee Cloud'),
       el('span', { class: 'cc-brand-sub' }, '商户工作台')),
     el('div', { class: 'cc-auth-main' },

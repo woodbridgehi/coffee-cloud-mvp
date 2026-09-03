@@ -68,9 +68,16 @@
   }
 
   function paint(root) {
-    (root || document).querySelectorAll('i[data-cc-icon]').forEach(function (el) {
-      var html = ccIcon(el.getAttribute('data-cc-icon'), parseInt(el.getAttribute('data-size') || '20', 10));
-      if (html) { el.outerHTML = html; }
+    (root || document).querySelectorAll('[data-cc-icon]').forEach(function (el) {
+      var name = el.getAttribute('data-cc-icon');
+      var size = parseInt(el.getAttribute('data-size') || '20', 10);
+      var html = ccIcon(name, size);
+      if (!html) return;
+      if (el.tagName.toLowerCase() === 'i') {
+        el.outerHTML = html;
+      } else {
+        el.innerHTML = html;
+      }
     });
   }
 
