@@ -885,3 +885,155 @@ img { max-width: 100%; }
   margin: 12px 2px 18px;
   line-height: 1.5;
 }
+
+/* ---------- 进行中订单悬浮召回卡片（防止误关丢单） ---------- */
+.active-order-banner {
+  position: relative;
+  margin-bottom: 20px;
+  padding: 14px 16px;
+  background: linear-gradient(135deg, rgba(255,249,240,.98), rgba(246,240,229,.96));
+  border: 1.5px solid transparent;
+  border-radius: var(--radius-lg, 16px);
+  background-clip: padding-box;
+  box-shadow: 0 8px 24px rgba(52,34,25,.08);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  overflow: hidden;
+  animation: banner-enter .35s ease-out;
+}
+.active-order-banner::before {
+  content: "";
+  position: absolute;
+  inset: -1.5px;
+  border-radius: 17px;
+  padding: 1.5px;
+  background: linear-gradient(135deg, #dfc093 0%, #b78a52 40%, #f6e3cb 50%, #8a6332 80%, #b78a52 100%);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+@keyframes banner-enter {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.aob-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.aob-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.aob-pulse-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #188653;
+  box-shadow: 0 0 0 3px rgba(24,134,83,.2);
+  animation: pulse-dot 2s infinite ease-in-out;
+}
+@keyframes pulse-dot {
+  0%, 100% { transform: scale(.9); opacity: .7; }
+  50% { transform: scale(1.15); opacity: 1; }
+}
+.aob-tag {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .12em;
+  color: #7b5825;
+  text-transform: uppercase;
+}
+.aob-code {
+  font-family: var(--font-mono);
+  font-size: 17px;
+  font-weight: 700;
+  color: #17382D;
+  letter-spacing: .06em;
+}
+.aob-sub {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.aob-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: #17382D;
+  color: #F6F0E5;
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  box-shadow: 0 4px 12px rgba(23,56,45,.2);
+  transition: transform .15s, opacity .15s;
+}
+.aob-btn:active {
+  transform: scale(.96);
+  opacity: .9;
+}
+
+/* ---------- 移动优先支付面板与支付宝直跳按钮 ---------- */
+.pay-mobile-cta {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 16px 0 20px;
+  text-align: center;
+}
+.btn-alipay-cta {
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 52px;
+  border-radius: 14px;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-decoration: none;
+  background: linear-gradient(135deg, #1677FF 0%, #0958D9 100%);
+  color: #FFFFFF !important;
+  box-shadow: 0 8px 24px rgba(22,119,255,.32);
+}
+.btn-alipay-cta:active {
+  transform: scale(.98);
+}
+.pay-subhint {
+  font-size: 12px;
+  color: var(--muted);
+}
+.pay-qr-accordion {
+  margin-top: 14px;
+  border-top: 1px dashed var(--divider);
+  padding-top: 12px;
+}
+.pay-qr-summary {
+  font-size: 13px;
+  color: var(--primary);
+  cursor: pointer;
+  font-weight: 500;
+  text-align: center;
+  padding: 6px 0;
+  user-select: none;
+}
+.pay-qr-summary::-webkit-details-marker {
+  display: none;
+}
+.pay-qr-body {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}

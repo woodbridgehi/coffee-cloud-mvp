@@ -28,11 +28,111 @@ let orderStreamTerminal = false;
 let readyRedirectTimer = null;
 let artSeq = 0;
 let paymentQrCache = { paymentId: null, url: null, loadedAt: 0, loading: false };
+let hasNotifiedReady = false;
 
 const TERMINAL_STATUSES = ['READY', 'FAILED', 'CANCELLED', 'EXPIRED'];
 const esc = value => String(value ?? '').replace(/[&<>'"]/g, char => (
   { '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]
 ));
+
+/* ---------- 本地活跃订单缓存与安全恢复 ---------- */
+
+function safeStorageGet(key) {
+  try {
+    if (typeof localStorage !== 'undefined' && localStorage) return localStorage.getItem(key);
+  } catch (_) {}
+  return null;
+}
+
+function safeStorageSet(key, value) {
+  try {
+    if (typeof localStorage !== 'undefined' && localStorage) localStorage.setItem(key, value);
+  } catch (_) {}
+}
+
+function safeStorageRemove(key) {
+  try {
+    if (typeof localStorage !== 'undefined' && localStorage) localStorage.removeItem(key);
+  } catch (_) {}
+}
+
+function getActiveOrder(targetDeviceId) {
+  if (!targetDeviceId) return null;
+  const raw = safeStorageGet(`coffee_active_order:${targetDeviceId}`);
+  if (!raw) return null;
+  try {
+    const data = JSON.parse(raw);
+    if (!data || !data.orderId || !data.token) return null;
+    if (Date.now() - (data.updatedAt || 0) > 18 * 3600 * 1000) {
+      clearActiveOrder(targetDeviceId);
+      return null;
+    }
+    if (['REFUNDED', 'CANCELLED', 'EXPIRED'].includes(data.status)) {
+      clearActiveOrder(targetDeviceId);
+      return null;
+    }
+    return data;
+  } catch (_) {
+    return null;
+  }
+}
+
+function saveActiveOrder(order, token, targetDeviceId) {
+  const dId = targetDeviceId || order?.deviceId || deviceId;
+  if (!dId || !order || !order.orderId || !token) return;
+  const entry = {
+    orderId: order.orderId,
+    orderNo: order.orderNo,
+    token,
+    deviceId: dId,
+    status: order.status,
+    productName: order.product?.name || '咖啡饮品',
+    pickupCode: pickupCodeFor(order),
+    totalAmountMinor: order.totalAmountMinor,
+    currency: order.currency,
+    updatedAt: Date.now(),
+  };
+  safeStorageSet(`coffee_active_order:${dId}`, JSON.stringify(entry));
+}
+
+function clearActiveOrder(targetDeviceId) {
+  const dId = targetDeviceId || deviceId;
+  if (dId) safeStorageRemove(`coffee_active_order:${dId}`);
+}
+
+function notifyReadySensory() {
+  if (hasNotifiedReady) return;
+  hasNotifiedReady = true;
+
+  if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+    try { navigator.vibrate([200, 100, 200, 100, 300]); } catch (_) {}
+  }
+
+  try {
+    const AudioContextClass = typeof window !== 'undefined' && (window.AudioContext || window.webkitAudioContext);
+    if (AudioContextClass) {
+      const ctx = new AudioContextClass();
+      const now = ctx.currentTime;
+      const osc1 = ctx.createOscillator();
+      const osc2 = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc1.type = 'sine';
+      osc2.type = 'triangle';
+      osc1.frequency.setValueAtTime(587.33, now);
+      osc1.frequency.exponentialRampToValueAtTime(880.00, now + 0.14);
+      osc2.frequency.setValueAtTime(880.00, now + 0.14);
+      gain.gain.setValueAtTime(0.08, now);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.55);
+      osc1.connect(gain);
+      osc2.connect(gain);
+      gain.connect(ctx.destination);
+      osc1.start(now);
+      osc2.start(now + 0.14);
+      osc1.stop(now + 0.55);
+      osc2.stop(now + 0.55);
+    }
+  } catch (_) {}
+}
 
 /* ---------- 基础请求 ---------- */
 
@@ -231,16 +331,33 @@ async function loadMenu() {
   }
 }
 
-function renderMenu() {
+function renderMenu(menuData) {
+  if (menuData) menu = menuData;
+  if (!menu) return;
   document.title = 'Woodbridge Coffee · 选择饮品';
   const online = menu.paymentMode === 'ONLINE';
-  const available = menu.products.filter(p => p.available);
+  const available = (menu.products || []).filter(p => p.available);
   const totalRemaining = available.reduce((sum, p) => sum + (p.remainingServings || 0), 0);
   const sellable = menu.salesEnabled && available.length > 0;
+  const targetDeviceId = (menu && (menu.deviceId || menu.storeId)) || deviceId;
+  const activeOrder = getActiveOrder(targetDeviceId);
+  const activeBannerHtml = activeOrder ? `
+    <aside class="active-order-banner" aria-label="正在进行的订单">
+      <div class="aob-main">
+        <div class="aob-header">
+          <span class="aob-pulse-dot" aria-hidden="true"></span>
+          <span class="aob-tag">进行中订单 · 取杯口令</span>
+        </div>
+        <strong class="aob-code">${esc(activeOrder.pickupCode || '核验中')}</strong>
+        <span class="aob-sub">${esc(activeOrder.productName || '咖啡饮品')} · ${orderLabel(activeOrder.status)}</span>
+      </div>
+      <a class="aob-btn" href="/order/status#order=${encodeURIComponent(activeOrder.orderId)}&token=${encodeURIComponent(activeOrder.token)}">查看进度 →</a>
+    </aside>` : '';
 
   app.innerHTML = `
     ${baseHeader(menu.online ? '' : 'warn', menu.online ? '设备在线' : '设备离线', esc(menu.storeId || menu.deviceId || ''))}
     <main class="page-main has-checkout">
+      ${activeBannerHtml}
       <section class="hero">
         <div class="hero-kicker">今日菜单</div>
         <h1>现在，来一杯<br>机器人现磨咖啡</h1>
@@ -352,6 +469,7 @@ async function submitOrder() {
       });
     }
     sessionStorage.removeItem(storageKey);
+    saveActiveOrder(order, order.accessToken, deviceId);
     location.href = `/order/status#order=${encodeURIComponent(order.orderId)}&token=${encodeURIComponent(order.accessToken)}${payment ? `&payment=${encodeURIComponent(payment.paymentId)}` : ''}`;
   } catch (error) {
     submitting = false;
@@ -368,16 +486,24 @@ function fragment() {
 
 async function loadOrder() {
   const params = fragment();
-  const orderId = params.get('order');
-  const token = params.get('token');
+  let orderId = params.get('order');
+  let token = params.get('token');
   if (!orderId || !token) {
-    renderError('订单状态链接不完整。请从下单成功的页面进入，或重新扫码下单。');
-    return;
+    const cached = getActiveOrder(deviceId);
+    if (cached && cached.orderId && cached.token) {
+      location.hash = `#order=${encodeURIComponent(cached.orderId)}&token=${encodeURIComponent(cached.token)}`;
+      orderId = cached.orderId;
+      token = cached.token;
+    } else {
+      renderError('订单状态链接不完整。请从下单成功的页面进入，或重新扫码下单。');
+      return;
+    }
   }
   try {
     const order = await request(`/api/v1/public/orders/${encodeURIComponent(orderId)}`, {
       headers: { 'X-Order-Access-Token': token },
     });
+    saveActiveOrder(order, token, order.deviceId || deviceId);
     renderOrder(order);
     orderStreamTerminal = [...TERMINAL_STATUSES, 'REFUNDED'].includes(order.status);
     if (!orderStreamTerminal) startOrderStream(orderId, token);
@@ -568,14 +694,23 @@ function renderOrder(order) {
             </div>
           </section>
           <aside class="pay-panel" aria-label="支付面板">
-            <div class="pay-panel-head"><strong>扫码支付</strong>${payTag}</div>
-            <div class="qr-frame"><img id="payment-qr" alt="${payQrAlt}"></div>
-            <p class="qr-note" id="payment-qr-note">二维码加载后保持不变，刷新不会导致重复支付</p>
-            <div class="pay-actions">
+            <div class="pay-panel-head"><strong>支付方式</strong>${payTag}</div>
+            <div class="pay-mobile-cta">
               ${order.payment?.qrCode
-                ? `<a class="btn-primary" href="${esc(order.payment.qrCode)}">${payButton}</a>`
+                ? `<a class="btn-primary btn-alipay-cta" href="${esc(order.payment.qrCode)}">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15-5-5 1.41-1.41L11 14.17l7.59-7.59L20 8l-9 9z"/></svg>
+                    <span>${payButton}</span>
+                  </a>
+                  <span class="pay-subhint">推荐：点击直接跳转完成安全支付</span>`
                 : '<span class="pay-hint">正在获取付款方式…</span>'}
             </div>
+            <details class="pay-qr-accordion" open>
+              <summary class="pay-qr-summary">在其他设备扫码支付 / 付款码 ▾</summary>
+              <div class="pay-qr-body">
+                <div class="qr-frame"><img id="payment-qr" alt="${payQrAlt}"></div>
+                <p class="qr-note" id="payment-qr-note">二维码加载后保持不变，刷新不会导致重复支付</p>
+              </div>
+            </details>
           </aside>
         </div>
       </main>`;
@@ -702,8 +837,17 @@ function barcodeMarkup() {
         <span>${terminal ? '最终状态已存档' : '制作状态实时刷新'}</span>
       </footer>
     </main>`;
-  document.getElementById('refresh').onclick = loadOrder;
+  const refreshBtn = document.getElementById('refresh');
+  if (refreshBtn) refreshBtn.onclick = loadOrder;
   scheduleReadyRedirect(order);
+  const currentToken = fragment().get('token');
+  if (currentToken) saveActiveOrder(order, currentToken, order.deviceId || deviceId);
+  if (['REFUNDED', 'CANCELLED', 'EXPIRED'].includes(order.status)) {
+    clearActiveOrder(order.deviceId || deviceId);
+  }
+  if (order.status === 'READY') {
+    notifyReadySensory();
+  }
 }
 
 function renderError(message, retry = false) {

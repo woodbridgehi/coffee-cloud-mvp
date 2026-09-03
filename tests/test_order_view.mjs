@@ -11,6 +11,13 @@ const app = {
   get writes() { return htmlWrites; },
 };
 const elements = new Map([['app', app]]);
+const localMap = new Map();
+const localStorage = {
+  getItem: (k) => localMap.get(k) ?? null,
+  setItem: (k, v) => localMap.set(k, String(v)),
+  removeItem: (k) => localMap.delete(k),
+  clear: () => localMap.clear(),
+};
 const context = vm.createContext({
   URLSearchParams,
   crypto: { randomUUID: () => 'qa-id' },
@@ -23,6 +30,7 @@ const context = vm.createContext({
   },
   location: { pathname: '/order', search: '', hash: '', href: '' },
   sessionStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+  localStorage,
   setTimeout: () => 0,
   setInterval: () => 0,
   clearTimeout() {},
@@ -97,4 +105,47 @@ test('unknown or malformed prices never appear as free products', () => {
   assert.equal(context.money({ priceMinor: 0 }), '¥0.00');
   assert.equal(context.money({ priceMinor: '1250' }), '¥12.50');
   assert.equal(context.money({ totalAmountMinor: 1250 }), '¥12.50');
+});
+
+test('persists active order and renders recovery banner on menu view', () => {
+  const order = {
+    orderId: 'qa-order-123',
+    orderNo: 'C0903-8E1A0F',
+    status: 'MAKING',
+    product: { name: '冰拿铁' },
+    totalAmountMinor: 1800,
+    currency: 'CNY',
+    deviceId: 'coffee-bot-test',
+  };
+  context.saveActiveOrder(order, 'token-xyz', 'coffee-bot-test');
+  const active = context.getActiveOrder('coffee-bot-test');
+  assert.equal(active.orderId, 'qa-order-123');
+  assert.equal(active.pickupCode, '8E1A');
+
+  const testMenu = {
+    deviceId: 'coffee-bot-test',
+    online: true,
+    paymentMode: 'ONLINE',
+    salesEnabled: true,
+    products: [{ recipeId: 'latte', name: '冰拿铁', available: true, priceMinor: 1800 }],
+  };
+  context.renderMenu(testMenu);
+  assert.match(app.innerHTML, /进行中订单 · 取杯口令/);
+  assert.match(app.innerHTML, /8E1A/);
+  assert.match(app.innerHTML, /查看进度/);
+});
+
+test('mobile payment waiting view renders prominent direct payment button', () => {
+  const order = {
+    orderNo: 'QA-PAY-002',
+    status: 'AWAITING_PAYMENT',
+    totalAmountMinor: 1500,
+    currency: 'CNY',
+    product: { name: '美式咖啡' },
+    payment: { paymentId: 'pay-2', qrCode: 'https://qr.alipay.com/bax01', provider: 'alipay' },
+  };
+  context.renderOrder(order);
+  assert.match(app.innerHTML, /打开支付宝付款/);
+  assert.match(app.innerHTML, /btn-alipay-cta/);
+  assert.match(app.innerHTML, /二维码加载后保持不变/);
 });
