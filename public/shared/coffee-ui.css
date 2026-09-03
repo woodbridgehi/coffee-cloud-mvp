@@ -287,6 +287,85 @@ code, pre, .u-mono { font-family: var(--cc-mono); font-size: 13px; line-height: 
 .cc-status--unknown::before { border: 2px solid var(--cc-text-disabled); background: transparent; width: 6px; height: 6px; }
 .cc-status .cc-raw { color: var(--cc-text-2); font-weight: 400; font-family: var(--cc-mono); font-size: 11px; }
 
+/* OpenDesign 设备在线与连接呼吸状态光晕 */
+@keyframes breathConn {
+  0%, 100% { box-shadow: 0 0 0 3px rgba(46, 118, 88, 0.18); }
+  50% { box-shadow: 0 0 0 6px rgba(46, 118, 88, 0.05); }
+}
+.cc-status--success::before,
+.status-dot.online,
+.conn.breath .conn-dot {
+  animation: breathConn 2.8s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .cc-status--success::before,
+  .status-dot.online,
+  .conn.breath .conn-dot {
+    animation: none !important;
+  }
+}
+
+/* OpenDesign 规范表单只读派生标签与输入字数计数 */
+.ro-tag {
+  font-family: var(--cc-mono);
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--forest-500, #34795D);
+  border: 1px solid rgba(52, 121, 93, 0.3);
+  border-radius: 6px;
+  padding: 1px 7px;
+  white-space: nowrap;
+  display: inline-block;
+  vertical-align: middle;
+}
+.field-count, label .count {
+  margin-left: auto;
+  font-family: var(--cc-mono);
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--cc-text-2, #746D64);
+}
+
+/* OpenDesign 物料库存精密进度轨与预占斜纹段 */
+.inv-track {
+  height: 7px;
+  border-radius: 999px;
+  background: var(--cc-bg, #F6F0E5);
+  border: 1px solid rgba(42, 60, 52, 0.2);
+  overflow: hidden;
+  position: relative;
+}
+.inv-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--cc-success, #2E7658);
+  transition: width 0.3s linear;
+}
+.inv-fill.low { background: var(--cc-warning, #C38732); }
+.inv-fill.critical { background: var(--cc-error, #B64C3C); }
+.inv-rsv {
+  position: absolute;
+  top: 0; bottom: 0;
+  background: repeating-linear-gradient(45deg, transparent 0 3px, rgba(237, 177, 88, 0.55) 3px 5px);
+}
+
+/* OpenDesign 三重编码库存状态徽章 */
+.inv-badge {
+  font-family: var(--cc-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  border-radius: 6px;
+  padding: 2px 7px;
+  border: 1px solid;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.inv-ok { color: var(--forest-500, #34795D); border-color: rgba(52, 121, 93, 0.35); background: rgba(52, 121, 93, 0.08); }
+.inv-low { color: var(--cc-warning, #C38732); border-color: rgba(195, 135, 50, 0.4); background: rgba(195, 135, 50, 0.09); }
+.inv-critical { color: var(--cc-error, #B64C3C); border-color: rgba(182, 76, 60, 0.45); background: rgba(182, 76, 60, 0.08); }
+
 /* ---------- Cards / 工作面 ---------- */
 .cc-card { background: var(--cc-surface); border: 1px solid var(--cc-divider); border-radius: var(--cc-r-lg); padding: 24px; }
 .cc-card--pad16 { padding: 16px; }
@@ -585,12 +664,30 @@ details.cc-disc .cc-disc-body { padding: 4px 0 12px; }
   border-right: 1px solid var(--cc-divider); display: flex; flex-direction: column;
   position: sticky; top: 0; height: 100dvh; overflow-y: auto; z-index: 40;
 }
-.cc-side-brand { display: flex; align-items: center; gap: 10px; height: 64px; padding: 0 20px; flex: none; }
+.cc-side-brand { display: flex; align-items: center; gap: 11px; height: 64px; padding: 0 20px; flex: none; }
 .cc-side-brand .cc-logo {
-  width: 28px; height: 28px; border-radius: var(--cc-r-md); background: var(--cc-primary);
+  width: 32px; height: 32px; border-radius: var(--cc-r-md); background: var(--cc-primary);
   color: #FFF9F0; display: flex; align-items: center; justify-content: center; flex: none;
+  box-shadow: 0 2px 6px rgba(11, 45, 36, 0.2);
 }
-.cc-side-brand .cc-brandname { font-size: 15px; font-weight: 700; letter-spacing: 0.2px; }
+.cc-side-brand .cc-brandname {
+  font-family: var(--cc-font-display);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--cc-title);
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+}
+.cc-side-brand .cc-brand-sub {
+  font-family: var(--cc-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.22em;
+  color: var(--brass-500, #B78A52);
+  margin-top: 2px;
+  font-weight: 500;
+}
 .cc-side-nav { flex: 1; padding: 8px 12px 24px; }
 .cc-navgroup { margin-top: 16px; }
 .cc-navgroup-title { font-size: 12px; line-height: 18px; font-weight: 600; color: var(--cc-text-disabled); padding: 0 12px 6px; letter-spacing: 0.4px; }

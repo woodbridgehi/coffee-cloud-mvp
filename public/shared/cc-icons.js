@@ -33,6 +33,7 @@
     'alert-circle': '<circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>',
     'info': '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
     'clock': '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+    'brand-symbol': '<rect x="5.5" y="4" width="9" height="13.5" rx="2.5" stroke="currentColor" stroke-width="1.6" fill="none"/><path d="M14.5 9a2.5 2.5 0 0 1 0 4.5" stroke="currentColor" stroke-width="1.6"/><path d="M8 8.5h4" stroke="#B78A52" stroke-width="1.8" stroke-linecap="round"/>',
     'coffee': '<path d="M17 8h1.5a2.5 2.5 0 0 1 0 5H17"/><path d="M4 8h13v6a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5V8Z"/><path d="M8 3c0 1-1 1.5-1 2.5S8 7 8 7M12 3c0 1-1 1.5-1 2.5S12 7 12 7"/>',
     'logout': '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5M21 12H9"/>',
     'user': '<circle cx="12" cy="8" r="4"/><path d="M5 21a7 7 0 0 1 14 0"/>',

@@ -33,3 +33,12 @@ test('排序列与自动刷新控件样式保持完整', () => {
   assert.match(merchantCss, /\.cc-table th\.is-sortable::after\s*\{[^}]*content:\s*" ⇅"/s);
   assert.match(merchantCss, /\.cc-autorefresh\s*\{[^}]*display:\s*inline-flex/s);
 });
+
+test('OpenDesign 品牌基底、设备状态呼吸光晕与物料斜纹预占条样式就绪', () => {
+  assert.match(merchantHtml, /data-cc-icon="brand-symbol"/);
+  assert.match(adminHtml, /data-cc-icon="brand-symbol"/);
+  assert.match(sharedCss, /@keyframes breathConn/);
+  assert.match(sharedCss, /\.inv-track\s*\{[^}]*height:\s*7px/s);
+  assert.match(sharedCss, /\.inv-rsv\s*\{[^}]*repeating-linear-gradient/s);
+  assert.match(sharedCss, /\.ro-tag\s*\{[^}]*font-family:\s*var\(--cc-mono\)/s);
+});
