@@ -37,45 +37,45 @@ This repository holds the cloud platform. The companion edge terminal simulator 
 
 ```mermaid
 flowchart TB
-    subgraph ClientLayer ["Client & Presentation Layer"]
-        Customer["📱 Customer Mobile H5 (/order)"]
-        Screen["🖥️ Terminal Display (pywebview)"]
-        Merchant["💻 Merchant Portal (/merchant)"]
-        Admin["🛠️ Platform Admin (/admin)"]
+    subgraph ClientLayer["Client & Presentation Layer"]
+        Customer["Customer Mobile H5 (/order)"]
+        Screen["Terminal Display (pywebview)"]
+        Merchant["Merchant Portal (/merchant)"]
+        Admin["Platform Admin (/admin)"]
     end
 
-    subgraph CloudLayer ["Coffee Cloud Container Cluster"]
-        API["🌐 coffee-cloud-mvp (FastAPI)\nREST API / SSE Broadcast"]
-        Gateway["🔌 coffee-mqtt-gateway (Paho MQTT)\nQoS 1 Duplex Gateway"]
-        Worker["⚙️ coffee-domain-worker (Background Worker)\nOutbox / Timeout / Offline Scan"]
+    subgraph CloudLayer["Coffee Cloud Container Cluster"]
+        API["coffee-cloud-mvp (FastAPI)<br/>REST API / SSE Broadcast"]
+        Gateway["coffee-mqtt-gateway (Paho MQTT)<br/>QoS 1 Duplex Gateway"]
+        Worker["coffee-domain-worker (Background Worker)<br/>Outbox / Timeout / Offline Scan"]
         
-        DB[(🗄️ PostgreSQL 16\nBusiness Data / Outbox / Inbox)]
-        Redis[(⚡ Redis 7\nLive Progress / SSE Channels)]
+        DB[("PostgreSQL 16<br/>Business Data / Outbox / Inbox")]
+        Redis[("Redis 7<br/>Live Progress / SSE Channels")]
     end
 
-    subgraph BrokerLayer ["Messaging Infrastructure"]
-        EMQX["📡 EMQX 5.0 (MQTT Broker)\nv1/devices/+/up\nv1/devices/+/down"]
+    subgraph BrokerLayer["Messaging Infrastructure"]
+        EMQX["EMQX 5.0 (MQTT Broker)<br/>v1/devices/+/up<br/>v1/devices/+/down"]
     end
 
-    subgraph EdgeLayer ["Edge Coffee Terminal (Simulator / Physical HW)"]
-        EdgeAgent["🤖 Terminal Agent (backend.py)\nStep Scheduler / Fault Injector"]
-        EdgeDB[(💾 Local state/\nruntime.db + inventory.json)]
+    subgraph EdgeLayer["Edge Coffee Terminal (Simulator / Physical HW)"]
+        EdgeAgent["Terminal Agent (backend.py)<br/>Step Scheduler / Fault Injector"]
+        EdgeDB[("Local state/<br/>runtime.db + inventory.json")]
     end
 
-    Customer -->|HTTPS / SSE| API
-    Merchant -->|HTTPS| API
-    Admin -->|HTTPS Token Auth| API
-    Screen <--> EdgeAgent
+    Customer -->|"HTTPS / SSE"| API
+    Merchant -->|"HTTPS"| API
+    Admin -->|"HTTPS Token Auth"| API
+    Screen --- EdgeAgent
 
-    API <-->|SQL Tx / Outbox| DB
-    API <-->|Pub/Sub| Redis
-    Worker <-->|Scan Outbox / Update| DB
-    Worker <-->|Keepalive Scan| Redis
+    API ---|"SQL Tx / Outbox"| DB
+    API ---|"Pub / Sub"| Redis
+    Worker ---|"Scan Outbox / Update"| DB
+    Worker ---|"Keepalive Scan"| Redis
 
-    Gateway <-->|Internal API / Claim| API
-    Gateway <-->|MQTT 5.0 QoS 1| EMQX
-    EMQX <-->|Two-way TLS| EdgeAgent
-    EdgeAgent <-->|Read/Write| EdgeDB
+    Gateway ---|"Internal API / Claim"| API
+    Gateway ---|"MQTT 5.0 QoS 1"| EMQX
+    EMQX ---|"Two-way TLS"| EdgeAgent
+    EdgeAgent ---|"Read / Write"| EdgeDB
 ```
 
 ### Three Primary Communication Channels
@@ -157,23 +157,23 @@ sequenceDiagram
     participant Terminal as Coffee Simulator
     actor Screen as Hardware Display
 
-    Customer->>CloudAPI: 1. Scan & Submit Order (Idempotency-Key)
+    Customer->>CloudAPI: Scan & Submit Order (Idempotency-Key)
     CloudAPI-->>Customer: Return orderId & Payment Params
-    Note over Customer,CloudAPI: Complete Payment (WeChat/Alipay)
-    CloudAPI->>CloudDB: 2. Tx: Order to PAID, Write business_outbox
-    CloudDB-->>Gateway: 3. Worker consumes outbox, Gateway claims command
-    Gateway->>Terminal: 4. MQTT Publish MAKE_DRINK (QoS 1)
-    Terminal->>Terminal: 5. Validate inventory, reserve amounts
-    Terminal->>Gateway: 6. Uplink task.acknowledged
-    Gateway-->>Customer: 7. SSE: Update queuing & prod status
+    Note over Customer, CloudAPI: Complete Payment (WeChat/Alipay)
+    CloudAPI->>CloudDB: Tx: Order to PAID, Write business_outbox
+    CloudDB-->>Gateway: Worker consumes outbox, Gateway claims command
+    Gateway->>Terminal: MQTT Publish MAKE_DRINK (QoS 1)
+    Terminal->>Terminal: Validate inventory, reserve amounts
+    Terminal->>Gateway: Uplink task.acknowledged
+    Gateway-->>Customer: SSE: Update queuing & prod status
     loop Step Execution
-        Terminal->>Gateway: Step change or 5s trigger task.progress
-        Gateway-->>Customer: SSE live push (e.g., 65% Steaming Milk)
+        Terminal->>Gateway: Step change triggers task.progress
+        Gateway-->>Customer: SSE live push progress percentage
     end
-    Terminal->>Gateway: 8. Cup drops, report task.succeeded
-    Gateway->>CloudDB: 9. Tx: Transition to READY, Generate pickup code
-    CloudAPI-->>Customer: 10. SSE: Pickup vibration/chime alert
-    Terminal->>Screen: 11. Screen flips to Green Pickup UI
+    Terminal->>Gateway: Cup drops, report task.succeeded
+    Gateway->>CloudDB: Tx: Transition to READY, Generate pickup code
+    CloudAPI-->>Customer: SSE: Pickup vibration alert
+    Terminal->>Screen: Screen flips to Green Pickup UI
 ```
 
 ### 5.2 Hardware Fault & HOLD Resolution
@@ -186,17 +186,17 @@ sequenceDiagram
     participant DB as Database
     actor Operator as Store Operator
 
-    Note over Terminal,Cloud: Device loses power/network right after command dispatch
+    Note over Terminal, Cloud: Device loses power/network after command dispatch
     Cloud->>Cloud: Offline monitor flags timeout
     Cloud->>DB: Trigger alert, force Order to HOLD
     Cloud-->>Operator: Alert pops up in Merchant Console
     Operator->>Cloud: Login & open Device Dark Console Drawer
-    Operator->>Operator: Check physical machine: Did the cup dispense?
+    Operator->>Operator: Check physical machine: Did the cup dispense
     alt No Cup Dispensed
-        Operator->>Cloud: 2-stage armed button [Cancel & Refund]
+        Operator->>Cloud: Confirm Cancel & Refund (2-stage armed)
         Cloud->>DB: Log audit, trigger monetary refund
     else Cup Dispensed & Taken
-        Operator->>Cloud: Click [Mark as Completed Manually]
+        Operator->>Cloud: Mark as Completed Manually
         Cloud->>DB: Log audit, Order flows to COMPLETED
     end
 ```

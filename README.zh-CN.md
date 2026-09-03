@@ -37,45 +37,45 @@
 
 ```mermaid
 flowchart TB
-    subgraph ClientLayer ["用户端与展示层"]
-        Customer["📱 顾客手机 H5 (/order)"]
-        Screen["🖥️ 终端大屏显示器 (pywebview 双色域)"]
-        Merchant["💻 B端商户工作台 (/merchant)"]
-        Admin["🛠️ 平台运维控制台 (/admin)"]
+    subgraph ClientLayer["用户端与展示层"]
+        Customer["顾客手机 H5 (/order)"]
+        Screen["终端大屏显示器 (pywebview)"]
+        Merchant["B端商户工作台 (/merchant)"]
+        Admin["平台运维控制台 (/admin)"]
     end
 
-    subgraph CloudLayer ["Coffee Cloud 容器化服务集群"]
-        API["🌐 coffee-cloud-mvp (FastAPI API)\nREST API / SSE 广播"]
-        Gateway["🔌 coffee-mqtt-gateway (Paho MQTT)\nQoS 1 上下行双工网关"]
-        Worker["⚙️ coffee-domain-worker (Background Worker)\nOutbox 消费 / 订单超时 / 离线监控"]
+    subgraph CloudLayer["Coffee Cloud 容器化服务集群"]
+        API["coffee-cloud-mvp (FastAPI API)<br/>REST API / SSE 广播"]
+        Gateway["coffee-mqtt-gateway (Paho MQTT)<br/>QoS 1 上下行双工网关"]
+        Worker["coffee-domain-worker (Background Worker)<br/>Outbox 消费 / 订单超时 / 离线监控"]
         
-        DB[(🗄️ PostgreSQL 16\n业务数据 / Outbox / Inbox)]
-        Redis[(⚡ Redis 7\n实时进度 / SSE 通道 / 瞬时缓存)]
+        DB[("PostgreSQL 16<br/>业务数据 / Outbox / Inbox")]
+        Redis[("Redis 7<br/>实时进度 / SSE 通道 / 瞬时缓存")]
     end
 
-    subgraph BrokerLayer ["消息与通信基础设施"]
-        EMQX["📡 EMQX 5.0 (MQTT Broker)\nv1/devices/+/up\nv1/devices/+/down"]
+    subgraph BrokerLayer["消息与通信基础设施"]
+        EMQX["EMQX 5.0 (MQTT Broker)<br/>v1/devices/+/up<br/>v1/devices/+/down"]
     end
 
-    subgraph EdgeLayer ["边缘咖啡终端 (Simulator / 物理机)"]
-        EdgeAgent["🤖 终端核心控制进程 (backend.py)\n步骤调度器 / 故障模拟 / 状态存储"]
-        EdgeDB[(💾 本地 state/\nruntime.db + inventory.json)]
+    subgraph EdgeLayer["边缘咖啡终端 (Simulator / 物理机)"]
+        EdgeAgent["终端核心控制进程 (backend.py)<br/>步骤调度器 / 故障模拟 / 状态存储"]
+        EdgeDB[("本地 state/<br/>runtime.db + inventory.json")]
     end
 
-    Customer -->|HTTPS / SSE| API
-    Merchant -->|HTTPS 授权访问| API
-    Admin -->|HTTPS Token 认证| API
-    Screen <--> EdgeAgent
+    Customer -->|"HTTPS / SSE"| API
+    Merchant -->|"HTTPS 授权访问"| API
+    Admin -->|"HTTPS Token 认证"| API
+    Screen --- EdgeAgent
 
-    API <-->|SQL 事务 / Outbox| DB
-    API <-->|发布/订阅| Redis
-    Worker <-->|扫描 Outbox / 更新状态| DB
-    Worker <-->|设备保活扫描| Redis
+    API ---|"SQL 事务 / Outbox"| DB
+    API ---|"发布 / 订阅"| Redis
+    Worker ---|"扫描 Outbox / 更新状态"| DB
+    Worker ---|"设备保活扫描"| Redis
 
-    Gateway <-->|内部 API / 认领命令| API
-    Gateway <-->|MQTT 5.0 QoS 1| EMQX
-    EMQX <-->|双向 TLS 长连接| EdgeAgent
-    EdgeAgent <-->|读写事务| EdgeDB
+    Gateway ---|"内部 API / 认领命令"| API
+    Gateway ---|"MQTT 5.0 QoS 1"| EMQX
+    EMQX ---|"双向 TLS 长连接"| EdgeAgent
+    EdgeAgent ---|"读写事务"| EdgeDB
 ```
 
 ### 三大通信通道
@@ -157,23 +157,23 @@ sequenceDiagram
     participant Terminal as 咖啡终端模拟器
     actor Screen as 终端大屏
 
-    Customer->>CloudAPI: 1. 扫码查单与提交订单 (需 Idempotency-Key)
-    CloudAPI-->>Customer: 返回 orderId 与 支付参数
-    Note over Customer,CloudAPI: 完成付款 (微信/支付宝/沙箱)
-    CloudAPI->>CloudDB: 2. 事务：订单转 PAID，写入 business_outbox
-    CloudDB-->>Gateway: 3. Worker 消费发件箱，Gateway 认领命令
-    Gateway->>Terminal: 4. MQTT 发布 MAKE_DRINK (QoS 1)
-    Terminal->>Terminal: 5. 校验料仓，整杯预占
-    Terminal->>Gateway: 6. 上报 task.acknowledged (已接单)
-    Gateway-->>Customer: 7. SSE：更新排队与制作状态
+    Customer->>CloudAPI: 扫码查单与提交订单 (需携带 Idempotency-Key)
+    CloudAPI-->>Customer: 返回 orderId 与支付参数
+    Note over Customer, CloudAPI: 完成付款 (微信/支付宝/沙箱)
+    CloudAPI->>CloudDB: 事务处理: 订单转 PAID，写入 business_outbox
+    CloudDB-->>Gateway: Worker 消费发件箱，Gateway 认领命令
+    Gateway->>Terminal: MQTT 发布 MAKE_DRINK (QoS 1)
+    Terminal->>Terminal: 校验料仓，整杯预占
+    Terminal->>Gateway: 上报 task.acknowledged (已接单)
+    Gateway-->>Customer: SSE: 更新排队与制作状态
     loop 步骤执行流
-        Terminal->>Gateway: 进度变化 5% 触发 task.progress
-        Gateway-->>Customer: SSE 实时推流百分比 (例：65% 注奶中)
+        Terminal->>Gateway: 进度变化上报 task.progress
+        Gateway-->>Customer: SSE 实时推流制作百分比
     end
-    Terminal->>Gateway: 8. 制作完成落杯，上报 task.succeeded
-    Gateway->>CloudDB: 9. 事务：转 READY 态，生成取餐凭证
-    CloudAPI-->>Customer: 10. SSE：出杯取餐震动提醒
-    Terminal->>Screen: 11. 切换至物理大屏绿底取餐界面
+    Terminal->>Gateway: 制作完成落杯，上报 task.succeeded
+    Gateway->>CloudDB: 事务处理: 转 READY 态，生成取餐凭证
+    CloudAPI-->>Customer: SSE: 出杯取餐震动提醒
+    Terminal->>Screen: 切换至物理大屏绿底取餐界面
 ```
 
 ### 5.2 硬件异常熔断与 HOLD 人工结案时序
@@ -186,17 +186,17 @@ sequenceDiagram
     participant DB as 数据库
     actor Operator as 运营店员
 
-    Note over Terminal,Cloud: 下单后机器突发断网/掉电断联，指令发出但无回执
+    Note over Terminal, Cloud: 下单后机器突发断网断联，指令发出但无回执
     Cloud->>Cloud: 定时离线巡检器标记超时
     Cloud->>DB: 生成告警，订单强制转为 HOLD
     Cloud-->>Operator: 运营工作台告警
-    Operator->>Cloud: 店长登陆，打开深色设备控制台抽屉
-    Operator->>Operator: 现场实地核查：查验设备是否出杯？
+    Operator->>Cloud: 店长登录，打开深色设备控制台抽屉
+    Operator->>Operator: 现场实地核查: 查验设备是否出杯
     alt 确未出杯
-        Operator->>Cloud: 两次点击布防按钮【确认退款结案】
+        Operator->>Cloud: 确认退款结案 (需二次布防确认)
         Cloud->>DB: 审计拦截放行，发起冲正退款
     else 已落杯且顾客拿走
-        Operator->>Cloud: 点击【手动标记完成】
+        Operator->>Cloud: 手动标记完成
         Cloud->>DB: 审计通过，订单流转 COMPLETED
     end
 ```
