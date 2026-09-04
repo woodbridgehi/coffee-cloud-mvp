@@ -4,15 +4,22 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#F6F0E5">
-  <title>Coffee Cloud · 设备运营台</title>
+  <title data-i18n="admin.document.title">Coffee Cloud · 设备运营台</title>
   <link rel="stylesheet" href="/assets/shared/coffee-ui.css?v=20260903-cc7">
   <link rel="stylesheet" href="/assets/admin.css?v=20260902-cc5">
   <script src="/assets/shared/cc-icons.js?v=20260903-cc7"></script>
 </head>
 <body class="admin-body" data-shell="admin">
+  <label class="cc-locale-control" for="locale-select">
+    <span data-i18n="common.language.label">语言</span>
+    <select id="locale-select" class="cc-select cc-select--compact" aria-label="语言">
+      <option value="zh-CN">简体中文</option>
+      <option value="en-US">English</option>
+    </select>
+  </label>
 
   <!-- 登录层（cc-auth：280px 说明 + 420px 表单，手机单列；espresso 主题） -->
-  <section id="login-view" class="cc-auth cc-auth--platform" aria-label="登录" data-od-id="admin-login-view">
+  <section id="login-view" class="cc-auth cc-auth--platform" aria-label="登录" data-i18n-aria-label="admin.login.aria" data-od-id="admin-login-view">
     <header class="cc-auth-brandbar">
       <span class="cc-logo" aria-hidden="true" data-cc-icon="brand-symbol" data-size="16"></span>
       <span class="cc-brandname">Coffee Terminal</span>
@@ -23,31 +30,31 @@
       <div class="cc-auth-grid">
         <aside class="cc-auth-aside" data-od-id="auth-aside">
           <div class="cc-auth-kicker">Platform Operations</div>
-          <h2>设备运营台 · Token 登录</h2>
-          <p>面向平台运维与值班人员的设备控制台：终端连接、生命周期、订单异常与运营员权限。商户账号请使用客户运营后台入口。</p>
+          <h2 data-i18n="admin.login.heading">设备运营台 · Token 登录</h2>
+          <p data-i18n="admin.login.intro">面向平台运维与值班人员的设备控制台：终端连接、生命周期、订单异常与运营员权限。商户账号请使用客户运营后台入口。</p>
           <ul class="cc-auth-points">
-            <li><i data-cc-icon="check" data-size="16"></i><span>运营 Token 只保存在当前页面内存；刷新或关闭后需要重新输入</span></li>
-            <li><i data-cc-icon="check" data-size="16"></i><span>权限决定可见视图与操作，登录后按 Token 角色渲染</span></li>
-            <li><i data-cc-icon="check" data-size="16"></i><span>设备实时快照与账面数据分开展示，未知容量不画百分比</span></li>
+            <li><i data-cc-icon="check" data-size="16"></i><span data-i18n="admin.login.point.memory">运营 Token 只保存在当前页面内存；刷新或关闭后需要重新输入</span></li>
+            <li><i data-cc-icon="check" data-size="16"></i><span data-i18n="admin.login.point.permissions">权限决定可见视图与操作，登录后按 Token 角色渲染</span></li>
+            <li><i data-cc-icon="check" data-size="16"></i><span data-i18n="admin.login.point.data">设备实时快照与账面数据分开展示，未知容量不画百分比</span></li>
           </ul>
         </aside>
 
         <section class="cc-auth-form" data-od-id="login-form">
-          <h1 class="cc-h1">Token 登录</h1>
-          <p class="cc-form-sub">使用运营 Token 登录；不会写入浏览器存储。</p>
+          <h1 class="cc-h1" data-i18n="admin.login.title">Token 登录</h1>
+          <p class="cc-form-sub" data-i18n="admin.login.sub">使用运营 Token 登录；不会写入浏览器存储。</p>
           <form id="login-form" autocomplete="off" novalidate>
             <div class="cc-field">
-              <label class="cc-label" for="login-token">运营 Token</label>
-              <input id="login-token" class="cc-input" type="password" placeholder="粘贴管理员或运营员 Token" autocomplete="off" spellcheck="false" required>
+              <label class="cc-label" for="login-token" data-i18n="admin.login.token">运营 Token</label>
+              <input id="login-token" class="cc-input" type="password" placeholder="粘贴管理员或运营员 Token" data-i18n-placeholder="admin.login.placeholder" autocomplete="off" spellcheck="false" required>
             </div>
             <div class="cc-field" style="margin-top:24px">
-              <button id="login-submit" class="cc-btn cc-btn--primary cc-btn--lg cc-btn--block" type="submit">登录</button>
+              <button id="login-submit" class="cc-btn cc-btn--primary cc-btn--lg cc-btn--block" type="submit" data-i18n="admin.login.submit">登录</button>
             </div>
             <p id="login-error" class="cc-error-text" role="alert"></p>
           </form>
           <details class="cc-disc" style="margin-top:16px">
-            <summary><i data-cc-icon="chev-right" data-size="14" class="chev"></i>Token 安全说明</summary>
-            <div class="cc-disc-body cc-caption">
+            <summary><i data-cc-icon="chev-right" data-size="14" class="chev"></i><span data-i18n="admin.login.securityTitle">Token 安全说明</span></summary>
+            <div class="cc-disc-body cc-caption" data-i18n="admin.login.securityBody">
               当前页面不会将 Token 写入浏览器存储；刷新或关闭后需要重新输入，但不会撤销服务端 Token。完整 Token 仅在创建时显示一次，云端只保存摘要。
             </div>
           </details>
@@ -63,21 +70,21 @@
         <span class="cc-logo" aria-hidden="true" data-cc-icon="brand-symbol" data-size="20"></span>
         <span class="cc-brandname">Coffee Terminal <small class="cc-brand-sub">OPERATIONS</small></span>
       </div>
-      <nav id="side-nav" class="cc-side-nav" aria-label="主导航"></nav>
+      <nav id="side-nav" class="cc-side-nav" aria-label="主导航" data-i18n-aria-label="admin.nav.main"></nav>
       <div class="cc-side-foot">
         <div id="who" class="m-who"></div>
-        <button id="logout-btn" class="cc-btn cc-btn--ghost cc-btn--sm" type="button">退出登录</button>
+        <button id="logout-btn" class="cc-btn cc-btn--ghost cc-btn--sm" type="button" data-i18n="common.actions.logout">退出登录</button>
       </div>
     </aside>
 
     <div class="cc-main">
       <header class="cc-top" data-od-id="admin-topbar">
         <div class="cc-top-left">
-          <nav class="cc-crumb" aria-label="位置"><span>平台运维台</span></nav>
+          <nav class="cc-crumb" aria-label="位置"><span data-i18n="admin.workspace">平台运维台</span></nav>
         </div>
         <div class="cc-top-right">
           <span id="refresh-note" class="cc-caption"></span>
-          <button id="refresh-btn" class="cc-btn cc-btn--secondary cc-btn--sm" type="button">立即刷新</button>
+          <button id="refresh-btn" class="cc-btn cc-btn--secondary cc-btn--sm" type="button" data-i18n="common.actions.refresh">立即刷新</button>
         </div>
       </header>
       <div class="cc-content">
@@ -87,11 +94,16 @@
   </div>
 
   <!-- 移动端底部导航（由 admin.js 按权限填充；桌面端由 CSS 隐藏） -->
-  <nav id="bottom-nav" class="cc-bottomnav hidden" aria-label="移动端快捷导航"></nav>
+  <nav id="bottom-nav" class="cc-bottomnav hidden" aria-label="移动端快捷导航" data-i18n-aria-label="admin.nav.mobile"></nav>
 
   <div id="toast-root" class="cc-toasts" role="status" aria-live="polite"></div>
   <div id="modal-root" class="cc-overlay hidden" aria-hidden="true"></div>
 
-  <script type="module" src="/assets/admin.js?v=20260903-cc6"></script>
+  <script src="/assets/shared/i18n.js?v=20260904-i18n1"></script>
+  <script src="/assets/locales/common/zh-CN.js?v=20260904-i18n1"></script>
+  <script src="/assets/locales/common/en-US.js?v=20260904-i18n1"></script>
+  <script src="/assets/locales/admin/zh-CN.js?v=20260904-i18n1"></script>
+  <script src="/assets/locales/admin/en-US.js?v=20260904-i18n1"></script>
+  <script type="module" src="/assets/admin.js?v=20260904-i18n1"></script>
 </body>
 </html>

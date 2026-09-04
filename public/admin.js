@@ -12,6 +12,16 @@
    ============================================================ */
 import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
 
+const i18n = globalThis.CoffeeI18n || null;
+const tr = (key, fallback, params = {}) => i18n
+  ? i18n.t(key, params, { defaultValue: fallback })
+  : fallback;
+i18n?.configure({
+  storageKey: 'coffee-cloud.locale',
+  enabledLocales: ['zh-CN', 'en-US'],
+  fallbackLocale: 'zh-CN',
+});
+
 (() => {
   'use strict';
 
@@ -246,7 +256,7 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
     let data = {};
     try { data = await response.json(); } catch (_) { /* 非 JSON */ }
     if (response.status === 401) {
-      if (state.token) forceLogout('登录已过期或 Token 已失效，请重新登录');
+      if (state.token) forceLogout(tr('admin.auth.expired', '登录已过期或 Token 已失效，请重新登录'));
       throw new ApiError('未授权', 401);
     }
     if (!response.ok) {
@@ -517,7 +527,8 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
   function setLoginBusy(busy) {
     const btn = $('login-submit');
     btn.disabled = busy;
-    btn.replaceChildren(busy ? el('span', { html: SPINNER, 'aria-hidden': 'true' }) : null, busy ? '正在验证…' : '登录');
+    btn.replaceChildren(busy ? el('span', { html: SPINNER, 'aria-hidden': 'true' }) : null,
+      busy ? tr('admin.login.verifying', '正在验证…') : tr('admin.login.submit', '登录'));
   }
 
   async function handleLogin(event) {
@@ -526,7 +537,7 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
     const errorNode = $('login-error');
     const value = input.value.trim();
     if (!value) {
-      errorNode.textContent = '请输入运营 Token';
+      errorNode.textContent = tr('admin.auth.tokenRequired', '请输入运营 Token');
       input.focus();
       return;
     }
@@ -541,7 +552,7 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
       enterShell();
     } catch (error) {
       state.token = '';
-      errorNode.textContent = `登录失败：${describeError(error)}`;
+      errorNode.textContent = tr('admin.auth.loginFailed', '登录失败：{message}', { message: describeError(error) });
       input.select();
     } finally {
       setLoginBusy(false);
@@ -562,7 +573,7 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
     $('shell').classList.add('hidden');
     $('bottom-nav')?.classList.add('hidden');
     $('login-view').classList.remove('hidden');
-    document.title = 'Coffee Cloud · 设备运营台';
+    document.title = tr('admin.document.title', 'Coffee Cloud · 设备运营台');
     if (message) toast(message, 'error');
     const input = $('login-token');
     input.value = '';
@@ -570,7 +581,7 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
   }
 
   function logout() {
-    forceLogout('已退出登录');
+    forceLogout(tr('admin.auth.signedOut', '已退出登录'));
   }
 
   function updateWho() {
@@ -578,7 +589,7 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
     clear(who);
     if (!state.principal) return;
     who.append(
-      el('strong', null, state.principal.displayName || state.principal.actorId || '运营员'),
+      el('strong', null, state.principal.displayName || state.principal.actorId || tr('admin.user.operator', '运营员')),
       el('span', null, `${state.principal.role || ''} · ${state.principal.tokenLabel || 'session'}`),
     );
   }
@@ -593,22 +604,26 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
     { id: 'audit', label: '审计', title: '审计日志', sub: '操作者、动作与资源记录', perm: PERMISSIONS.auditRead, iconName: 'audit' },
   ];
 
+  function viewText(def, part) {
+    return tr(`admin.view.${def.id}.${part}`, def[part]);
+  }
+
   function buildNav() {
     const nav = $('side-nav');
     clear(nav);
     const group = el('div', { class: 'cc-navgroup' },
-      el('div', { class: 'cc-navgroup-title' }, '平台运维'));
+      el('div', { class: 'cc-navgroup-title' }, tr('admin.nav.group', '平台运维')));
     for (const def of VIEW_DEFS) {
       if (!can(def.perm)) continue;
       group.append(el('button', {
         class: 'cc-navitem',
         type: 'button',
-        title: def.label,
+        title: viewText(def, 'label'),
         'aria-current': state.view === def.id ? 'page' : null,
         onclick: () => { location.hash = `#/${def.id}`; },
       },
         el('span', { class: 'n-icon', html: svgIcon(def.iconName, 20), 'aria-hidden': 'true' }),
-        el('span', { class: 'cc-nav-label' }, def.label)));
+        el('span', { class: 'cc-nav-label' }, viewText(def, 'label'))));
     }
     if (group.querySelector('.cc-navitem')) nav.append(group);
     buildBottomNav();
@@ -630,7 +645,7 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
       onclick: () => { location.hash = `#/${def.id}`; },
     },
       el('span', { html: svgIcon(def.iconName, 20), 'aria-hidden': 'true' }),
-      el('span', null, def.label))));
+      el('span', null, viewText(def, 'label')))));
     bar.append(grid);
     bar.classList.remove('hidden');
   }
@@ -656,7 +671,7 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
       state.view = def.id;
     }
     const active = currentViewDef();
-    document.title = `Coffee Cloud · ${active.title}`;
+    document.title = `Coffee Cloud · ${viewText(active, 'title')}`;
     buildNav();
     const workspace = $('workspace');
     clear(workspace);
@@ -719,11 +734,13 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
   function updateRefreshNote() {
     const note = $('refresh-note');
     if (!note) return;
-    const parts = [`每 ${REFRESH_INTERVAL_MS / 1000} 秒自动刷新`];
-    if (document.hidden) parts.push('页面隐藏，已暂停');
-    else if (modalOpen()) parts.push('弹窗打开，已暂停');
-    else if (isTyping()) parts.push('输入中，已暂停');
-    if (state.lastRefreshAt) parts.push(`上次 ${state.lastRefreshAt.toLocaleTimeString('zh-CN', { hour12: false })}`);
+    const parts = [tr('admin.refresh.interval', '每 {seconds} 秒自动刷新', { seconds: REFRESH_INTERVAL_MS / 1000 })];
+    if (document.hidden) parts.push(tr('admin.refresh.hidden', '页面隐藏，已暂停'));
+    else if (modalOpen()) parts.push(tr('admin.refresh.modal', '弹窗打开，已暂停'));
+    else if (isTyping()) parts.push(tr('admin.refresh.typing', '输入中，已暂停'));
+    if (state.lastRefreshAt) parts.push(tr('admin.refresh.last', '上次 {time}', {
+      time: state.lastRefreshAt.toLocaleTimeString(i18n?.getLocale() || 'zh-CN', { hour12: false }),
+    }));
     note.textContent = parts.join(' · ');
   }
 
@@ -1756,6 +1773,21 @@ import { fmtMoney, fmtTime, fmtAgo, fmtPercent } from './admin-format.js';
   }
 
   /* ---------- 事件绑定与启动 ---------- */
+
+  const localeSelect = $('locale-select');
+  if (localeSelect && i18n) {
+    localeSelect.value = i18n.getLocale();
+    localeSelect.addEventListener('change', () => {
+      const locale = i18n.setLocale(localeSelect.value, { persist: true, translate: true });
+      localeSelect.value = locale;
+      if (state.token) {
+        buildNav();
+        route();
+      } else {
+        document.title = tr('admin.document.title', 'Coffee Cloud · 设备运营台');
+      }
+    });
+  }
 
   $('login-form').addEventListener('submit', handleLogin);
   $('logout-btn').addEventListener('click', logout);

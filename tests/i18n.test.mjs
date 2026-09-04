@@ -68,6 +68,7 @@ test('Chinese and English catalogs keep identical keys', () => {
   assert.deepEqual(catalogKeys('../public/locales/common/zh-CN.js'), catalogKeys('../public/locales/common/en-US.js'));
   assert.deepEqual(catalogKeys('../public/locales/order/zh-CN.js'), catalogKeys('../public/locales/order/en-US.js'));
   assert.deepEqual(catalogKeys('../public/locales/merchant/zh-CN.js'), catalogKeys('../public/locales/merchant/en-US.js'));
+  assert.deepEqual(catalogKeys('../public/locales/admin/zh-CN.js'), catalogKeys('../public/locales/admin/en-US.js'));
 });
 
 test('customer order code contains no user-facing hardcoded Chinese outside comments', () => {

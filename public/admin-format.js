@@ -11,6 +11,10 @@
 
 export const UNKNOWN_LABEL = '—';
 
+function activeLocale() {
+  return globalThis.CoffeeI18n?.getLocale?.() || 'zh-CN';
+}
+
 function numeric(value) {
   return typeof value === 'number' || (typeof value === 'string' && value.trim() !== '');
 }
@@ -20,6 +24,9 @@ export function fmtMoney(minor, currency) {
   if (!numeric(minor)) return UNKNOWN_LABEL;
   const n = Number(minor);
   if (!Number.isSafeInteger(n)) return UNKNOWN_LABEL;
+  if (globalThis.CoffeeI18n?.formatMoney) {
+    return globalThis.CoffeeI18n.formatMoney(n, currency || 'CNY', { placeholder: UNKNOWN_LABEL });
+  }
   const sign = n < 0 ? '-' : '';
   const abs = Math.abs(n);
   const body = `${Math.floor(abs / 100)}.${String(abs % 100).padStart(2, '0')}`;
@@ -31,7 +38,7 @@ export function fmtTime(value) {
   if (!value) return '—';
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) return String(value);
-  return date.toLocaleString('zh-CN', {
+  return date.toLocaleString(activeLocale(), {
     hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit',
   });
 }
@@ -39,6 +46,9 @@ export function fmtTime(value) {
 /** 相对时间；now 可注入便于测试。 */
 export function fmtAgo(value, now = Date.now()) {
   if (!value) return '从未';
+  if (globalThis.CoffeeI18n?.formatRelativeTime) {
+    return globalThis.CoffeeI18n.formatRelativeTime(value, now);
+  }
   const ms = now - new Date(value).getTime();
   if (!Number.isFinite(ms)) return '—';
   const sec = Math.round(ms / 1000);
