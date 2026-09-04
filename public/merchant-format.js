@@ -7,6 +7,10 @@
 export const UNKNOWN_AMOUNT_LABEL = '待补全';
 export const DEFAULT_TIMEZONE = 'Asia/Shanghai';
 
+function activeLocale() {
+  return globalThis.CoffeeI18n?.getLocale?.() || 'zh-CN';
+}
+
 /** 空值判断：null / undefined / 空白字符串。 */
 export function isBlank(value) {
   if (value === null || value === undefined) return true;
@@ -19,6 +23,9 @@ export function fmtMoney(minor, { placeholder = UNKNOWN_AMOUNT_LABEL } = {}) {
   if (minor === null || minor === undefined) return placeholder;
   const n = Number(minor);
   if (!Number.isFinite(n)) return placeholder;
+  if (globalThis.CoffeeI18n?.formatMoney) {
+    return globalThis.CoffeeI18n.formatMoney(n, 'CNY', { placeholder });
+  }
   const sign = n < 0 ? '-' : '';
   const abs = Math.abs(Math.round(n));
   const yuan = Math.floor(abs / 100);
@@ -31,6 +38,11 @@ export function fmtMoneyCompact(minor) {
   if (minor === null || minor === undefined || !Number.isFinite(Number(minor))) return '—';
   const abs = Math.abs(Number(minor));
   const sign = Number(minor) < 0 ? '-' : '';
+  if (activeLocale() === 'en-US') {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency', currency: 'CNY', notation: 'compact', maximumFractionDigits: 1,
+    }).format(Number(minor) / 100);
+  }
   if (abs >= 100000000) return `${sign}¥${(abs / 100000000).toFixed(1)}亿`;
   if (abs >= 1000000) return `${sign}¥${(abs / 1000000).toFixed(1)}万`;
   if (abs >= 100000) return `${sign}¥${Math.round(abs / 100) / 10}k`;
@@ -98,7 +110,7 @@ export function fmtDateTime(iso, timeZone = DEFAULT_TIMEZONE) {
   const d = iso instanceof Date ? iso : new Date(iso);
   if (Number.isNaN(d.getTime())) return String(iso);
   try {
-    return new Intl.DateTimeFormat('zh-CN', {
+    return new Intl.DateTimeFormat(activeLocale(), {
       timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
       hour: '2-digit', minute: '2-digit', hour12: false,
     }).format(d);

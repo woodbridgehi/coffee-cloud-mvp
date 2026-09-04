@@ -796,6 +796,20 @@ details.cc-disc .cc-disc-body { padding: 4px 0 12px; }
 .cc-top > * { position: relative; z-index: 1; }
 .cc-top .cc-top-left { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .cc-top .cc-top-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+
+/* Locale switcher stays available on both authentication and signed-in screens. */
+.cc-locale-control {
+  position: fixed; top: 12px; right: 16px; z-index: 120;
+  display: inline-flex; align-items: center; gap: 8px;
+  color: var(--cc-text-2); font-size: 12px;
+}
+.cc-locale-control .cc-select { min-width: 116px; height: 34px; padding-block: 4px; }
+body:has(.cc-shell:not(.hidden)) .cc-locale-control { right: 196px; }
+@media (max-width: 720px) {
+  .cc-locale-control { top: 10px; right: 10px; }
+  .cc-locale-control > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  body:has(.cc-shell:not(.hidden)) .cc-locale-control { right: 10px; }
+}
 .cc-orgbtn {
   display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 12px;
   border: none; background: none; border-radius: var(--cc-r-md); cursor: pointer; max-width: 320px;

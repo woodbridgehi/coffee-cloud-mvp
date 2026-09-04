@@ -17,6 +17,16 @@ import {
   normalizeUsername, validateUsername, validateNewPassword, DEFAULT_USERNAME_PATTERN,
 } from './merchant-format.js';
 
+const i18n = globalThis.CoffeeI18n || null;
+const tr = (key, fallback, params = {}) => i18n
+  ? i18n.t(key, params, { defaultValue: fallback })
+  : fallback;
+i18n?.configure({
+  storageKey: 'coffee-cloud.locale',
+  enabledLocales: ['zh-CN', 'en-US'],
+  fallbackLocale: 'zh-CN',
+});
+
 const DEMO = new URLSearchParams(location.search).get('demo') === '1';
 const adapter = DEMO ? createDemoAdapter() : createRealAdapter();
 
@@ -32,6 +42,7 @@ const PERM = {
 };
 
 const ROLE_LABEL = { OWNER: '所有者 OWNER', OPERATOR: '运维员 OPERATOR', FINANCE: '财务 FINANCE' };
+const roleLabel = role => tr(`merchant.role.${role}`, ROLE_LABEL[role] || role || '');
 
 const LIFECYCLE = {
   ACTIVE: { label: '使用中', kind: 'green' },
@@ -128,7 +139,7 @@ function clearNode(node) { node.replaceChildren(); }
 function statusPill(map, key) {
   const meta = map[key];
   if (!meta) return el('span', { class: 'cc-status cc-status--unknown' }, key || '—');
-  return el('span', { class: `cc-status cc-status--${STATUS_VARIANT[meta.kind] || 'neutral'}` }, meta.label);
+  return el('span', { class: `cc-status cc-status--${STATUS_VARIANT[meta.kind] || 'neutral'}` }, statusLabel(map, key, meta.label));
 }
 
 /* 分类态（生命周期/转让/出入库/环境）：cc-tag 胶囊 */
@@ -136,11 +147,18 @@ function tagPill(map, key) {
   const meta = map[key];
   if (!meta) return el('span', { class: 'cc-tag' }, key || '—');
   const variant = TAG_VARIANT[meta.kind] || '';
-  return el('span', { class: `cc-tag${variant ? ` cc-tag--${variant}` : ''}` }, meta.label);
+  return el('span', { class: `cc-tag${variant ? ` cc-tag--${variant}` : ''}` }, statusLabel(map, key, meta.label));
+}
+
+function statusLabel(map, key, fallback) {
+  if (map === LIFECYCLE) return tr(`merchant.status.lifecycle.${key}`, fallback);
+  return fallback;
 }
 
 function envTag(environment) {
-  return environment === 'TEST' ? el('span', { class: 'cc-tag cc-tag--yellow' }, '测试') : el('span', { class: 'cc-tag' }, '正式');
+  return environment === 'TEST'
+    ? el('span', { class: 'cc-tag cc-tag--yellow' }, tr('merchant.environment.test', '测试'))
+    : el('span', { class: 'cc-tag' }, tr('merchant.environment.live', '正式'));
 }
 
 /* 键值行（dt/dd 结构，配合 dl.cc-kv--2col 使用） */
@@ -193,7 +211,7 @@ function newIdemScope() {
 }
 
 function describeMerchantError(error) {
-  if (!(error instanceof MerchantError)) return '请求失败，请稍后重试';
+  if (!(error instanceof MerchantError)) return tr('merchant.error.requestFailed', '请求失败，请稍后重试');
   const parts = [error.message];
   if (error.requestId) parts.push(`（requestId: ${error.requestId}）`);
   return parts.join(' ');
@@ -933,17 +951,17 @@ function authShell(card, heading, subText) {
     el('header', { class: 'cc-auth-brandbar' },
       el('span', { class: 'cc-logo', html: svgIcon('brand-symbol', 16), 'aria-hidden': 'true' }),
       el('span', { class: 'cc-brandname' }, 'Coffee Cloud'),
-      el('span', { class: 'cc-brand-sub' }, '商户工作台')),
+      el('span', { class: 'cc-brand-sub' }, tr('merchant.workspace', '商户工作台'))),
     el('div', { class: 'cc-auth-main' },
       el('div', { class: 'cc-auth-grid' },
         el('aside', { class: 'cc-auth-aside' },
           el('div', { class: 'cc-auth-kicker' }, 'Merchant Workspace'),
-          el('h2', null, '登录你的咖啡经营组织'),
-          el('p', null, 'Coffee Cloud 帮助连锁咖啡商户管理自助咖啡机设备、订单与成本。此处为商户账号入口，平台运维请使用独立的 Token 入口。'),
+          el('h2', null, tr('merchant.auth.loginHeading', '登录你的咖啡经营组织')),
+          el('p', null, tr('merchant.auth.intro', 'Coffee Cloud 帮助连锁咖啡商户管理自助咖啡机设备、订单与成本。此处为商户账号入口，平台运维请使用独立的 Token 入口。')),
           el('ul', { class: 'cc-auth-points' },
-            ['一个账号可归属多个组织，登录后可在范围条切换',
-              '角色（OWNER / OPERATOR / FINANCE）决定可见模块与操作',
-              '敏感操作需要重新验证密码，会话由服务端管理'].map(text =>
+            [tr('merchant.auth.point.memberships', '一个账号可归属多个组织，登录后可在范围条切换'),
+              tr('merchant.auth.point.roles', '角色（OWNER / OPERATOR / FINANCE）决定可见模块与操作'),
+              tr('merchant.auth.point.security', '敏感操作需要重新验证密码，会话由服务端管理')].map(text =>
               el('li', null, el('span', { html: svgIcon('check', 16), 'aria-hidden': 'true' }), el('span', null, text))))),
         el('section', { class: 'cc-auth-form' },
           heading ? el('h1', { class: 'cc-h1' }, heading) : null,
@@ -995,7 +1013,7 @@ function renderAuth() {
     }[m]);
     return;
   }
-  document.title = 'Coffee Cloud · 客户运营后台';
+  document.title = tr('merchant.document.title', 'Coffee Cloud · 客户运营后台');
   const demoHints = state.demo ? adapter.demoHints() : null;
   const hintBox = demoHints ? el('div', { class: 'cc-alert cc-alert--demo', style: 'margin-bottom:16px' },
     el('span', { html: svgIcon('demo', 16), 'aria-hidden': 'true' }),
@@ -1007,23 +1025,23 @@ function renderAuth() {
     el('span', { html: svgIcon('info', 16), 'aria-hidden': 'true' }),
     el('div', { class: 'cc-alert-body' },
       el('div', { class: 'cc-alert-desc' }, policy.usernameMode
-        ? '当前注册方式：用户名注册；邮箱验证服务未开启，找回密码与邀请链接暂不可用。'
-        : '当前注册方式：邮箱注册，注册后需完成邮箱验证。')));
+        ? tr('merchant.auth.mode.username', '当前注册方式：用户名注册；邮箱验证服务未开启，找回密码与邀请链接暂不可用。')
+        : tr('merchant.auth.mode.email', '当前注册方式：邮箱注册，注册后需完成邮箱验证。'))));
 
   if (m === 'login') {
     const usernameMode = policy.usernameMode;
     const ident = usernameMode
       ? el('input', { class: 'cc-input', type: 'text', autocomplete: 'username', placeholder: '3–32 位用户名，或已注册邮箱', required: true })
       : el('input', { class: 'cc-input', type: 'email', autocomplete: 'username', placeholder: 'name@company.com', required: true });
-    const password = el('input', { class: 'cc-input', type: 'password', autocomplete: 'current-password', placeholder: '请输入密码', required: true });
+    const password = el('input', { class: 'cc-input', type: 'password', autocomplete: 'current-password', placeholder: tr('merchant.auth.passwordPlaceholder', '请输入密码'), required: true });
     const errorNode = el('p', { class: 'cc-error-text', role: 'alert' });
-    const submit = el('button', { class: 'cc-btn cc-btn--primary cc-btn--lg cc-btn--block', type: 'submit' }, '登录');
+    const submit = el('button', { class: 'cc-btn cc-btn--primary cc-btn--lg cc-btn--block', type: 'submit' }, tr('merchant.auth.login', '登录'));
     const form = el('form', {
       autocomplete: 'off', novalidate: true,
       onsubmit: async event => {
         event.preventDefault();
         errorNode.textContent = '';
-        busy(submit, '登录中…');
+        busy(submit, tr('merchant.auth.loggingIn', '登录中…'));
         try {
           const session = usernameMode
             ? await adapter.login({ username: normalizeUsername(ident.value), password: password.value })
@@ -1031,18 +1049,18 @@ function renderAuth() {
           password.value = '';
           enterShell(session);
         } catch (error) {
-          unbusy(submit, '登录');
+          unbusy(submit, tr('merchant.auth.login', '登录'));
           errorNode.textContent = describeMerchantError(error);
         }
       },
     },
-      fieldWrap(usernameMode ? '用户名或邮箱' : '邮箱', ident, { dataField: usernameMode ? 'username' : 'email', hint: usernameMode ? '已注册邮箱账号仍可用邮箱登录。' : null }),
-      passwordFieldWrap('密码', password, { dataField: 'password' }),
+      fieldWrap(usernameMode ? tr('merchant.auth.identity.usernameOrEmail', '用户名或邮箱') : tr('merchant.auth.identity.email', '邮箱'), ident, { dataField: usernameMode ? 'username' : 'email', hint: usernameMode ? '已注册邮箱账号仍可用邮箱登录。' : null }),
+      passwordFieldWrap(tr('merchant.auth.password', '密码'), password, { dataField: 'password' }),
       el('div', { class: 'cc-field', style: 'margin-top:24px' }, submit),
       errorNode);
-    const links = [{ label: '创建组织账号', href: '#/register' }];
+    const links = [{ label: tr('merchant.auth.createAccount', '创建组织账号'), href: '#/register' }];
     if (policy.mailEnabled) {
-      links.push({ label: '忘记密码', href: '#/forgot' });
+      links.push({ label: tr('merchant.auth.forgotPassword', '忘记密码'), href: '#/forgot' });
       links.push({ label: '使用邀请链接', href: '#/invite' });
       links.push({ label: '验证邮箱', href: '#/verify' });
     }
@@ -1051,7 +1069,7 @@ function renderAuth() {
         el('summary', null, el('span', { html: svgIcon('chev-right', 14), class: 'chev', 'aria-hidden': 'true' }), '会话安全说明'),
         el('div', { class: 'cc-disc-body cc-caption' }, '会话凭据由服务端 HttpOnly Cookie 保护；本页面不保存任何密码或令牌。登录失败多次后将临时限流（HTTP 429）。')),
       hintBox, form,
-      authLinkRow(links)), '登录', '使用用户名或邮箱账号登录你的组织。');
+      authLinkRow(links)), tr('merchant.auth.login', '登录'), tr('merchant.auth.loginSub', '使用用户名或邮箱账号登录你的组织。'));
     return;
   }
 
@@ -1084,7 +1102,7 @@ function renderAuth() {
           try {
             const result = await adapter.register({
               username: checkUsername.value, password: password.value,
-              displayName: displayName.value.trim(), tenantName: tenantName.value.trim(),
+              displayName: displayName.value.trim(), tenantName: tenantName.value.trim(), locale: i18n?.getLocale() || 'zh-CN',
             });
             password.value = '';
             if (result && result.status && result.status !== 'REGISTERED') {
@@ -1129,7 +1147,7 @@ function renderAuth() {
           if (!checkPassword.ok) { showFieldErrors(form, { password: checkPassword.reason }); return; }
           busy(submit, '提交中…');
           try {
-            await adapter.register({ email: email.value.trim(), password: password.value, displayName: displayName.value.trim(), tenantName: tenantName.value.trim() });
+            await adapter.register({ email: email.value.trim(), password: password.value, displayName: displayName.value.trim(), tenantName: tenantName.value.trim(), locale: i18n?.getLocale() || 'zh-CN' });
             password.value = '';
             authResultPage('注册成功，等待邮箱验证', [
               '验证邮件已发送（若邮件服务可用）。请到邮箱中点击验证链接完成验证；链接需要你在验证页面主动点击确认。',
@@ -1263,7 +1281,7 @@ function renderAuth() {
       if (!checkPassword.ok) { errorNode.textContent = checkPassword.reason; return; }
       busy(submit, '提交中…');
       try {
-        await adapter.acceptInvitation({ token: tokenInput.value.trim(), displayName: displayName.value.trim(), password: password.value });
+        await adapter.acceptInvitation({ token: tokenInput.value.trim(), displayName: displayName.value.trim(), password: password.value, locale: i18n?.getLocale() || 'zh-CN' });
         password.value = '';
         authResultPage('已接受邀请', ['你已加入组织，请使用邮箱登录。'], [{ label: '去登录', href: '#/login' }]);
       } catch (error) {
@@ -1312,6 +1330,8 @@ function renderAuthConfigError(error) {
 function applySession(session) {
   state.session = session;
   state.permissions = new Set(session.permissions || []);
+  const preferredLocale = session.user?.locale || session.tenant?.defaultLocale;
+  if (preferredLocale && i18n) i18n.setLocale(preferredLocale, { persist: true, translate: true });
   if (!state.period) state.period = rangeShortcut('last7', todayInTz(tz()));
 }
 
@@ -1360,7 +1380,7 @@ function forceLogout(message) {
 
 async function doLogout() {
   try { await adapter.logout(); } catch (_) { /* 会话可能已失效 */ }
-  forceLogout('已退出登录');
+  forceLogout(tr('merchant.auth.signOutDone', '已退出登录'));
 }
 
 async function switchOrg(membershipId) {
@@ -1403,7 +1423,7 @@ async function refreshStores() {
   }
 }
 
-function storeOptions(selectedId, { allLabel = '全部门店' } = {}) {
+function storeOptions(selectedId, { allLabel = tr('merchant.scope.allStores', '全部门店') } = {}) {
   const options = [el('option', { value: '', selected: selectedId === '' || selectedId == null }, allLabel)];
   for (const store of state.stores) {
     options.push(el('option', { value: store.id, selected: store.id === selectedId }, store.name));
@@ -1420,28 +1440,28 @@ function buildShell() {
   let groupNode = null;
   for (const def of VIEW_DEFS) {
     if (!can(def.perm)) continue;
-    if (def.group !== lastGroup) {
-      lastGroup = def.group;
+    if (viewText(def, 'group') !== lastGroup) {
+      lastGroup = viewText(def, 'group');
       groupNode = el('div', { class: 'cc-navgroup' },
-        el('div', { class: 'cc-navgroup-title' }, def.group));
+        el('div', { class: 'cc-navgroup-title' }, lastGroup));
       nav.append(groupNode);
     }
     groupNode.append(el('button', {
       class: 'cc-navitem',
       type: 'button',
-      title: def.label,
+      title: viewText(def, 'label'),
       'aria-current': state.view === def.id ? 'page' : null,
       onclick: () => { location.hash = `#/${def.id}`; },
     },
       el('span', { html: svgIcon(def.iconName, 20), class: 'n-icon', 'aria-hidden': 'true' }),
-      el('span', { class: 'cc-nav-label' }, def.label)));
+      el('span', { class: 'cc-nav-label' }, viewText(def, 'label'))));
   }
   const who = $('who');
   clearNode(who);
   if (state.session) {
     who.append(
       el('strong', null, state.session.user.displayName || accountLabel(state.session.user)),
-      el('span', null, `${ROLE_LABEL[roleNow()] || roleNow() || ''} · ${state.session.tenant.name}`));
+      el('span', null, `${roleLabel(roleNow())} · ${state.session.tenant.name}`));
   }
   buildTopUser();
   buildBottomNav();
@@ -1466,10 +1486,10 @@ function buildBottomNav() {
     onclick: () => { location.hash = `#/${def.id}`; },
   },
     el('span', { html: svgIcon(def.iconName, 20), 'aria-hidden': 'true' }),
-    el('span', null, def.label))));
+    el('span', null, viewText(def, 'label')))));
   grid.append(el('button', { type: 'button', onclick: openMoreSheet },
     el('span', { html: svgIcon('menu', 20), 'aria-hidden': 'true' }),
-    el('span', null, '更多')));
+    el('span', null, tr('merchant.nav.more', '更多'))));
   bar.append(grid);
   bar.classList.remove('hidden');
 }
@@ -1480,9 +1500,9 @@ function openMoreSheet() {
   let lastGroup = '';
   for (const def of VIEW_DEFS) {
     if (!can(def.perm)) continue;
-    if (def.group !== lastGroup) {
-      lastGroup = def.group;
-      body.append(el('div', { class: 'cc-navgroup-title', style: 'padding:8px 12px 4px' }, def.group));
+    if (viewText(def, 'group') !== lastGroup) {
+      lastGroup = viewText(def, 'group');
+      body.append(el('div', { class: 'cc-navgroup-title', style: 'padding:8px 12px 4px' }, lastGroup));
     }
     body.append(el('button', {
       class: 'cc-menu-item', type: 'button',
@@ -1490,9 +1510,9 @@ function openMoreSheet() {
       onclick: () => { modal.close(); location.hash = `#/${def.id}`; },
     },
       el('span', { html: svgIcon(def.iconName, 20), 'aria-hidden': 'true' }),
-      el('span', null, def.label)));
+      el('span', null, viewText(def, 'label'))));
   }
-  const modal = openModal({ title: '全部模块', body, size: '520' });
+  const modal = openModal({ title: tr('merchant.nav.allModules', '全部模块'), body, size: '520' });
 }
 
 /* 顶栏账号菜单（重新验证 / 撤销会话 / 退出） */
@@ -1511,12 +1531,12 @@ function buildTopUser() {
   const panel = el('div', { class: 'cc-menu', role: 'menu' },
     el('div', { class: 'cc-menu-head' },
       el('div', { class: 'cc-label' }, name),
-      el('div', { class: 'cc-caption u-mono' }, `${typeof user.username === 'string' && user.username ? user.username : accountLabel(user)} · ${ROLE_LABEL[role] || role || ''}`),
+      el('div', { class: 'cc-caption u-mono' }, `${typeof user.username === 'string' && user.username ? user.username : accountLabel(user)} · ${roleLabel(role)}`),
       typeof user.email === 'string' && user.email ? el('div', { class: 'cc-caption' }, user.email) : null),
     el('button', {
       class: 'cc-menu-item', type: 'button',
       onclick: async () => { closePopover(pop); await reauthModal(); },
-    }, el('span', { html: svgIcon('shield', 18), 'aria-hidden': 'true' }), '重新验证身份'),
+    }, el('span', { html: svgIcon('shield', 18), 'aria-hidden': 'true' }), tr('merchant.account.reauthenticate', '重新验证身份')),
     el('button', {
       class: 'cc-menu-item', type: 'button',
       onclick: async () => {
@@ -1532,12 +1552,12 @@ function buildTopUser() {
           toast(`已撤销 ${result.revokedCount} 个其他会话`, 'success');
         } catch (error) { toast(describeMerchantError(error), 'error'); }
       },
-    }, el('span', { html: svgIcon('history', 18), 'aria-hidden': 'true' }), '撤销其他会话'),
+    }, el('span', { html: svgIcon('history', 18), 'aria-hidden': 'true' }), tr('merchant.account.revokeSessions', '撤销其他会话')),
     el('div', { class: 'cc-menu-sep' }),
     el('button', {
       class: 'cc-menu-item cc-menu-item--danger', type: 'button',
       onclick: () => { closePopover(pop); doLogout(); },
-    }, el('span', { html: svgIcon('logout', 18), 'aria-hidden': 'true' }), '退出登录'));
+    }, el('span', { html: svgIcon('logout', 18), 'aria-hidden': 'true' }), tr('common.actions.logout', '退出登录')));
   const pop = attachPopover(btn, panel);
   holder.append(pop.wrap);
 }
@@ -1552,24 +1572,24 @@ function buildShellControls() {
 
   /* 组织切换 */
   const orgId = uid('org');
-  const orgSelect = el('select', { class: 'cc-select', id: orgId, 'aria-label': '当前组织' },
+  const orgSelect = el('select', { class: 'cc-select', id: orgId, 'aria-label': tr('merchant.scope.currentOrganization', '当前组织') },
     state.session.memberships.map(m => el('option', {
       value: m.id,
       selected: m.tenantId === state.session.tenant.id,
-    }, `${m.tenantName}（${ROLE_LABEL[m.role] || m.role}）`)));
+    }, `${m.tenantName} (${roleLabel(m.role)})`)));
   orgSelect.addEventListener('change', () => switchOrg(orgSelect.value));
 
   /* 门店筛选 */
   const storeId = uid('store');
-  const storeSelect = el('select', { class: 'cc-select', id: storeId, 'aria-label': '门店筛选' },
-    storeOptions(state.storeId, { allLabel: '全部门店' }));
+  const storeSelect = el('select', { class: 'cc-select', id: storeId, 'aria-label': tr('merchant.scope.storeFilter', '门店筛选') },
+    storeOptions(state.storeId));
   storeSelect.addEventListener('change', () => { state.storeId = storeSelect.value; reloadView(); });
 
   /* 日期区间（含当日的界面区间） */
   const rangeBtnLabel = () => `${state.period.from} ~ ${state.period.to}`;
   const rangeBtn = el('button', { class: 'cc-btn cc-btn--secondary cc-btn--sm', type: 'button', 'aria-expanded': 'false' }, rangeBtnLabel());
-  const fromInput = el('input', { class: 'cc-input', type: 'date', value: state.period.from, 'aria-label': '开始日期（含当日）' });
-  const toInput = el('input', { class: 'cc-input', type: 'date', value: state.period.to, 'aria-label': '结束日期（含当日）' });
+  const fromInput = el('input', { class: 'cc-input', type: 'date', value: state.period.from, 'aria-label': tr('merchant.scope.startDate', '开始日期（含当日）') });
+  const toInput = el('input', { class: 'cc-input', type: 'date', value: state.period.to, 'aria-label': tr('merchant.scope.endDate', '结束日期（含当日）') });
   const rangeError = el('p', { class: 'cc-error-text', role: 'alert' });
   const applyRange = () => {
     if (!isValidRange(fromInput.value, toInput.value)) { rangeError.textContent = '开始日期不能晚于结束日期'; return; }
@@ -1704,11 +1724,11 @@ function initCommandPalette() {
     const list = el('div', { style: 'display:grid;gap:2px;max-height:320px;overflow:auto' });
     const render = q => {
       clearNode(list);
-      const defs = VIEW_DEFS.filter(def => can(def.perm) && (!q || def.title.includes(q) || def.label.includes(q)));
+      const defs = VIEW_DEFS.filter(def => can(def.perm) && (!q || viewText(def, 'title').toLocaleLowerCase().includes(q.toLocaleLowerCase()) || viewText(def, 'label').toLocaleLowerCase().includes(q.toLocaleLowerCase())));
       defs.slice(0, 8).forEach(def => list.append(el('button', {
         class: 'cc-menu-item', type: 'button',
         onclick: () => { modal.close(); location.hash = `#/${def.id}`; },
-      }, el('span', { html: svgIcon(def.iconName, 16), 'aria-hidden': 'true' }), el('span', null, def.title))));
+      }, el('span', { html: svgIcon(def.iconName, 16), 'aria-hidden': 'true' }), el('span', null, viewText(def, 'title')))));
       if (!defs.length) list.append(el('div', { class: 'cc-empty', style: 'padding:20px' }, el('div', { class: 'cc-empty-desc' }, '无匹配模块')));
     };
     input.addEventListener('input', () => render(input.value.trim()));
@@ -1724,21 +1744,30 @@ function initCommandPalette() {
 
 /* ---------------- 路由 ---------------- */
 
+const viewDef = (id, groupKey, label, title, sub, perm, iconName, render) => ({
+  id, groupKey, label, title, sub, perm, iconName, render,
+});
 const VIEW_DEFS = [
-  { id: 'dashboard', group: '经营', label: '总览', title: '经营总览', sub: '先处理影响营业的问题，再核对收入与利润。', perm: PERM.dashboard, iconName: 'dashboard', render: renderDashboardView },
-  { id: 'orders', group: '经营', label: '订单', title: '订单', sub: '支付、制作进度与退款。', perm: PERM.ordersRead, iconName: 'orders', render: renderOrdersView },
-  { id: 'reports', group: '经营', label: '经营报表', title: '经营报表', sub: '日 / 月 / 年口径、明细与 CSV 导出。', perm: PERM.reportsRead, iconName: 'report', render: renderReportsView },
-  { id: 'devices', group: '资产', label: '我的设备', title: '我的设备', sub: '资产、运维与远程命令。', perm: PERM.devicesRead, iconName: 'device', render: renderDevicesView },
-  { id: 'stores', group: '资产', label: '门店', title: '门店', sub: '经营场所与归档。', perm: PERM.storesRead, iconName: 'store', render: renderStoresView },
-  { id: 'transfers', group: '资产', label: '设备转让', title: '设备转让', sub: '转让申请、阻断与确认。', perm: PERM.devicesTransfer, iconName: 'transfer', render: renderTransfersView },
-  { id: 'prices', group: '成本与商品', label: '商品价格', title: '商品价格', sub: '当前价与计划生效价。', perm: PERM.pricesRead, iconName: 'price', render: renderPricesView },
-  { id: 'materials', group: '成本与商品', label: '物料与库存', title: '物料、采购与库存', sub: '物料档案、采购入账、库存与出入库。', perm: PERM.inventoryRead, iconName: 'material', render: renderMaterialsView },
-  { id: 'expenses', group: '成本与商品', label: '运营费用', title: '运营费用', sub: '租金、人工、水电与维护。', perm: PERM.costsRead, iconName: 'expense', render: renderExpensesView },
-  { id: 'members', group: '组织', label: '成员权限', title: '成员权限', sub: '角色、门店范围与邀请。', perm: PERM.membersRead, iconName: 'members', render: renderMembersView },
-  { id: 'accounts', group: '组织', label: '收款账户', title: '收款账户', sub: '商户账户、校验与默认。', perm: PERM.paymentsRead, iconName: 'account', render: renderAccountsView },
-  { id: 'settings', group: '组织', label: '组织设置', title: '组织设置', sub: '名称与时区。', perm: PERM.tenantManage, iconName: 'settings', render: renderSettingsView },
-  { id: 'audit', group: '组织', label: '审计', title: '审计日志', sub: '操作者、动作与结果。', perm: PERM.auditRead, iconName: 'audit', render: renderAuditView },
+  viewDef('dashboard', 'operations', '总览', '经营总览', '先处理影响营业的问题，再核对收入与利润。', PERM.dashboard, 'dashboard', renderDashboardView),
+  viewDef('orders', 'operations', '订单', '订单', '支付、制作进度与退款。', PERM.ordersRead, 'orders', renderOrdersView),
+  viewDef('reports', 'operations', '经营报表', '经营报表', '日 / 月 / 年口径、明细与 CSV 导出。', PERM.reportsRead, 'report', renderReportsView),
+  viewDef('devices', 'assets', '我的设备', '我的设备', '资产、运维与远程命令。', PERM.devicesRead, 'device', renderDevicesView),
+  viewDef('stores', 'assets', '门店', '门店', '经营场所与归档。', PERM.storesRead, 'store', renderStoresView),
+  viewDef('transfers', 'assets', '设备转让', '设备转让', '转让申请、阻断与确认。', PERM.devicesTransfer, 'transfer', renderTransfersView),
+  viewDef('prices', 'catalog', '商品价格', '商品价格', '当前价与计划生效价。', PERM.pricesRead, 'price', renderPricesView),
+  viewDef('materials', 'catalog', '物料与库存', '物料、采购与库存', '物料档案、采购入账、库存与出入库。', PERM.inventoryRead, 'material', renderMaterialsView),
+  viewDef('expenses', 'catalog', '运营费用', '运营费用', '租金、人工、水电与维护。', PERM.costsRead, 'expense', renderExpensesView),
+  viewDef('members', 'organization', '成员权限', '成员权限', '角色、门店范围与邀请。', PERM.membersRead, 'members', renderMembersView),
+  viewDef('accounts', 'organization', '收款账户', '收款账户', '商户账户、校验与默认。', PERM.paymentsRead, 'account', renderAccountsView),
+  viewDef('settings', 'organization', '组织设置', '组织设置', '名称与时区。', PERM.tenantManage, 'settings', renderSettingsView),
+  viewDef('audit', 'organization', '审计', '审计日志', '操作者、动作与结果。', PERM.auditRead, 'audit', renderAuditView),
 ];
+const VIEW_GROUP_LABEL = { operations: '经营', assets: '资产', catalog: '成本与商品', organization: '组织' };
+
+function viewText(def, part) {
+  if (part === 'group') return tr(`merchant.nav.group.${def.groupKey}`, VIEW_GROUP_LABEL[def.groupKey] || def.groupKey);
+  return tr(`merchant.view.${def.id}.${part}`, def[part]);
+}
 
 function findViewDef(id) {
   return VIEW_DEFS.find(def => def.id === id && can(def.perm));
@@ -1756,7 +1785,7 @@ function route() {
     if (def.id !== target) { location.hash = `#/${def.id}`; return; }
   }
   state.view = def.id;
-  document.title = `Coffee Cloud · ${def.title}`;
+  document.title = `Coffee Cloud · ${viewText(def, 'title')}`;
   buildShell();
   dashboardMemo = { key: '', promise: null }; /* 新视图 / 新筛选不再复用旧总览快照 */
   const workspace = $('workspace');
@@ -4449,7 +4478,31 @@ function syncDemoTools() {
    启动
    ============================================================ */
 
+function initLocaleControl() {
+  const select = $('locale-select');
+  if (!select || !i18n) return;
+  select.value = i18n.getLocale();
+  select.addEventListener('change', async () => {
+    const locale = i18n.setLocale(select.value, { persist: true, translate: true });
+    select.value = locale;
+    if (state.session) {
+      state.session.user.locale = locale;
+      buildShell();
+      buildShellControls();
+      route();
+      if (!state.demo && typeof adapter.updatePreferences === 'function') {
+        try { await adapter.updatePreferences({ locale }); } catch (error) {
+          toast(describeMerchantError(error), 'error');
+        }
+      }
+    } else {
+      renderAuth();
+    }
+  });
+}
+
 function boot() {
+  initLocaleControl();
   if (state.demo) {
     document.body.classList.add('demo-mode');
     const banner = $('demo-banner');

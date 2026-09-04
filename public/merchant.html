@@ -4,54 +4,62 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#F6F0E5">
-  <title>Coffee Cloud · 客户运营后台</title>
+  <title data-i18n="merchant.document.title">Coffee Cloud · 客户运营后台</title>
   <link rel="stylesheet" href="shared/coffee-ui.css?v=20260903-cc15">
   <link rel="stylesheet" href="merchant.css?v=20260902-cc11">
   <script src="shared/cc-icons.js?v=20260903-cc15"></script>
 </head>
 <body class="m-body" data-shell="merchant">
-  <a class="cc-skip" href="#workspace">跳到主内容</a>
+  <a class="cc-skip" href="#workspace" data-i18n="merchant.skip">跳到主内容</a>
+
+  <label class="cc-locale-control" for="locale-select">
+    <span data-i18n="common.language.label">语言</span>
+    <select id="locale-select" class="cc-select cc-select--compact" aria-label="语言">
+      <option value="zh-CN">简体中文</option>
+      <option value="en-US">English</option>
+    </select>
+  </label>
 
   <!-- 演示模式横幅（仅 ?demo=1 时显示） -->
   <div id="demo-banner" class="cc-banner cc-banner--demo hidden" role="status" data-od-id="demo-banner"></div>
 
   <!-- 测试数据环境横幅（LIVE/TEST 切换为 TEST 时显示） -->
-  <div id="env-banner" class="cc-banner cc-banner--test hidden" role="status" data-od-id="env-banner">当前为 TEST 环境：调用真实 API 与测试数据，不产生真实资金。</div>
+  <div id="env-banner" class="cc-banner cc-banner--test hidden" role="status" data-od-id="env-banner" data-i18n="merchant.environment.testBanner">当前为 TEST 环境：调用真实 API 与测试数据，不产生真实资金。</div>
 
   <!-- 认证界面（登录 / 注册 / 找回 / 重置 / 验证 / 邀请，由 merchant.js 渲染） -->
-  <section id="auth-view" class="hidden" aria-label="账号入口" data-od-id="merchant-auth-view"></section>
+  <section id="auth-view" class="hidden" aria-label="账号入口" data-i18n-aria-label="merchant.auth.aria" data-od-id="merchant-auth-view"></section>
 
   <!-- 应用外壳（cc-shell：侧栏 + 主区） -->
   <div id="shell" class="cc-shell hidden">
-    <aside class="cc-side" id="sidebar" aria-label="主导航侧栏" data-od-id="merchant-sidebar">
+    <aside class="cc-side" id="sidebar" aria-label="主导航侧栏" data-i18n-aria-label="merchant.nav.aria" data-od-id="merchant-sidebar">
       <div class="cc-side-brand">
         <span class="cc-logo" aria-hidden="true" data-cc-icon="brand-symbol" data-size="20"></span>
         <span class="cc-brandname">Coffee Terminal <small class="cc-brand-sub">CLOUD</small></span>
       </div>
-      <nav id="side-nav" class="cc-side-nav" aria-label="主导航"></nav>
+      <nav id="side-nav" class="cc-side-nav" aria-label="主导航" data-i18n-aria-label="merchant.nav.main"></nav>
       <div class="cc-side-foot">
         <div id="who" class="m-who"></div>
-        <button id="logout-btn" class="cc-btn cc-btn--ghost cc-btn--sm" type="button">退出登录</button>
+        <button id="logout-btn" class="cc-btn cc-btn--ghost cc-btn--sm" type="button" data-i18n="common.actions.logout">退出登录</button>
       </div>
     </aside>
 
     <div class="cc-main">
       <header class="cc-top" data-od-id="merchant-topbar">
         <div class="cc-top-left">
-          <span class="cc-crumb" aria-hidden="true">商户工作台</span>
+          <span class="cc-crumb" aria-hidden="true" data-i18n="merchant.workspace">商户工作台</span>
         </div>
         <div class="cc-top-right" id="top-user"></div>
       </header>
       <div class="cc-content">
         <!-- 全局范围条（组织 / 门店 / 日期 / 数据环境），由 merchant.js 填充 -->
-        <div id="top-controls" class="cc-scopebar hidden" role="group" aria-label="数据范围" data-od-id="context-scope"></div>
+        <div id="top-controls" class="cc-scopebar hidden" role="group" aria-label="数据范围" data-i18n-aria-label="merchant.scope.aria" data-od-id="context-scope"></div>
         <main id="workspace" class="m-workspace" tabindex="-1" data-od-id="merchant-workspace"></main>
       </div>
     </div>
   </div>
 
   <!-- 移动端底部导航（由 merchant.js 按权限填充；桌面端由 CSS 隐藏） -->
-  <nav id="bottom-nav" class="cc-bottomnav hidden" aria-label="移动端快捷导航"></nav>
+  <nav id="bottom-nav" class="cc-bottomnav hidden" aria-label="移动端快捷导航" data-i18n-aria-label="merchant.nav.mobile"></nav>
 
   <!-- 演示工具（仅 ?demo=1 时显示，浮动按钮 + 面板） -->
   <div id="demo-tools" class="hidden" aria-label="演示工具"></div>
@@ -60,6 +68,11 @@
   <div id="drawer-root" class="hidden" aria-hidden="true"></div>
   <div id="modal-root" class="cc-overlay hidden" aria-hidden="true"></div>
 
-  <script type="module" src="/assets/merchant.js?v=20260903-cc14"></script>
+  <script src="/assets/shared/i18n.js?v=20260904-i18n1"></script>
+  <script src="/assets/locales/common/zh-CN.js?v=20260904-i18n1"></script>
+  <script src="/assets/locales/common/en-US.js?v=20260904-i18n1"></script>
+  <script src="/assets/locales/merchant/zh-CN.js?v=20260904-i18n1"></script>
+  <script src="/assets/locales/merchant/en-US.js?v=20260904-i18n1"></script>
+  <script type="module" src="/assets/merchant.js?v=20260904-i18n1"></script>
 </body>
 </html>
