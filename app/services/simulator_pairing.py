@@ -203,6 +203,7 @@ class SimulatorPairingService:
                 "deviceName": terminal.get("device_name"),
                 "storeName": terminal.get("store_name"),
                 "storeId": terminal.get("store_id"),
+                "uiLocale": terminal.get("ui_locale") or "zh-CN",
             },
             "mqttCredential": self.device_identity.issue_mqtt_credential(terminal),
         }

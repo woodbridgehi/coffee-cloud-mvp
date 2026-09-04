@@ -2,13 +2,14 @@ SCHEMA = """
 create table merchant_tenant (
  id uuid primary key default gen_random_uuid(), name text not null,
  status text not null default 'ACTIVE' check(status in ('ACTIVE','SUSPENDED')),
- timezone text not null default 'Asia/Shanghai', environment text not null default 'LIVE'
+ timezone text not null default 'Asia/Shanghai', default_locale text not null default 'zh-CN',
+ environment text not null default 'LIVE'
  check(environment in ('LIVE','INTERNAL_TEST')), version integer not null default 1,
  created_at timestamptz not null default now()
 );
 create table merchant_user (
  id uuid primary key default gen_random_uuid(), email text not null unique,
- display_name text not null, password_hash text not null,
+ display_name text not null, password_hash text not null, locale text not null default 'zh-CN',
  status text not null default 'ACTIVE' check(status in ('ACTIVE','SUSPENDED')),
  verified_at timestamptz, created_at timestamptz not null default now()
 );

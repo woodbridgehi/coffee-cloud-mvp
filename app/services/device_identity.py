@@ -152,6 +152,7 @@ class DeviceIdentityService:
             "deviceName": terminal.get("device_name"), "storeId": terminal.get("store_id"),
             "storeName": terminal.get("store_name"), "storeDescription": terminal.get("store_description"),
             "cityCode": terminal.get("city_code"), "timezone": terminal.get("timezone"),
+            "uiLocale": terminal.get("ui_locale") or "zh-CN",
             "source": terminal.get("profile_source"),
         }
 

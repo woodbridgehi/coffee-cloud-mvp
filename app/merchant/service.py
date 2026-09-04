@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from psycopg import sql
 from psycopg.types.json import Jsonb
 
+from ..locales import DEFAULT_LOCALE, SUPPORTED_LOCALES, normalize_locale
 from .security import MerchantError, PERMISSIONS, cipher, hash_password, token_hash, verify_password
 
 
@@ -49,6 +50,13 @@ def identifier(value: Any) -> uuid.UUID:
         raise MerchantError(404, 'NOT_FOUND', '资源不存在或无访问权限') from None
 
 
+def locale_field(value: Any, default: str = DEFAULT_LOCALE) -> str:
+    try:
+        return normalize_locale(value, default=default)
+    except ValueError:
+        raise MerchantError(422, 'INVALID_LOCALE', '不支持的界面语言', {'locale': '请选择受支持的语言'}) from None
+
+
 class MerchantService:
     def __init__(self, database, settings):
         self.database, self.settings = database, settings
@@ -71,7 +79,8 @@ class MerchantService:
                 'usernamePattern': '^[a-z][a-z0-9_.-]{2,31}$',
                 'mailEnabled': bool(self.settings.merchant_smtp_host and self.settings.merchant_mail_from
                                     and not self.settings.merchant_limited_release),
-                'limitedRelease': self.settings.merchant_limited_release}
+                'limitedRelease': self.settings.merchant_limited_release,
+                'defaultLocale': DEFAULT_LOCALE, 'supportedLocales': list(SUPPORTED_LOCALES)}
 
     def permissions(self, role):
         permissions = set(PERMISSIONS[role])
@@ -136,12 +145,13 @@ class MerchantService:
         self.mail_ready()
         display = text_field(data, 'displayName')
         tenant_name = text_field(data, 'tenantName')
+        user_locale = locale_field(data.get('locale'))
         password = hash_password(data.get('password', ''))
         with self.database.connect() as c:
-            user = c.execute("""insert into merchant_user(email,display_name,password_hash)
-                values(%s,%s,%s) on conflict(email) do nothing returning id""", (email, display, password)).fetchone()
+            user = c.execute("""insert into merchant_user(email,display_name,password_hash,locale)
+                values(%s,%s,%s,%s) on conflict(email) do nothing returning id""", (email, display, password, user_locale)).fetchone()
             if user:
-                self._action(c, 'VERIFY', user['id'], email, {'tenantName': tenant_name})
+                self._action(c, 'VERIFY', user['id'], email, {'tenantName': tenant_name, 'defaultLocale': user_locale})
         return {'status': 'VERIFICATION_PENDING'}
 
     def register_username(self, data: dict, remote: str):
@@ -149,13 +159,14 @@ class MerchantService:
         self.rate_limit('register', remote, name)
         display = text_field(data, 'displayName')
         tenant_name = text_field(data, 'tenantName')
+        user_locale = locale_field(data.get('locale'))
         password = hash_password(data.get('password', ''))
         with self.database.connect() as c:
-            user = c.execute('''insert into merchant_user(username,display_name,password_hash)
-                values(%s,%s,%s) on conflict(username) do nothing returning id''', (name, display, password)).fetchone()
+            user = c.execute('''insert into merchant_user(username,display_name,password_hash,locale)
+                values(%s,%s,%s,%s) on conflict(username) do nothing returning id''', (name, display, password, user_locale)).fetchone()
             if not user:
                 raise MerchantError(409, 'USERNAME_TAKEN', '用户名已被使用，请更换', {'username': '用户名已被使用'})
-            tenant = c.execute('insert into merchant_tenant(name) values(%s) returning id', (tenant_name,)).fetchone()
+            tenant = c.execute('insert into merchant_tenant(name,default_locale) values(%s,%s) returning id', (tenant_name, user_locale)).fetchone()
             c.execute("insert into merchant_member(tenant_id,user_id,role) values(%s,%s,'OWNER')", (tenant['id'], user['id']))
             self.audit(c, {'tenant_id': tenant['id'], 'user_id': user['id'], 'display_name': display},
                        'account.register', 'tenant', tenant_name, '')
@@ -169,8 +180,8 @@ class MerchantService:
             user = c.execute('select * from merchant_user where id=%s for update', (action['user_id'],)).fetchone()
             if not user or user['verified_at']:
                 raise MerchantError(409, 'TOKEN_INVALID', '链接无效或已经使用')
-            tenant = c.execute('insert into merchant_tenant(name) values(%s) returning id',
-                               (action['payload']['tenantName'],)).fetchone()
+            tenant = c.execute('insert into merchant_tenant(name,default_locale) values(%s,%s) returning id',
+                               (action['payload']['tenantName'], action['payload'].get('defaultLocale', DEFAULT_LOCALE))).fetchone()
             c.execute("insert into merchant_member(tenant_id,user_id,role) values(%s,%s,'OWNER')", (tenant['id'], user['id']))
             c.execute('update merchant_user set verified_at=now() where id=%s', (user['id'],))
         return {'status': 'VERIFIED'}
@@ -222,8 +233,8 @@ class MerchantService:
         if not token or len(token) > 128:
             raise MerchantError(401, 'SESSION_INVALID', '请先登录')
         row = c.execute("""select s.id as session_id,s.csrf_token,s.reauthenticated_at,u.id as user_id,
-            u.email,u.username,u.display_name,m.id as member_id,m.tenant_id,m.role,m.store_scope,m.version as member_version,
-            t.name as tenant_name,t.timezone,t.environment,t.version as tenant_version
+            u.email,u.username,u.display_name,u.locale as user_locale,m.id as member_id,m.tenant_id,m.role,m.store_scope,m.version as member_version,
+            t.name as tenant_name,t.timezone,t.default_locale,t.environment,t.version as tenant_version
             from merchant_session s join merchant_user u on u.id=s.user_id
             join merchant_member m on m.id=s.member_id and m.user_id=u.id
             join merchant_tenant t on t.id=m.tenant_id
@@ -238,11 +249,14 @@ class MerchantService:
         memberships = c.execute("""select m.id,m.tenant_id,m.role,t.name from merchant_member m
             join merchant_tenant t on t.id=m.tenant_id where m.user_id=%s
             and m.status='ACTIVE' and t.status='ACTIVE' order by t.name,m.id""", (p['user_id'],)).fetchall()
-        return {'user': {'id': str(p['user_id']), 'email': p['email'], 'username': p['username'], 'displayName': p['display_name']},
-                'tenant': {'id': str(p['tenant_id']), 'name': p['tenant_name'], 'timezone': p['timezone'], 'environment': p['environment']},
+        return {'user': {'id': str(p['user_id']), 'email': p['email'], 'username': p['username'], 'displayName': p['display_name'],
+                         'locale': p['user_locale']},
+                'tenant': {'id': str(p['tenant_id']), 'name': p['tenant_name'], 'timezone': p['timezone'],
+                           'defaultLocale': p['default_locale'], 'environment': p['environment']},
                 'membershipId': str(p['member_id']),
                 'memberships': [{'id': str(m['id']), 'tenantId': str(m['tenant_id']), 'tenantName': m['name'], 'role': m['role']} for m in memberships],
-                'permissions': sorted(self.permissions(p['role'])), 'storeScope': p['store_scope'], 'csrfToken': p['csrf_token']}
+                'permissions': sorted(self.permissions(p['role'])), 'storeScope': p['store_scope'], 'csrfToken': p['csrf_token'],
+                'supportedLocales': list(SUPPORTED_LOCALES)}
 
     @contextmanager
     def identity(self, token, permission=None, *, csrf=None, sensitive=False):
@@ -284,6 +298,14 @@ class MerchantService:
     def session(self, token):
         with self.identity(token) as (c, p):
             return self._session_payload(c, p)
+
+    def preferences(self, token, data=None, csrf=None):
+        with self.identity(token, csrf=csrf) as (c, p):
+            if data is not None:
+                selected = locale_field(data.get('locale'), p['user_locale'])
+                c.execute('update merchant_user set locale=%s where id=%s', (selected, p['user_id']))
+            row = c.execute('select locale from merchant_user where id=%s', (p['user_id'],)).fetchone()
+            return {'locale': row['locale'], 'supportedLocales': list(SUPPORTED_LOCALES)}
 
     def switch_tenant(self, token, data, csrf):
         with self.identity(token, csrf=csrf) as (c, p):
@@ -395,10 +417,13 @@ class MerchantService:
                 # Timezone changes require an explicit accounting migration.
                 if tz != p['timezone']:
                     raise MerchantError(409, 'TIMEZONE_LOCKED', '时区变更需要平台确认账期迁移')
-                c.execute('update merchant_tenant set name=%s,version=version+1 where id=%s', (text_field(data, 'name'), p['tenant_id']))
+                default_locale = locale_field(data.get('defaultLocale'), p['default_locale'])
+                c.execute('update merchant_tenant set name=%s,default_locale=%s,version=version+1 where id=%s',
+                          (text_field(data, 'name'), default_locale, p['tenant_id']))
                 self.audit(c, p, 'tenant.update', 'tenant', text_field(data, 'name'), request_id)
             row = c.execute('select * from merchant_tenant where id=%s', (p['tenant_id'],)).fetchone()
-            return {'id': str(row['id']), 'name': row['name'], 'timezone': row['timezone'], 'environment': row['environment'], 'version': row['version']}
+            return {'id': str(row['id']), 'name': row['name'], 'timezone': row['timezone'],
+                    'defaultLocale': row['default_locale'], 'environment': row['environment'], 'version': row['version']}
 
     def members(self, token):
         with self.identity(token, 'members.read') as (c, p):
@@ -495,8 +520,9 @@ class MerchantService:
                 if p['user_id'] != user['id'] or not csrf or not secrets.compare_digest(p['csrf_token'], csrf):
                     raise MerchantError(403, 'INVITATION_ACCOUNT_MISMATCH', '请使用受邀邮箱对应账号登录后接受邀请')
             else:
-                user = c.execute("""insert into merchant_user(email,display_name,password_hash,verified_at)
-                    values(%s,%s,%s,now()) returning *""", (inv['email'], text_field(data, 'displayName'), hash_password(data.get('password', '')))).fetchone()
+                user = c.execute("""insert into merchant_user(email,display_name,password_hash,verified_at,locale)
+                    values(%s,%s,%s,now(),%s) returning *""", (inv['email'], text_field(data, 'displayName'),
+                    hash_password(data.get('password', '')), locale_field(data.get('locale')))).fetchone()
             inserted = c.execute("""insert into merchant_member(tenant_id,user_id,role,store_scope)
                 values(%s,%s,%s,%s) on conflict(tenant_id,user_id) do nothing returning id""",
                 (inv['tenant_id'], user['id'], inv['role'], Jsonb(inv['store_scope']))).fetchone()

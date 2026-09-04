@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 
 from psycopg.types.json import Jsonb
 
+from ..locales import normalize_locale
 from ..protocol import canonical_digest, CommandCreateRequest
 from ..repositories import CommandRepository
 from ..services.commands import CommandService
@@ -56,7 +57,8 @@ class MerchantAssets:
         result = {'id': str(row['id']), 'deviceId': row['device_id'], 'serialNumber': row['serial_number'],
                   'name': row.get('device_name') or row['device_id'], 'storeId': str(row['merchant_store_id']) if row['merchant_store_id'] else None,
                   'storeName': store['name'] if store else '未分配门店', 'lifecycle': 'ARCHIVED' if row['lifecycle_status']=='RETIRED' else row['lifecycle_status'],
-                  'online': online, 'lastSeenAt': row['last_seen_at'], 'provisioningStatus': row.get('provisioning_status', 'LEGACY'),
+                  'online': online, 'lastSeenAt': row['last_seen_at'], 'uiLocale': row.get('ui_locale') or p.get('default_locale', 'zh-CN'),
+                  'provisioningStatus': row.get('provisioning_status', 'LEGACY'),
                   'deviceIdentityKind': row.get('device_identity_kind'), 'ownershipVersion': row['ownership_version'],
                   'version': row['merchant_version'], 'allowedActions': actions}
         if detail:
@@ -151,13 +153,17 @@ class MerchantAssets:
                     raise MerchantError(409, 'PAIRING_INVALID' if pairing else 'CLAIM_INVALID', '设备已分配或有未处理业务，请联系平台')
                 store = self.store(c, p, data.get('storeId'))
                 c.execute('update merchant_device_ownership set valid_until=now() where terminal_id=%s and valid_until is null', (device['id'],))
-                row = c.execute("""update terminal set tenant_id=%s,merchant_store_id=%s,device_name=%s,
+                try:
+                    ui_locale = normalize_locale(data.get('uiLocale'), default=p.get('default_locale', 'zh-CN'))
+                except ValueError:
+                    raise MerchantError(422, 'INVALID_LOCALE', '不支持的设备界面语言') from None
+                row = c.execute("""update terminal set tenant_id=%s,merchant_store_id=%s,device_name=%s,ui_locale=%s,
                     store_name=coalesce(store_name,%s),profile_source=coalesce(profile_source,%s),
                     profile_completed_at=coalesce(profile_completed_at,now()),
                     provisioning_status=case when %s then 'CLAIMED_PENDING_PROVISION' else provisioning_status end,
                     ownership_version=ownership_version+1,merchant_version=merchant_version+1,updated_at=now()
                     where id=%s returning *""",
-                    (p['tenant_id'], store['id'], text_field(data, 'name'), store['name'],
+                    (p['tenant_id'], store['id'], text_field(data, 'name'), ui_locale, store['name'],
                      'MERCHANT_PAIRING' if pairing else 'MERCHANT_CLAIM', pairing, device['id'])).fetchone()
                 c.execute('insert into merchant_device_ownership(terminal_id,tenant_id,store_id,version) values(%s,%s,%s,%s)', (row['id'], p['tenant_id'], store['id'], row['ownership_version']))
                 if pairing:
@@ -184,8 +190,14 @@ class MerchantAssets:
                 row = c.execute('update terminal set lifecycle_status=%s,merchant_version=merchant_version+1,updated_at=now() where id=%s returning *',(status,row['id'])).fetchone()
             else:
                 store = self.store(c,p,data.get('storeId'))
-                row = c.execute('update terminal set device_name=%s,merchant_store_id=%s,merchant_version=merchant_version+1,updated_at=now() where id=%s returning *',
-                                (text_field(data,'name'),store['id'],row['id'])).fetchone()
+                try:
+                    ui_locale = normalize_locale(
+                        data.get('uiLocale'), default=row.get('ui_locale') or p.get('default_locale', 'zh-CN')
+                    )
+                except ValueError:
+                    raise MerchantError(422, 'INVALID_LOCALE', '不支持的设备界面语言') from None
+                row = c.execute('update terminal set device_name=%s,merchant_store_id=%s,ui_locale=%s,merchant_version=merchant_version+1,updated_at=now() where id=%s returning *',
+                                (text_field(data,'name'),store['id'],ui_locale,row['id'])).fetchone()
             self.service.audit(c,p,'device.lifecycle' if lifecycle else 'device.update','device',row['device_id'],request_id)
             return self.payload(c,p,row)
 

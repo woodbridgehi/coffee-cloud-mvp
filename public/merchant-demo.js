@@ -475,6 +475,8 @@ export function createDemoAdapter() {
         usernamePattern: '^[a-z][a-z0-9_.-]{2,31}$',
         mailEnabled: true,
         limitedRelease: true,
+        defaultLocale: 'zh-CN',
+        supportedLocales: ['zh-CN', 'en-US'],
       };
     },
     async register(body) {

@@ -295,6 +295,8 @@ test('demo：authConfig 返回 EMAIL 演示配置，与真实适配器同形', a
   assert.equal(cfg.passwordMaxLength, 128);
   assert.ok(cfg.usernamePattern.length > 0);
   assert.equal(typeof cfg.limitedRelease, 'boolean');
+  assert.deepEqual(cfg.supportedLocales, ['zh-CN', 'en-US']);
+  assert.equal(cfg.defaultLocale, 'zh-CN');
 });
 
 

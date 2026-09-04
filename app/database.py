@@ -610,6 +610,11 @@ MIGRATIONS: tuple[tuple[int, str, str], ...] = (
         create index if not exists ix_device_pairing_session_pending
             on device_pairing_session(status, expires_at);
     """),
+    (20, "locale-preferences", """
+        alter table merchant_user add column if not exists locale text not null default 'zh-CN';
+        alter table merchant_tenant add column if not exists default_locale text not null default 'zh-CN';
+        alter table terminal add column if not exists ui_locale text not null default 'zh-CN';
+    """),
 )
 
 

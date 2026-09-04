@@ -75,6 +75,14 @@ def create_router(service):
     def session(request: Request):
         return result(service.session(token(request)))
 
+    @router.get('/preferences')
+    def preferences(request: Request):
+        return result(service.preferences(token(request)))
+
+    @router.patch('/preferences')
+    def update_preferences(request: Request, data: dict = Body(...)):
+        return result(service.preferences(token(request), data, csrf(request)))
+
     @router.post('/session/tenant')
     def switch(request: Request, data: dict = Body(...)):
         return result(service.switch_tenant(token(request), data, csrf(request)))

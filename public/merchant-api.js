@@ -169,6 +169,8 @@ export function createRealAdapter() {
     async revokeOtherSessions() { return (await json('/auth/revoke-other-sessions', { method: 'POST', body: {} })).data; },
     async reauthenticate(body) { return (await json('/auth/reauthenticate', { method: 'POST', body })).data; },
     async getSession() { return (await json('/session')).data; },
+    async getPreferences() { return (await json('/preferences')).data; },
+    async updatePreferences(body) { return (await json('/preferences', { method: 'PATCH', body })).data; },
     async switchTenant(membershipId) { return (await json('/session/tenant', { method: 'POST', body: { membershipId } })).data; },
 
     /* ---- 总览 ---- */
