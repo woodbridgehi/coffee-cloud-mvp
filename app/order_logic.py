@@ -82,6 +82,7 @@ def public_menu(
         "storeId": terminal.get("store_id"),
         "online": online,
         "deviceStatus": (terminal.get("reported_status") or {}).get("deviceStatus", "UNKNOWN"),
+        "uiLocale": terminal.get("ui_locale") or "zh-CN",
         "salesEnabled": online and device_ready and any(item["available"] for item in products),
         "paymentMode": payment_mode,
         "products": products,

@@ -37,6 +37,15 @@ const context = vm.createContext({
   clearInterval() {},
   alert() {},
 });
+for (const file of [
+  '../public/shared/i18n.js',
+  '../public/locales/common/zh-CN.js',
+  '../public/locales/common/en-US.js',
+  '../public/locales/order/zh-CN.js',
+  '../public/locales/order/en-US.js',
+]) {
+  vm.runInContext(fs.readFileSync(new URL(file, import.meta.url), 'utf8'), context);
+}
 const source = fs.readFileSync(new URL('../public/order.js', import.meta.url), 'utf8');
 vm.runInContext(source, context);
 
@@ -148,4 +157,22 @@ test('mobile payment waiting view renders prominent direct payment button', () =
   assert.match(app.innerHTML, /打开支付宝付款/);
   assert.match(app.innerHTML, /btn-alipay-cta/);
   assert.match(app.innerHTML, /二维码加载后保持不变/);
+});
+
+test('English locale renders the customer menu and status without changing order data', () => {
+  context.CoffeeI18n.setLocale('en-US', { translate: false });
+  context.renderMenu({
+    deviceId: 'coffee-bot-test', online: true, paymentMode: 'TEST_FREE', salesEnabled: true,
+    products: [{ recipeId: 'latte', name: 'Store Latte', available: true, priceMinor: 1800 }],
+  });
+  assert.match(app.innerHTML, /Today's menu/);
+  assert.match(app.innerHTML, /Choose a drink/);
+  context.renderOrder({
+    orderNo: 'QA-READY-EN', status: 'READY', paymentMode: 'TEST_FREE', deviceId: 'coffee-bot-test',
+    totalAmountMinor: 1800, currency: 'CNY', product: { name: 'Store Latte' },
+    production: { overallProgress: 1, plannedDurationSeconds: 10 },
+  });
+  assert.match(app.innerHTML, /Ready for pickup/);
+  assert.match(app.innerHTML, /PICKUP CODE/);
+  assert.match(app.innerHTML, /Store Latte/);
 });

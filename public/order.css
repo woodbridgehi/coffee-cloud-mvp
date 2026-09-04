@@ -93,6 +93,12 @@ img { max-width: 100%; }
 .db-pill .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
 .db-pill.warn { color: var(--warning-deep); background: var(--warning-subtle); }
 .db-pill.idle { color: var(--muted); background: var(--cc-disabled-bg); }
+.order-language { display: inline-flex; align-items: center; flex: none; }
+.order-language select {
+  min-height: 34px; max-width: 118px; padding: 4px 26px 4px 9px;
+  border: 1px solid var(--divider); border-radius: 999px;
+  color: var(--ink); background: var(--surface); font: inherit; font-size: 12px;
+}
 
 /* ---------- 主区 ---------- */
 

@@ -58,3 +58,20 @@ test('locale-aware formatters preserve minor currency units and Gregorian Thai d
   i18n.configure({ enabledLocales: ['th-TH', 'zh-CN'], initialLocale: 'th-TH', translate: false });
   assert.match(i18n.formatDateTime('2026-09-04T00:00:00Z', { timeZone: 'UTC' }), /2026/);
 });
+
+function catalogKeys(relativePath) {
+  const catalog = readFileSync(new URL(relativePath, import.meta.url), 'utf8');
+  return [...catalog.matchAll(/'([^']+)'\s*:/g)].map(match => match[1]).sort();
+}
+
+test('Chinese and English catalogs keep identical keys', () => {
+  assert.deepEqual(catalogKeys('../public/locales/common/zh-CN.js'), catalogKeys('../public/locales/common/en-US.js'));
+  assert.deepEqual(catalogKeys('../public/locales/order/zh-CN.js'), catalogKeys('../public/locales/order/en-US.js'));
+});
+
+test('customer order code contains no user-facing hardcoded Chinese outside comments', () => {
+  const orderSource = readFileSync(new URL('../public/order.js', import.meta.url), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/.*$/gm, '');
+  assert.doesNotMatch(orderSource, /[\u3400-\u9fff]/);
+});

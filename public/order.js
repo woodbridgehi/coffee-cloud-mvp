@@ -16,6 +16,14 @@
 const app = document.getElementById('app');
 const qs = new URLSearchParams(location.search);
 const deviceId = qs.get('device_id') || '';
+const i18n = globalThis.CoffeeI18n;
+const t = (key, params, options) => i18n.t(key, params, options);
+i18n.configure({
+  storageKey: 'coffee-order.locale',
+  initialLocale: qs.get('lang'),
+  enabledLocales: ['zh-CN', 'en-US'],
+  fallbackLocale: 'zh-CN',
+});
 
 const PAYMENT_QR_REFRESH_MS = 20000;  // 二维码加载失败后的最短重试间隔
 
@@ -86,7 +94,7 @@ function saveActiveOrder(order, token, targetDeviceId) {
     token,
     deviceId: dId,
     status: order.status,
-    productName: order.product?.name || '咖啡饮品',
+    productName: order.product?.name || t('order.product.generic'),
     pickupCode: pickupCodeFor(order),
     totalAmountMinor: order.totalAmountMinor,
     currency: order.currency,
@@ -141,7 +149,7 @@ async function request(path, options = {}) {
   let data = {};
   try { data = await response.json(); } catch (_) { /* 非 JSON 响应 */ }
   if (!response.ok) {
-    const detail = typeof data.detail === 'string' ? data.detail : (data.detail?.code || '请求失败');
+    const detail = typeof data.detail === 'string' ? data.detail : (data.detail?.code || t('order.error.request'));
     throw new Error(detail);
   }
   return data;
@@ -157,33 +165,23 @@ function duration(product) {
   const range = product.durationRangeSeconds || {};
   const min = Math.max(1, Math.ceil((range.min || product.estimatedDurationSeconds || 60) / 60));
   const max = Math.max(min, Math.ceil((range.max || product.estimatedDurationSeconds || 60) / 60));
-  return min === max ? `${min} 分钟` : `${min}–${max} 分钟`;
+  return min === max ? t('order.duration.single', { minutes: min }) : t('order.duration.range', { min, max });
 }
 
 function statusText(reason) {
-  return ({
-    DEVICE_OFFLINE: '设备离线', DEVICE_NOT_ACTIVE: '设备未启用',
-    MATERIAL_INSUFFICIENT: '原料不足', DISABLED: '暂停售卖', LOW_STOCK: '余量不足',
-  })[reason] || '暂不可售';
+  return t(`order.availability.${reason}`, {}, { defaultValue: t('order.availability.unknown') });
 }
 
 function money(item) {
   const minor = item.priceMinor ?? item.totalAmountMinor;
   if ((typeof minor !== 'number' && typeof minor !== 'string') ||
       (typeof minor === 'string' && minor.trim() === '') || !Number.isSafeInteger(Number(minor))) return '—';
-  const amount = (Number(minor) / 100).toFixed(2);
   const currency = item.currency || 'CNY';
-  return currency === 'CNY' ? `¥${amount}` : `${amount} ${esc(currency)}`;
+  return i18n.formatMoney(Number(minor), currency);
 }
 
 function orderLabel(status) {
-  return ({
-    CREATED: '订单已创建', AWAITING_PAYMENT: '等待付款', PAID: '支付成功，正在排队',
-    QUEUED: '已进入制作队列', DISPATCHED: '正在连接咖啡机器人', ACCEPTED: '设备已预留原料',
-    MAKING: '咖啡正在制作', HOLD: '设备结果待确认', READY: '制作完成，请取杯',
-    FAILED: '本次制作未完成', REFUNDED: '退款已完成', CANCELLED: '订单已取消',
-    EXPIRED: '制作指令已超时',
-  })[status] || status;
+  return t(`order.status.${status}`, {}, { defaultValue: status });
 }
 
 /* ---------- 品牌与图形 ---------- */
@@ -199,10 +197,25 @@ function baseHeader(pillClass, pillText, sub) {
     <span class="db-logo" aria-hidden="true">${brandCoffeeSvg}</span>
     <div class="db-info">
       <strong>Woodbridge Coffee</strong>
-      <span class="db-sub">${sub ? sub : 'Robot Coffee · 扫码下单'}</span>
+      <span class="db-sub">${sub ? sub : t('order.header.default')}</span>
     </div>
+    <label class="order-language">
+      <select id="order-language" aria-label="${esc(t('common.language.label'))}">
+        <option value="zh-CN" ${i18n.getLocale() === 'zh-CN' ? 'selected' : ''}>${esc(t('common.locale.zh-CN'))}</option>
+        <option value="en-US" ${i18n.getLocale() === 'en-US' ? 'selected' : ''}>${esc(t('common.locale.en-US'))}</option>
+      </select>
+    </label>
     <span class="db-pill ${pillClass}"><span class="dot" aria-hidden="true"></span><span class="lp-text">${esc(pillText)}</span></span>
   </header>`;
+}
+
+if (typeof document.addEventListener === 'function') {
+  document.addEventListener('change', event => {
+    if (event.target?.id !== 'order-language') return;
+    i18n.setLocale(event.target.value);
+    if (location.pathname === '/order/status') loadOrder();
+    else renderMenu();
+  });
 }
 
 /* 杯型 SVG：按设备上报的 visual.profile 绘制，富有层次与微质感 */
@@ -320,21 +333,21 @@ function toast(message, kind = 'info') {
 
 async function loadMenu() {
   if (!deviceId) {
-    renderError('二维码缺少设备标识，请重新扫描终端屏幕上的二维码。');
+    renderError(t('order.error.deviceMissing'));
     return;
   }
   try {
     menu = await request(`/api/v1/public/devices/${encodeURIComponent(deviceId)}/menu`);
     renderMenu();
   } catch (error) {
-    renderError(`无法读取设备菜单：${error.message}`);
+    renderError(t('order.error.menu', { message: error.message }));
   }
 }
 
 function renderMenu(menuData) {
   if (menuData) menu = menuData;
   if (!menu) return;
-  document.title = 'Woodbridge Coffee · 选择饮品';
+  document.title = t('order.title.menu');
   const online = menu.paymentMode === 'ONLINE';
   const available = (menu.products || []).filter(p => p.available);
   const totalRemaining = available.reduce((sum, p) => sum + (p.remainingServings || 0), 0);
@@ -342,60 +355,59 @@ function renderMenu(menuData) {
   const targetDeviceId = (menu && (menu.deviceId || menu.storeId)) || deviceId;
   const activeOrder = getActiveOrder(targetDeviceId);
   const activeBannerHtml = activeOrder ? `
-    <aside class="active-order-banner" aria-label="正在进行的订单">
+    <aside class="active-order-banner" aria-label="${esc(t('order.active.aria'))}">
       <div class="aob-main">
         <div class="aob-header">
           <span class="aob-pulse-dot" aria-hidden="true"></span>
-          <span class="aob-tag">进行中订单 · 取杯口令</span>
+          <span class="aob-tag">${t('order.active.label')}</span>
         </div>
-        <strong class="aob-code">${esc(activeOrder.pickupCode || '核验中')}</strong>
-        <span class="aob-sub">${esc(activeOrder.productName || '咖啡饮品')} · ${orderLabel(activeOrder.status)}</span>
+        <strong class="aob-code">${esc(activeOrder.pickupCode || t('order.active.verifying'))}</strong>
+        <span class="aob-sub">${esc(activeOrder.productName || t('order.product.generic'))} · ${orderLabel(activeOrder.status)}</span>
       </div>
-      <a class="aob-btn" href="/order/status#order=${encodeURIComponent(activeOrder.orderId)}&token=${encodeURIComponent(activeOrder.token)}">查看进度 →</a>
+      <a class="aob-btn" href="/order/status#order=${encodeURIComponent(activeOrder.orderId)}&token=${encodeURIComponent(activeOrder.token)}">${t('order.active.view')}</a>
     </aside>` : '';
 
   app.innerHTML = `
-    ${baseHeader(menu.online ? '' : 'warn', menu.online ? '设备在线' : '设备离线', esc(menu.storeId || menu.deviceId || ''))}
+    ${baseHeader(menu.online ? '' : 'warn', menu.online ? t('order.header.online') : t('order.header.offline'), esc(menu.storeId || menu.deviceId || ''))}
     <main class="page-main has-checkout">
       ${activeBannerHtml}
       <section class="hero">
-        <div class="hero-kicker">今日菜单</div>
-        <h1>现在，来一杯<br>机器人现磨咖啡</h1>
-        <p class="hero-sub">饮品、余量与时长由设备实时上报，云端逐单确认。</p>
+        <div class="hero-kicker">${t('order.menu.kicker')}</div>
+        <h1>${t('order.menu.title')}</h1>
+        <p class="hero-sub">${t('order.menu.subtitle')}</p>
       </section>
-      <section class="machine-card" aria-label="设备状态">
+      <section class="machine-card" aria-label="${esc(t('order.menu.machineAria'))}">
         <div class="machine-meta">
           <span class="status-dot ${menu.online ? 'online' : ''}" aria-hidden="true"></span>
           <div>
-            <strong>${menu.online ? '设备在线 · 可以下单' : '设备离线 · 暂停接单'}</strong>
-            <small>设备状态 ${esc(menu.deviceStatus || 'UNKNOWN')}</small>
+            <strong>${menu.online ? t('order.menu.online') : t('order.menu.offline')}</strong>
+            <small>${t('order.menu.deviceStatus', { status: esc(menu.deviceStatus || 'UNKNOWN') })}</small>
           </div>
         </div>
         <div class="stock-summary">
           <strong>${totalRemaining}</strong>
-          <small>预计可售杯数*</small>
+          <small>${t('order.menu.estimatedCups')}</small>
         </div>
       </section>
       <div class="section-title">
-        <h2>今日可售</h2>
-        <span>${menu.materialAlertCount ? '有物料待补充' : '共享原料状态正常'}</span>
+        <h2>${t('order.menu.available')}</h2>
+        <span>${menu.materialAlertCount ? t('order.menu.materialAlert') : t('order.menu.materialOk')}</span>
       </div>
       ${menu.products.length ? `<section class="drink-list">${menu.products.map(card).join('')}</section>`
-        : `<section class="center-state" style="min-height:32vh"><p>设备尚未上报可售饮品，请稍后重试。</p></section>`}
-      <p class="stock-footnote">* 预计可售杯数为各配方当前理论上限之和；由于共享咖啡豆与鲜奶，实际总杯数以先下单扣减为准。</p>
+        : `<section class="center-state" style="min-height:32vh"><p>${t('order.menu.noProducts')}</p></section>`}
+      <p class="stock-footnote">${t('order.menu.stockNote')}</p>
       <div class="notice">${online
-        ? '付款由支付宝处理，云端确认支付成功后才会向设备派发制作任务。支付完成后请保持订单状态页打开，直到取杯。'
-        : '当前为内部联调模式（免支付），下单会真实触发模拟终端制作，仅供验收使用。'}</div>
-      <p class="page-foot">由 Coffee Cloud 提供技术支持 · 价格与库存以设备实时数据为准</p>
+        ? t('order.menu.onlineNotice') : t('order.menu.testNotice')}</div>
+      <p class="page-foot">${t('order.menu.footer')}</p>
     </main>
-    <section class="checkout" aria-label="结算栏">
+    <section class="checkout" aria-label="${esc(t('order.menu.checkoutAria'))}">
       <div class="checkout-copy">
-        <strong>${selected ? esc(selected.name) : '请选择一款饮品'}</strong>
-        <small>${selected ? (online ? money(selected) : '免支付联调') : (online ? '支付宝安全支付' : '测试免支付')}</small>
+        <strong>${selected ? esc(selected.name) : t('order.menu.selectDrink')}</strong>
+        <small>${selected ? (online ? money(selected) : t('order.menu.testFree')) : (online ? t('order.menu.alipay') : t('order.menu.testPayment'))}</small>
       </div>
       <button id="submit" class="btn-primary" ${selected && !submitting ? '' : 'disabled'}>
         ${submitting ? '<span class="btn-spinner" aria-hidden="true"></span>' : ''}
-        ${submitting ? (online ? '正在创建支付…' : '正在下单…') : (online ? '确认并支付' : '确认下单')}
+        ${submitting ? (online ? t('order.menu.creatingPayment') : t('order.menu.submitting')) : (online ? t('order.menu.confirmPay') : t('order.menu.confirm'))}
       </button>
     </section>`;
 
@@ -417,9 +429,9 @@ function card(item) {
       <div class="drink-art">${drinkArt(profile(item.visual?.profile))}</div>
       <div class="drink-copy">
         <h4>${esc(item.name || item.recipeId)}</h4>
-        <p class="desc">${esc(item.description || '设备本地特制配方')}</p>
+        <p class="desc">${esc(item.description || t('order.product.localRecipe'))}</p>
         <div class="drink-facts">
-          <span class="fact time">${iconClock}预计 ${duration(item)}</span>
+          <span class="fact time">${iconClock}${t('order.menu.estimated', { duration: duration(item) })}</span>
           ${item.available
             ? `<span class="fact price">${money(item)}</span>`
             : `<span class="fact block">${statusText(unavailable)}</span>`}
@@ -427,7 +439,7 @@ function card(item) {
       </div>
       <div class="drink-side">
         <span class="remaining">${item.remainingServings ?? 0}</span>
-        <small class="unit">剩余杯数</small>
+        <small class="unit">${t('order.menu.remaining')}</small>
         <span class="select-ring" aria-hidden="true">${iconCheck}</span>
       </div>
     </button>`;
@@ -474,7 +486,7 @@ async function submitOrder() {
   } catch (error) {
     submitting = false;
     renderMenu();
-    toast(`下单或支付创建未完成：${error.message}。同一页面重试不会重复创建订单。`, 'error');
+    toast(t('order.error.submit', { message: error.message }), 'error');
   }
 }
 
@@ -495,7 +507,7 @@ async function loadOrder() {
       orderId = cached.orderId;
       token = cached.token;
     } else {
-      renderError('订单状态链接不完整。请从下单成功的页面进入，或重新扫码下单。');
+      renderError(t('order.error.link'));
       return;
     }
   }
@@ -508,7 +520,7 @@ async function loadOrder() {
     orderStreamTerminal = [...TERMINAL_STATUSES, 'REFUNDED'].includes(order.status);
     if (!orderStreamTerminal) startOrderStream(orderId, token);
   } catch (error) {
-    renderError(`订单状态暂时不可用：${error.message}`, true);
+    renderError(t('order.error.status', { message: error.message }), true);
   }
 }
 
@@ -564,22 +576,22 @@ function productionSteps(order) {
   if (planned.length) {
     return planned.map((step, index) => ({
       id: step.stepId,
-      name: step.stepName || step.stepId?.replaceAll('-', ' ') || '制作步骤',
+      name: step.stepName || step.stepId?.replaceAll('-', ' ') || t('order.step.generic'),
       index: Number.isInteger(step.stepIndex) ? step.stepIndex : index,
       duration: step.durationSeconds,
     }));
   }
   const visual = order.product?.visual?.profile;
   return visual === 'iced-latte' ? [
-    { id: 'prepare-cup', name: '准备杯子', index: 0 },
-    { id: 'add-ice', name: '加入冰块', index: 1 },
-    { id: 'extract-coffee', name: '萃取咖啡', index: 2 },
-    { id: 'add-milk', name: '添加牛奶', index: 3 },
-    { id: 'seal-and-serve', name: '封杯并出杯', index: 4 },
+    { id: 'prepare-cup', name: t('order.step.prepare-cup'), index: 0 },
+    { id: 'add-ice', name: t('order.step.add-ice'), index: 1 },
+    { id: 'extract-coffee', name: t('order.step.extract-coffee'), index: 2 },
+    { id: 'add-milk', name: t('order.step.add-milk'), index: 3 },
+    { id: 'seal-and-serve', name: t('order.step.seal-and-serve'), index: 4 },
   ] : [
-    { id: 'prepare-cup', name: '准备杯子', index: 0 },
-    { id: 'extract-coffee', name: '萃取咖啡', index: 1 },
-    { id: 'finish', name: '调制与出杯', index: 2 },
+    { id: 'prepare-cup', name: t('order.step.prepare-cup'), index: 0 },
+    { id: 'extract-coffee', name: t('order.step.extract-coffee'), index: 1 },
+    { id: 'finish', name: t('order.step.finish'), index: 2 },
   ];
 }
 
@@ -593,11 +605,11 @@ const MILESTONE_DEFS = [
 ];
 
 function milestoneMarkup(order) {
-  const labels = ['支付', '排队', '派单', '设备接受', '制作', '完成'];
-  if (order.paymentMode === 'TEST_FREE') labels[0] = '下单';
+  const labels = ['pay', 'queue', 'dispatch', 'accept', 'make', 'done'].map(key => t(`order.milestone.${key}`));
+  if (order.paymentMode === 'TEST_FREE') labels[0] = t('order.milestone.submit');
   const current = Math.max(0, MILESTONE_DEFS.findIndex(m => m.at.includes(order.status)));
   const failed = ['FAILED', 'CANCELLED', 'EXPIRED'].includes(order.status);
-  return `<ol class="milestones" aria-label="订单里程碑">${labels.map((label, index) => {
+  return `<ol class="milestones" aria-label="${esc(t('order.milestone.aria'))}">${labels.map((label, index) => {
     let state = '';
     if (index < current) state = 'done';
     else if (index === current) state = failed ? 'error' : order.status === 'READY' || order.status === 'REFUNDED' ? 'done' : 'active';
@@ -606,39 +618,27 @@ function milestoneMarkup(order) {
 }
 
 function statusNote(order) {
-  switch (order.status) {
-    case 'CREATED': return '订单已创建，完成支付后才会进入制作队列。';
-    case 'AWAITING_PAYMENT': return '请使用支付宝扫码完成付款。';
-    case 'QUEUED': return `前方还有 ${Math.max(0, (order.queuePosition || 1) - 1)} 杯，制作按队列顺序自动派发。`;
-    case 'DISPATCHED': return '制作指令已派发，正在等待设备接收。';
-    case 'ACCEPTED': return '设备已接受任务并预留整杯原料，即将开始制作。';
-    case 'MAKING': return '咖啡师机器人正在现磨现制，完成后请及时取杯。';
-    case 'HOLD': return '设备状态正在自检核验，请留意本页更新，工作人员将为您跟进处理。';
-    case 'READY': return '现磨咖啡已制作完成，请前往设备出杯口取杯，小心烫手。';
-    case 'FAILED': return order.failure?.message || '设备未能完成本次制作，系统将按明确失败策略处理退款。';
-    case 'REFUNDED': return '款项已按原路退回支付账户，到账时间以支付平台记录为准。';
-    case 'CANCELLED': return '订单已取消，未产生扣款。';
-    case 'EXPIRED': return '设备未在时限内接收制作指令，订单已安全终止。';
-    default: return '订单状态由云端与终端共同确认。';
-  }
+  if (order.status === 'FAILED' && order.failure?.message) return order.failure.message;
+  const params = order.status === 'QUEUED' ? { count: Math.max(0, (order.queuePosition || 1) - 1) } : {};
+  return t(`order.note.${order.status}`, params, { defaultValue: t('order.note.default') });
 }
 
 function bannerFor(order) {
   if (order.status === 'READY') {
     return `<div class="banner ready"><span class="b-icon">${iconCheck}</span><div>
-      <strong>制作完成</strong><p>现磨咖啡已制作完成，请前往设备出杯口取杯，小心烫手。</p></div></div>`;
+      <strong>${t('order.banner.readyTitle')}</strong><p>${t('order.note.READY')}</p></div></div>`;
   }
   if (order.status === 'FAILED') {
     return `<div class="banner failed"><span class="b-icon">${iconAlert}</span><div>
-      <strong>制作失败</strong><p>${esc(order.failure?.message || '设备未能完成本次制作，系统将按明确失败策略发起退款。')}</p></div></div>`;
+      <strong>${t('order.banner.failedTitle')}</strong><p>${esc(order.failure?.message || t('order.banner.failedBody'))}</p></div></div>`;
   }
   if (order.status === 'HOLD') {
     return `<div class="banner hold"><span class="b-icon">${iconAlert}</span><div>
-      <strong>设备自检核验中</strong><p>系统正在确认物理制作结果，如有疑问请向工作人员出示此页面。</p></div></div>`;
+      <strong>${t('order.banner.holdTitle')}</strong><p>${t('order.banner.holdBody')}</p></div></div>`;
   }
   if (order.status === 'REFUNDED') {
     return `<div class="banner info"><span class="b-icon">${iconInfo}</span><div>
-      <strong>退款已完成</strong><p>款项将按原路退回，无需额外操作。</p></div></div>`;
+      <strong>${t('order.status.REFUNDED')}</strong><p>${t('order.banner.refundedBody')}</p></div></div>`;
   }
   if (order.status === 'CANCELLED' || order.status === 'EXPIRED') {
     return `<div class="banner failed"><span class="b-icon">${iconAlert}</span><div>
@@ -666,49 +666,49 @@ function renderOrder(order) {
     const provider = order.payment?.provider || '';
     const isMockProvider = provider === 'alipay_mock';
     const isAlipayProvider = provider === 'alipay';
-    const payTitle = isMockProvider ? '请完成模拟付款' : isAlipayProvider ? '请完成支付宝付款' : '请完成付款';
-    const payLead = isMockProvider ? '仅为模拟付款，不产生真实扣款；确认后后台会按订单流程处理。' : '支付成功前，不会向设备派发制作任务。';
-    const payQrAlt = isMockProvider ? '模拟付款二维码' : isAlipayProvider ? '支付宝付款二维码' : '付款二维码';
-    const payButton = isMockProvider ? '打开模拟付款页' : isAlipayProvider ? '打开支付宝付款' : '打开付款页';
-    const payTag = isMockProvider ? '<span class="pay-tag mock">alipay_mock · 模拟渠道</span>'
-      : isAlipayProvider ? '<span class="pay-tag live">支付宝</span>' : '';
-    document.title = 'Woodbridge Coffee · 等待支付';
+    const payTitle = isMockProvider ? t('order.payment.mockTitle') : isAlipayProvider ? t('order.payment.alipayTitle') : t('order.payment.title');
+    const payLead = isMockProvider ? t('order.payment.mockLead') : t('order.payment.lead');
+    const payQrAlt = isMockProvider ? t('order.payment.mockQr') : isAlipayProvider ? t('order.payment.alipayQr') : t('order.payment.qr');
+    const payButton = isMockProvider ? t('order.payment.openMock') : isAlipayProvider ? t('order.payment.openAlipay') : t('order.payment.open');
+    const payTag = isMockProvider ? `<span class="pay-tag mock">${t('order.payment.mockTag')}</span>`
+      : isAlipayProvider ? `<span class="pay-tag live">${t('order.payment.alipayTag')}</span>` : '';
+    document.title = t('order.title.payment');
     app.innerHTML = `
-      ${baseHeader('warn', '等待支付确认', `订单 ${esc(order.orderNo)}`)}
+      ${baseHeader('warn', t('order.header.paymentWaiting'), t('order.header.order', { orderNo: esc(order.orderNo) }))}
       <main class="page-main">
         <div class="pay-grid">
-          <section class="pay-order-card" aria-label="订单信息">
+          <section class="pay-order-card" aria-label="${esc(t('order.payment.orderAria'))}">
             <h1>${payTitle}</h1>
             <p class="lead">${payLead}</p>
             <div class="pay-product-row">
               <span class="pp-name">
-                <strong>${esc(order.product?.name || '饮品')} × 1</strong>
-                <small>扫码下单 · 云端逐单确认</small>
+                <strong>${esc(order.product?.name || t('order.product.drink'))} × 1</strong>
+                <small>${t('order.payment.scanOrder')}</small>
               </span>
-              <span class="pay-amount"><strong>${money({ priceMinor: order.totalAmountMinor, currency: order.currency })}</strong><small>合计</small></span>
+              <span class="pay-amount"><strong>${money({ priceMinor: order.totalAmountMinor, currency: order.currency })}</strong><small>${t('order.payment.total')}</small></span>
             </div>
             ${milestoneMarkup(order)}
             <div class="pay-side-actions">
-              <button class="btn-secondary" id="refresh">刷新支付状态</button>
-              <span class="pay-hint">支付状态由服务端实时推送，二维码加载后保持不变</span>
+              <button class="btn-secondary" id="refresh">${t('order.payment.refresh')}</button>
+              <span class="pay-hint">${t('order.payment.pushHint')}</span>
             </div>
           </section>
-          <aside class="pay-panel" aria-label="支付面板">
-            <div class="pay-panel-head"><strong>支付方式</strong>${payTag}</div>
+          <aside class="pay-panel" aria-label="${esc(t('order.payment.panelAria'))}">
+            <div class="pay-panel-head"><strong>${t('order.payment.method')}</strong>${payTag}</div>
             <div class="pay-mobile-cta">
               ${order.payment?.qrCode
                 ? `<a class="btn-primary btn-alipay-cta" href="${esc(order.payment.qrCode)}">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15-5-5 1.41-1.41L11 14.17l7.59-7.59L20 8l-9 9z"/></svg>
                     <span>${payButton}</span>
                   </a>
-                  <span class="pay-subhint">推荐：点击直接跳转完成安全支付</span>`
-                : '<span class="pay-hint">正在获取付款方式…</span>'}
+                  <span class="pay-subhint">${t('order.payment.recommend')}</span>`
+                : `<span class="pay-hint">${t('order.payment.loadingMethod')}</span>`}
             </div>
             <details class="pay-qr-accordion" open>
-              <summary class="pay-qr-summary">在其他设备扫码支付 / 付款码 ▾</summary>
+              <summary class="pay-qr-summary">${t('order.payment.otherDevice')}</summary>
               <div class="pay-qr-body">
                 <div class="qr-frame"><img id="payment-qr" alt="${payQrAlt}"></div>
-                <p class="qr-note" id="payment-qr-note">二维码加载后保持不变，刷新不会导致重复支付</p>
+                <p class="qr-note" id="payment-qr-note">${t('order.payment.qrStable')}</p>
               </div>
             </details>
           </aside>
@@ -719,7 +719,7 @@ function renderOrder(order) {
     return;
   }
 
-  document.title = 'Woodbridge Coffee · 订单状态';
+  document.title = t('order.title.status');
   const making = order.status === 'MAKING';
   const overall = order.production?.overallProgress ?? order.production?.progress ?? 0;
   const percent = order.status === 'READY' ? 100 : Math.round(Math.max(0, Math.min(1, overall)) * 100);
@@ -733,53 +733,53 @@ function renderOrder(order) {
     else if ((currentIndex >= 0 && index < currentIndex && making) || order.status === 'READY') state = 'done';
     return `<li class="${state}">
       <span class="step-dot" aria-hidden="true"></span>
-      <div><strong>${esc(step.name)}</strong><small>${state === 'active' ? '正在进行' : state === 'done' ? '已完成' : '待开始'}</small></div>
-      <small class="step-sec">${step.duration ? Math.round(step.duration) + ' 秒' : ''}</small>
+      <div><strong>${esc(step.name)}</strong><small>${state === 'active' ? t('order.step.active') : state === 'done' ? t('order.step.done') : t('order.step.pending')}</small></div>
+      <small class="step-sec">${step.duration ? t('order.step.seconds', { seconds: Math.round(step.duration) }) : ''}</small>
     </li>`;
   }).join('');
 
   const remaining = order.production?.remainingSeconds;
   const timing = Number.isFinite(remaining)
-    ? `预计还需 ${Math.max(0, Math.ceil(remaining))} 秒`
+    ? t('order.timing.remaining', { seconds: Math.max(0, Math.ceil(remaining)) })
     : order.production?.plannedDurationSeconds
-      ? `单杯计划约 ${Math.ceil(order.production.plannedDurationSeconds / 60)} 分钟`
-      : '等待设备返回计划时长';
+      ? t('order.timing.planned', { minutes: Math.ceil(order.production.plannedDurationSeconds / 60) })
+      : t('order.timing.waiting');
 
-function flavorPillsFor(productName) {
-  const name = String(productName || '').toLowerCase();
-  if (name.includes('拿铁') || name.includes('latte')) {
+function flavorPillsFor(product) {
+  const visualProfile = profile(product?.visual?.profile);
+  if (visualProfile === 'iced-latte') {
     return `<div class="flavor-pills">
-      <span class="flavor-pill">🌰 坚果可可</span>
-      <span class="flavor-pill">🥛 丝滑厚乳</span>
-      <span class="flavor-pill">🍯 焦糖回甘</span>
+      <span class="flavor-pill">${t('order.flavor.latte1')}</span>
+      <span class="flavor-pill">${t('order.flavor.latte2')}</span>
+      <span class="flavor-pill">${t('order.flavor.latte3')}</span>
     </div>
     <div class="recipe-bar-wrap">
-      <div class="recipe-bar-label"><span>配方比例</span><span>浓缩 25% · 鲜奶 60% · 奶沫 15%</span></div>
+      <div class="recipe-bar-label"><span>${t('order.flavor.ratio')}</span><span>${t('order.flavor.latteRatio')}</span></div>
       <div class="recipe-bar"><div class="recipe-bar-part espresso" style="width:25%"></div><div class="recipe-bar-part milk" style="width:60%"></div><div class="recipe-bar-part foam" style="width:15%"></div></div>
     </div>`;
   }
-  if (name.includes('美式') || name.includes('americano')) {
+  if (visualProfile === 'americano') {
     return `<div class="flavor-pills">
-      <span class="flavor-pill">🍫 浓郁黑巧</span>
-      <span class="flavor-pill">🌰 坚果原香</span>
-      <span class="flavor-pill">☕ 经典醇厚</span>
+      <span class="flavor-pill">${t('order.flavor.americano1')}</span>
+      <span class="flavor-pill">${t('order.flavor.americano2')}</span>
+      <span class="flavor-pill">${t('order.flavor.americano3')}</span>
     </div>
     <div class="recipe-bar-wrap">
-      <div class="recipe-bar-label"><span>配方比例</span><span>意式浓缩 35% · 清润水 65%</span></div>
+      <div class="recipe-bar-label"><span>${t('order.flavor.ratio')}</span><span>${t('order.flavor.americanoRatio')}</span></div>
       <div class="recipe-bar"><div class="recipe-bar-part espresso" style="width:35%"></div><div class="recipe-bar-part water" style="width:65%"></div></div>
     </div>`;
   }
-  if (name.includes('浓缩') || name.includes('espresso')) {
+  if (visualProfile === 'espresso') {
     return `<div class="flavor-pills">
-      <span class="flavor-pill">🔥 9 bar 精萃</span>
-      <span class="flavor-pill">✨ 黄金 Crema</span>
-      <span class="flavor-pill">🍫 厚重可可</span>
+      <span class="flavor-pill">${t('order.flavor.espresso1')}</span>
+      <span class="flavor-pill">${t('order.flavor.espresso2')}</span>
+      <span class="flavor-pill">${t('order.flavor.espresso3')}</span>
     </div>`;
   }
   return `<div class="flavor-pills">
-    <span class="flavor-pill">🌿 臻选产区</span>
-    <span class="flavor-pill">☕ 新鲜现磨</span>
-    <span class="flavor-pill">✨ 馥郁香醇</span>
+    <span class="flavor-pill">${t('order.flavor.generic1')}</span>
+    <span class="flavor-pill">${t('order.flavor.generic2')}</span>
+    <span class="flavor-pill">${t('order.flavor.generic3')}</span>
   </div>`;
 }
 
@@ -789,52 +789,52 @@ function barcodeMarkup() {
 }
 
   app.innerHTML = `
-    ${baseHeader(terminal ? 'idle' : '', terminal ? '状态已确认' : '实时同步中', `订单 ${esc(order.orderNo)}`)}
+    ${baseHeader(terminal ? 'idle' : '', terminal ? t('order.header.confirmed') : t('order.header.syncing'), t('order.header.order', { orderNo: esc(order.orderNo) }))}
     <main class="page-main">
       ${bannerFor(order)}
       <div class="status-grid">
-        <section class="status-card ticket-card" aria-label="制作进度">
+        <section class="status-card ticket-card" aria-label="${esc(t('order.status.progressAria'))}">
           <div class="ticket-header-ribbon">
             <span>WOODBRIDGE ROASTERY</span>
             <span>ORDER NO. ${esc(order.orderNo)}</span>
           </div>
-          <div class="pickup-card" aria-label="取餐码">
-            <span class="pc-label">ORDER NO. / 取杯口令</span>
+          <div class="pickup-card" aria-label="${esc(t('order.status.pickupAria'))}">
+            <span class="pc-label">${t('order.status.pickupLabel')}</span>
             <strong class="pc-code">${esc(pickupCodeFor(order))}</strong>
-            <span class="pc-sub">请在设备出杯口前凭此号核对取杯</span>
+            <span class="pc-sub">${t('order.status.pickupHelp')}</span>
           </div>
-          ${flavorPillsFor(order.product?.name)}
+          ${flavorPillsFor(order.product)}
           <div class="progress-wrap">
-            <div class="progress-ring" style="--progress:${percent * 3.6}deg" role="img" aria-label="整杯进度 ${percent}%">
-              <div><strong>${percent}%</strong><small>整杯进度</small></div>
+            <div class="progress-ring" style="--progress:${percent * 3.6}deg" role="img" aria-label="${esc(t('order.status.progressPercent', { percent }))}">
+              <div><strong>${percent}%</strong><small>${t('order.status.wholeProgress')}</small></div>
             </div>
             <div class="now-step">
               <strong>${esc(order.production?.currentStepName || orderLabel(order.status))}</strong>
               <span>${timing}</span>
-              <span class="muted-line">${esc(order.product?.name || '饮品')} × 1 · ${money({ priceMinor: order.totalAmountMinor, currency: order.currency })}</span>
+              <span class="muted-line">${esc(order.product?.name || t('order.product.drink'))} × 1 · ${money({ priceMinor: order.totalAmountMinor, currency: order.currency })}</span>
             </div>
           </div>
           <strong>${orderLabel(order.status)}</strong>
           <div class="status-meta">${esc(statusNote(order))}</div>
           ${milestoneMarkup(order)}
-          <button class="btn-secondary" id="refresh">刷新状态</button>
-          ${order.status === 'READY' ? `<a href="/order?device_id=${encodeURIComponent(order.deviceId || '')}" class="btn-primary" style="text-decoration:none;display:flex;align-items:center;justify-content:center;margin-top:10px">再点一杯</a>` : ''}
+          <button class="btn-secondary" id="refresh">${t('order.status.refresh')}</button>
+          ${order.status === 'READY' ? `<a href="/order?device_id=${encodeURIComponent(order.deviceId || '')}" class="btn-primary" style="text-decoration:none;display:flex;align-items:center;justify-content:center;margin-top:10px">${t('order.status.another')}</a>` : ''}
           ${barcodeMarkup()}
-          <p class="pay-hint" style="margin-top:10px">${terminal ? '最终状态已存档，实时更新已停止' : '制作状态实时刷新，请保持页面打开'}</p>
+          <p class="pay-hint" style="margin-top:10px">${terminal ? t('order.status.archived') : t('order.status.keepOpen')}</p>
         </section>
         <section class="status-steps">
           <div class="steps-card">
-            <h2>制作步骤</h2>
-            <ol class="timeline" aria-label="制作步骤">${timeline}</ol>
+            <h2>${t('order.status.steps')}</h2>
+            <ol class="timeline" aria-label="${esc(t('order.status.steps'))}">${timeline}</ol>
           </div>
           <div class="ops-card">
-            <strong>支付、原料与设备分层确认</strong>
-            <p>支付结果由支付平台确认；设备接受任务后才预留整杯物料；制作终态以设备持久化事件为准。</p>
+            <strong>${t('order.status.layersTitle')}</strong>
+            <p>${t('order.status.layersBody')}</p>
           </div>
         </section>
       </div>
       <footer class="status-foot">
-        <span>${terminal ? '最终状态已存档' : '制作状态实时刷新'}</span>
+        <span>${terminal ? t('order.status.finalArchived') : t('order.status.live')}</span>
       </footer>
     </main>`;
   const refreshBtn = document.getElementById('refresh');
@@ -851,16 +851,16 @@ function barcodeMarkup() {
 }
 
 function renderError(message, retry = false) {
-  document.title = 'Woodbridge Coffee · 出错了';
+  document.title = t('order.title.error');
   app.innerHTML = `
-    ${baseHeader('idle', '连接中断')}
+    ${baseHeader('idle', t('order.error.interrupted'))}
     <main class="page-main">
       <section class="center-state">
         <div class="brew-loader" aria-hidden="true"><i></i><i></i><i></i></div>
         <div class="error-box">
-          <strong>暂时无法继续</strong>
+          <strong>${t('order.error.cannotContinue')}</strong>
           <p>${esc(message)}</p>
-          ${retry ? '<button class="btn-secondary" id="retry">重新连接</button>' : ''}
+          ${retry ? `<button class="btn-secondary" id="retry">${t('order.error.retry')}</button>` : ''}
         </div>
       </section>
     </main>`;
@@ -884,7 +884,7 @@ async function attachPaymentQr(order, token) {
   const now = Date.now();
   if (samePayment && (paymentQrCache.loading || now - paymentQrCache.loadedAt < PAYMENT_QR_REFRESH_MS)) return;
   paymentQrCache = { paymentId, url: null, loadedAt: now, loading: true };
-  setQrNote('正在加载付款二维码…');
+  setQrNote(t('order.payment.qrLoading'));
   try {
     const response = await fetch(`/api/v1/payments/${encodeURIComponent(paymentId)}/qr`, {
       headers: { 'X-Order-Access-Token': token },
@@ -892,17 +892,17 @@ async function attachPaymentQr(order, token) {
     });
     if (!response.ok) {
       paymentQrCache.loading = false;
-      setQrNote('二维码暂时无法加载，稍后自动重试');
+      setQrNote(t('order.payment.qrUnavailable'));
       return;
     }
     const url = URL.createObjectURL(await response.blob());
     paymentQrCache = { paymentId, url, loadedAt: Date.now(), loading: false };
     const current = document.getElementById('payment-qr');
     if (current) current.src = url;
-    setQrNote('二维码加载后保持不变，刷新不会导致重复支付');
+    setQrNote(t('order.payment.qrStable'));
   } catch (_) {
     paymentQrCache.loading = false;
-    setQrNote('二维码暂时无法加载，稍后自动重试');
+    setQrNote(t('order.payment.qrUnavailable'));
   }
 }
 
