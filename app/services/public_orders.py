@@ -10,6 +10,7 @@ from ..order_logic import public_menu
 from ..payment_service import apply_paid_callback, transition_payment
 from ..protocol import PublicOrderCreateRequest, canonical_digest, utc_now
 from ..repositories import OrderRepository, PaymentRepository, TerminalRepository
+from ..robot_view import public_robot_view
 from ..security import derive_order_access_token, hash_token, tokens_equal
 from ..settings import Settings
 from ..telemetry import TelemetryCache
@@ -89,6 +90,7 @@ class PublicOrderService:
                 "plannedDurationSeconds": job["planned_duration_seconds"],
                 "elapsedSeconds": job["elapsed_seconds"], "remainingSeconds": job["remaining_seconds"],
                 "stepPlan": job["step_durations"], "stepDurations": job["step_durations"],
+                "robotView": public_robot_view(job["step_durations"]),
                 "acceptedAt": iso(job["accepted_at"]), "startedAt": iso(job["started_at"]),
                 "completedAt": iso(job["completed_at"]),
             } if job else None,

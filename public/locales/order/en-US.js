@@ -1,4 +1,5 @@
 CoffeeI18n.registerCatalog('en-US', {
+  'order.status.robotView': 'Watch in 3D',
   'order.title.initial': 'Woodbridge Coffee · Scan to order', 'order.title.menu': 'Woodbridge Coffee · Choose a drink',
   'order.title.payment': 'Woodbridge Coffee · Awaiting payment', 'order.title.status': 'Woodbridge Coffee · Order status',
   'order.title.error': 'Woodbridge Coffee · Something went wrong', 'order.loading.title': 'Connecting to the coffee robot',

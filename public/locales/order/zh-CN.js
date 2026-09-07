@@ -1,4 +1,5 @@
 CoffeeI18n.registerCatalog('zh-CN', {
+  'order.status.robotView': '观看三维制作',
   'order.title.initial': 'Woodbridge Coffee · 扫码下单', 'order.title.menu': 'Woodbridge Coffee · 选择饮品',
   'order.title.payment': 'Woodbridge Coffee · 等待支付', 'order.title.status': 'Woodbridge Coffee · 订单状态',
   'order.title.error': 'Woodbridge Coffee · 出错了', 'order.loading.title': '正在连接咖啡机器人',

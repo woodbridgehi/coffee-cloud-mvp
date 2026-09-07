@@ -520,6 +520,7 @@ async function loadOrder() {
     orderStreamTerminal = [...TERMINAL_STATUSES, 'REFUNDED'].includes(order.status);
     if (!orderStreamTerminal) startOrderStream(orderId, token);
   } catch (error) {
+    globalThis.CoffeeRobotIntegration?.disconnected();
     renderError(t('order.error.status', { message: error.message }), true);
   }
 }
@@ -566,6 +567,7 @@ async function startOrderStream(orderId, token) {
     if (controller.signal.aborted || orderStreamTerminal) return;
   }
   if (!orderStreamTerminal && document.visibilityState === 'visible') {
+    globalThis.CoffeeRobotIntegration?.disconnected();
     orderStreamReconnectTimer = setTimeout(() => startOrderStream(orderId, token), 3000);
   }
 }
@@ -818,6 +820,7 @@ function barcodeMarkup() {
           <div class="status-meta">${esc(statusNote(order))}</div>
           ${milestoneMarkup(order)}
           <button class="btn-secondary" id="refresh">${t('order.status.refresh')}</button>
+          ${order.production?.robotView?.version === 1 ? `<button class="rv-launch" data-open-robot style="width:100%;margin-top:10px">${t('order.status.robotView')}</button>` : ''}
           ${order.status === 'READY' ? `<a href="/order?device_id=${encodeURIComponent(order.deviceId || '')}" class="btn-primary" style="text-decoration:none;display:flex;align-items:center;justify-content:center;margin-top:10px">${t('order.status.another')}</a>` : ''}
           ${barcodeMarkup()}
           <p class="pay-hint" style="margin-top:10px">${terminal ? t('order.status.archived') : t('order.status.keepOpen')}</p>
@@ -916,6 +919,7 @@ function setQrNote(text) {
 const renderOrderContent = renderOrder;
 let renderedPaymentId = null;
 renderOrder = function (order) {
+  globalThis.CoffeeRobotIntegration?.order(order);
   const paymentWaiting = ['CREATED', 'AWAITING_PAYMENT'].includes(order.status);
   const paymentId = order.payment?.paymentId || null;
   if (paymentWaiting && renderedPaymentId === paymentId && document.getElementById('payment-qr')) {
@@ -932,6 +936,7 @@ if (typeof document.addEventListener === 'function') {
     if (document.visibilityState === 'visible' && location.pathname === '/order/status') {
       loadOrder();
     } else if (orderStreamAbort) {
+      globalThis.CoffeeRobotIntegration?.disconnected();
       orderStreamAbort.abort();
     }
   });
