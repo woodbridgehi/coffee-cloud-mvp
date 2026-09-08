@@ -26,6 +26,8 @@ def device_progress(
 
 
 def terminal_is_online(terminal: dict[str, Any], threshold_seconds: int, *, now: datetime | None = None) -> bool:
+    if terminal.get("connection_status") == "offline":
+        return False
     heartbeat = terminal.get("last_heartbeat_at")
     if not heartbeat:
         return False
@@ -55,6 +57,9 @@ def public_menu(
             reasons.append("DEVICE_OFFLINE")
         if not device_ready:
             reasons.append("DEVICE_NOT_ACTIVE")
+        if terminal.get('pickupBlocked'):
+            available = False
+            reasons.append('PICKUP_OCCUPIED')
         products.append({
             "recipeId": raw.get("recipeId"),
             "recipeVersion": raw.get("version"),
@@ -65,6 +70,7 @@ def public_menu(
             "visual": raw.get("visual") or {"profile": "generic"},
             "available": available,
             "remainingServings": remaining,
+            "materialRequirements": raw.get("materialRequirements"),
             "estimatedDurationSeconds": raw.get("estimatedDurationSeconds"),
             "durationRangeSeconds": raw.get("durationRangeSeconds"),
             "unavailableReasons": sorted(set(reasons)),

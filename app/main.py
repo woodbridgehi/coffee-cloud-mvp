@@ -22,6 +22,7 @@ from starlette.concurrency import run_in_threadpool
 import qrcode
 
 from .database import Database
+from .public_limits import PublicLimits
 from .protocol import (
     ActivationCodeRequest, ActivationRequest, AdminDeviceCreateRequest, AdminOperatorCreateRequest,
     CITY_OPTIONS, OrderAdjudicationRequest,
@@ -203,8 +204,9 @@ class DomainWorker:
                 logger.exception("telemetry worker iteration failed")
 
     def _domain_run(self) -> None:
+        from .history_maintenance import HistoryMaintenance
         last_watchdog = 0.0
-        last_maintenance = 0.0
+        maintenance = HistoryMaintenance(settings.maintenance_interval_seconds, settings.history_cleanup_batch_size)
         while not self.stop_event.wait(settings.outbox_scan_seconds):
             try:
                 background_worker_service.process_business_outbox_batch()
@@ -213,9 +215,9 @@ class DomainWorker:
                 if now - last_watchdog >= min(10, settings.offline_scan_seconds):
                     background_worker_service.watchdog_scan_once()
                     last_watchdog = now
-                if now - last_maintenance >= settings.maintenance_interval_seconds:
-                    background_worker_service.cleanup_history_once()
-                    last_maintenance = now
+                if maintenance.due(now):
+                    counts = background_worker_service.cleanup_history_once()
+                    maintenance.completed(time.monotonic(), counts)
                 self._record("domain")
             except Exception as exc:
                 self._record("domain", exc)
@@ -270,6 +272,8 @@ app = FastAPI(
     lifespan=lifespan,
 )
 PUBLIC_DIR = Path(__file__).resolve().parent.parent / "public"
+app.add_middleware(PublicLimits, read_limit=settings.public_read_rate_limit,
+                   write_limit=settings.public_write_rate_limit, stream_limit=settings.public_sse_limit)
 app.mount("/assets", StaticFiles(directory=PUBLIC_DIR), name="public-assets")
 merchant_service = MerchantService(database, settings)
 app.include_router(merchant_router(merchant_service))

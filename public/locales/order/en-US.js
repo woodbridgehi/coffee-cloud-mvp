@@ -1,4 +1,8 @@
 CoffeeI18n.registerCatalog('en-US', {
+  'order.availability.PICKUP_OCCUPIED': 'Waiting for the previous cup to be collected',
+  'order.pickup.collected': 'Collected. Thank you!',
+  'order.availability.QUEUE_MATERIAL_COMMITTED': 'Ingredients reserved for earlier orders',
+  'order.availability.INVENTORY_SYNC_PENDING': 'Updating stock; please refresh shortly',
   'order.status.robotView': 'Watch in 3D',
   'order.title.initial': 'Woodbridge Coffee · Scan to order', 'order.title.menu': 'Woodbridge Coffee · Choose a drink',
   'order.title.payment': 'Woodbridge Coffee · Awaiting payment', 'order.title.status': 'Woodbridge Coffee · Order status',
@@ -30,7 +34,7 @@ CoffeeI18n.registerCatalog('en-US', {
   'order.menu.subtitle': 'Drinks, stock, and preparation times are reported live by the device and confirmed by the cloud.',
   'order.menu.machineAria': 'Device status', 'order.menu.online': 'Device online · Ready for orders',
   'order.menu.offline': 'Device offline · Orders paused', 'order.menu.deviceStatus': 'Device status: {status}',
-  'order.menu.estimatedCups': 'Estimated cups available*', 'order.menu.available': 'Available today',
+  'order.menu.availableDrinkTypes': 'Drink choices available', 'order.menu.available': 'Available today',
   'order.menu.materialAlert': 'Ingredients need attention', 'order.menu.materialOk': 'Shared ingredients are available',
   'order.menu.noProducts': 'This device has not reported any available drinks yet. Try again shortly.',
   'order.menu.stockNote': '* Estimated cups are the sum of current recipe limits. Because recipes share beans and milk, actual availability depends on order sequence.',

@@ -8,6 +8,7 @@ from ..command_state import CREATED, DELIVERING, PUBLISHED, result_state
 from ..db import UnitOfWork
 from ..protocol import CommandResult, DeviceEvent, Heartbeat, canonical_digest, utc_now
 from ..repositories import CommandRepository, DeviceMessageRepository
+from ..repositories.pickup import PickupRepository, PickupConflict
 from ..telemetry import TelemetryCache
 from .errors import ServiceError
 from .presenters import iso
@@ -185,7 +186,30 @@ class DeviceMessageService:
             order_transition = self.reconcile_order_event(
                 connection, identity["id"], body, payload.type
             )
+            version = (body.get('payload') or {}).get('inventoryVersion')
+            if payload.type.startswith(('task.', 'inventory.')) and version is not None:
+                if type(version) is not int or not 0 <= version < 2**63:
+                    raise ServiceError(422, 'invalid inventoryVersion')
+                messages.require_inventory_version(identity['id'], version)
             command_transition = (order_transition or {}).get("commandTransition")
+            slot = (body.get('payload') or {}).get('pickupSlot')
+            if payload.type.startswith('pickup.') and (not isinstance(slot, dict) or not slot.get('revision')):
+                raise ServiceError(422, 'pickup events require a versioned slot')
+            if slot and payload.type in {'task.succeeded','task.recovered','pickup.collected','pickup.overdue'}:
+                if not isinstance(slot, dict) or type(slot.get('revision')) is not int or not 0 <= slot['revision'] < 2**63:
+                    raise ServiceError(422, 'invalid pickup slot revision')
+                if slot['revision']:
+                    if slot.get('state') not in {'EMPTY','OCCUPIED','NEEDS_CHECK'} or not isinstance(slot.get('taskId'), str) or not slot['taskId']:
+                        raise ServiceError(422, 'invalid pickup slot')
+                    collected = payload.type == 'pickup.collected'
+                    if collected and (slot['state'] != 'EMPTY' or slot['taskId'] != (body.get('payload') or {}).get('taskId')):
+                        raise ServiceError(422, 'pickup confirmation does not match task')
+                    try:
+                        PickupRepository(connection).apply(identity['id'], slot, collected)
+                    except PickupConflict as exc:
+                        raise ServiceError(409, str(exc)) from exc
+                    if collected:
+                        self.request_dispatch(connection, identity['id'], 'pickup-collected')
         return {
             "ok": True, "duplicate": False, "commandTransition": command_transition,
             "orderTransition": order_transition,

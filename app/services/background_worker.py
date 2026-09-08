@@ -12,6 +12,7 @@ from ..payment_providers import RefundRequest
 from ..payment_service import apply_paid_callback, transition_payment, transition_refund
 from ..protocol import utc_now
 from ..repositories import DispatchRepository, OrderRepository, PaymentRepository, TelemetryRepository, WorkerRepository
+from ..repositories.pickup import PickupRepository
 from ..settings import Settings
 from ..telemetry import TelemetryCache
 from .order_state import transition_order
@@ -48,10 +49,11 @@ class BackgroundWorkerService:
             return 0
         try:
             with self.uow.transaction() as connection:
-                TelemetryRepository(connection).apply_snapshots(snapshots)
+                TelemetryRepository(connection).apply_snapshots([(device_id, state) for device_id, state in snapshots if state.get("terminalId")])
+            self.telemetry_cache.settle_dirty(snapshots)
             return len(snapshots)
         except Exception:
-            self.telemetry_cache.restore_dirty([device_id for device_id, _ in snapshots])
+            self.telemetry_cache.settle_dirty(snapshots, retry=True)
             raise
 
     def offline_scan_once(self) -> None:
@@ -60,6 +62,13 @@ class BackgroundWorkerService:
             workers = WorkerRepository(connection)
             workers.expire_credentials()
             workers.mark_offline(cutoff)
+        with self.uow.transaction() as connection:
+            # Payment creation also locks the order first. Recheck the predicate
+            # under that lock; never expire a payment already in flight.
+            unpaid = OrderRepository(connection).expired_unpaid(self.settings.payment_pending_ttl_seconds)
+            for order in unpaid:
+                transition_order(connection, order, 'EXPIRED', 'order-expiration',
+                                 reason='unpaid order expired before payment creation')
         with self.uow.transaction() as connection:
             candidates = WorkerRepository(connection).expired_commands()
         for command in candidates:
@@ -129,8 +138,14 @@ class BackgroundWorkerService:
                     break
             try:
                 with self.uow.transaction() as connection:
-                    self.production.dispatch_next_order(connection, request["terminal_id"])
-                    DispatchRepository(connection).complete(request["terminal_id"], request["revision"])
+                    dispatched = self.production.dispatch_next_order(connection, request["terminal_id"])
+                    if (not dispatched and request.get('reason') == 'pickup-collected'
+                            and not PickupRepository(connection).blocked(request['terminal_id'])
+                            and OrderRepository(connection).next_queued_job(request['terminal_id'])):
+                        # Collection may arrive before the retained IDLE state.
+                        DispatchRepository(connection).retry(request['terminal_id'], request['revision'], 'waiting for idle state after pickup')
+                    else:
+                        DispatchRepository(connection).complete(request["terminal_id"], request["revision"])
                 processed += 1
             except Exception as exc:
                 log.exception("terminal dispatch failed terminal=%s", request["terminal_id"])
@@ -260,6 +275,7 @@ class BackgroundWorkerService:
                 event_days=self.settings.device_event_retention_days,
                 outbox_days=self.settings.processed_outbox_retention_days,
                 audit_days=self.settings.audit_retention_days,
+                limit=self.settings.history_cleanup_batch_size,
             )
 
     def reconcile_stored_command_events(self) -> None:

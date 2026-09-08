@@ -283,6 +283,11 @@ docker compose --profile tools run --rm coffee-db-migrate
 ```
 
 ### 8.2 核心安全与环境变量设置（`.env`）
+
+2026-09-08 的排队库存与访问保护更新需要先运行迁移 21，再启动新版 API/Worker，并重启新版模拟器上传原料需求。云端按未付款、已付款待入队、排队、制作和 HOLD 订单累计预计用料，取消/过期后释放；未发起支付的订单默认 900 秒后过期。库存版本未追上设备事件时暂停新单。当前对制作中的预占采取保守重复计算，旧设备缺少需求明细时不允许叠加排队，不能把此机制视为真实硬件付款后必然成功的保证。
+
+公众访问默认每进程、每 IP 每分钟读取 240 次、写入 30 次；同一写入资源每分钟 60 次。SSE 每进程最多 1000 条、每 IP 12 条、每订单 3 条，断开或异常会释放。可用 `PUBLIC_READ_RATE_LIMIT`、`PUBLIC_WRITE_RATE_LIMIT`、`PUBLIC_SSE_LIMIT` 调整。当前 Compose 为两个 API worker，总额度最多为上述值的两倍；这些是单机进程保护，不是跨副本共享配额。反向代理应通过受信任的 Uvicorn proxy 配置传递真实 client IP，应用不直接信任请求的 X-Forwarded-For。运营价格列表支持 `limit=1..200`（默认 100）和 `offset=0..10000`，权限与筛选在分页前执行。
+
 重要变量必须从隔离的 `.env` 或 Docker secret 挂载，切勿提交至代码库：
 - `DATABASE_URL`：PostgreSQL 连接串。
 - `ORDER_ACCESS_SECRET`：订单页敏感鉴权 HMAC 私钥，**生产必须配置且绝对不能与管理员凭证共用**。
@@ -293,7 +298,7 @@ docker compose --profile tools run --rm coffee-db-migrate
 
 ### 8.3 MQTT 网关全生命周期与健康检测
 - 网关采用 `clean_start=False` 与长期会话策略（默认 604800s），保证 QoS1 的离线重投堆积能力。
-- 每次新连接、重连或者超时（`MQTT_SUBSCRIBE_TIMEOUT_SECONDS`）都会通过安全的重入锁校验代次（Generation）。网络掉线由单独的 `Supervisor` 调度线程拉起；发生致命死锁时，它停止写 `/tmp/mqtt-gateway.json`，Docker 会自动将服务标记为 `unhealthy` 并强制重启。
+- MQTT 重连由 Supervisor 线程处理。Gateway 与 Domain Worker 另外由独立的 `app.supervised_process` 父进程监测健康文件；连续失败 180–240 秒后终止子进程并退出容器，由 Docker 的 `unless-stopped` 策略重启。单纯 `unhealthy` 不会触发 Docker 重启；短暂故障恢复后会清零失败计时。
 
 ### 8.4 设备激活与上线
 1. 管理员在 `/admin` 登记设备并生成一次性激活码。

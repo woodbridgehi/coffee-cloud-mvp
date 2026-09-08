@@ -1,4 +1,8 @@
 CoffeeI18n.registerCatalog('zh-CN', {
+  'order.availability.PICKUP_OCCUPIED': '请等待上一杯取走',
+  'order.pickup.collected': '已取杯，感谢惠顾',
+  'order.availability.QUEUE_MATERIAL_COMMITTED': '原料已为前方订单预留',
+  'order.availability.INVENTORY_SYNC_PENDING': '正在更新余量，请稍后刷新',
   'order.status.robotView': '观看三维制作',
   'order.title.initial': 'Woodbridge Coffee · 扫码下单', 'order.title.menu': 'Woodbridge Coffee · 选择饮品',
   'order.title.payment': 'Woodbridge Coffee · 等待支付', 'order.title.status': 'Woodbridge Coffee · 订单状态',
@@ -31,7 +35,7 @@ CoffeeI18n.registerCatalog('zh-CN', {
   'order.menu.subtitle': '饮品、余量与时长由设备实时上报，云端逐单确认。',
   'order.menu.machineAria': '设备状态', 'order.menu.online': '设备在线 · 可以下单',
   'order.menu.offline': '设备离线 · 暂停接单', 'order.menu.deviceStatus': '设备状态 {status}',
-  'order.menu.estimatedCups': '预计可售杯数*', 'order.menu.available': '今日可售',
+  'order.menu.availableDrinkTypes': '可选饮品种类', 'order.menu.available': '今日可售',
   'order.menu.materialAlert': '有物料待补充', 'order.menu.materialOk': '共享原料状态正常',
   'order.menu.noProducts': '设备尚未上报可售饮品，请稍后重试。',
   'order.menu.stockNote': '* 预计可售杯数为各配方当前理论上限之和；由于共享咖啡豆与鲜奶，实际总杯数以先下单扣减为准。',

@@ -41,7 +41,7 @@ def production_case(postgres_database):
     with db.connect() as connection:
         terminal_id = insert_terminal(connection)
         connection.execute(
-            "update terminal set lifecycle_status='ACTIVE',last_heartbeat_at=now() where id=%s",
+            "update terminal set lifecycle_status='ACTIVE',connection_status='online',last_heartbeat_at=now() where id=%s",
             (terminal_id,),
         )
         order_id, payment = seed_paid_queued_order(connection, terminal_id)

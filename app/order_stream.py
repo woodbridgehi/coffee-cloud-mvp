@@ -28,7 +28,8 @@ async def order_stream(broker: OrderEventBroker, service: PublicOrderService,
         snapshot = await refresh_order()
         while True:
             yield f"event: order\ndata: {json.dumps(snapshot, default=str, separators=(',', ':'))}\n\n"
-            if snapshot["status"] in TERMINAL_ORDER_STATUSES:
+            awaiting_pickup = snapshot['status'] == 'READY' and snapshot.get('pickupRequired') and not snapshot.get('collectedAt')
+            if snapshot["status"] in TERMINAL_ORDER_STATUSES and not awaiting_pickup:
                 return
             while True:
                 try:

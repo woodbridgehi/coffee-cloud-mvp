@@ -627,6 +627,45 @@
         "title": "Heartbeat",
         "type": "object"
       },
+      "OrderAdjudicationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expectedRevision": {
+            "minimum": 0.0,
+            "title": "Expectedrevision",
+            "type": "integer"
+          },
+          "outcome": {
+            "enum": [
+              "SUCCEEDED",
+              "FAILED",
+              "CANCELLED"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "taskId": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Taskid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "taskId",
+          "expectedRevision",
+          "outcome",
+          "reason"
+        ],
+        "title": "OrderAdjudicationRequest",
+        "type": "object"
+      },
       "PaymentCreateRequest": {
         "properties": {
           "provider": {
@@ -634,6 +673,7 @@
               {
                 "enum": [
                   "alipay",
+                  "alipay_mock",
                   "mock"
                 ],
                 "type": "string"
@@ -649,6 +689,7 @@
         "type": "object"
       },
       "PublicOrderCreateRequest": {
+        "additionalProperties": false,
         "properties": {
           "paymentMode": {
             "default": "ONLINE",
@@ -708,6 +749,81 @@
           }
         },
         "title": "RefundCreateRequest",
+        "type": "object"
+      },
+      "SimulatorBootstrapRequest": {
+        "description": "Development-only software identity proof for the desktop simulator.\n\nA physical device will later replace this proof with mTLS backed by its\nsecure element. Keeping this request separate prevents a simulator key\nfrom becoming a production hardware credential by accident.",
+        "properties": {
+          "nonce": {
+            "maxLength": 256,
+            "minLength": 16,
+            "title": "Nonce",
+            "type": "string"
+          },
+          "proof": {
+            "maxLength": 1024,
+            "minLength": 32,
+            "title": "Proof",
+            "type": "string"
+          },
+          "publicKeyPem": {
+            "maxLength": 4096,
+            "minLength": 100,
+            "title": "Publickeypem",
+            "type": "string"
+          },
+          "serialNumber": {
+            "maxLength": 128,
+            "minLength": 8,
+            "pattern": "^SIM-[A-Z0-9-]{5,120}$",
+            "title": "Serialnumber",
+            "type": "string"
+          }
+        },
+        "required": [
+          "serialNumber",
+          "publicKeyPem",
+          "nonce",
+          "proof"
+        ],
+        "title": "SimulatorBootstrapRequest",
+        "type": "object"
+      },
+      "SimulatorProvisionRequest": {
+        "properties": {
+          "deviceToken": {
+            "maxLength": 512,
+            "minLength": 32,
+            "title": "Devicetoken",
+            "type": "string"
+          },
+          "nonce": {
+            "maxLength": 256,
+            "minLength": 16,
+            "title": "Nonce",
+            "type": "string"
+          },
+          "proof": {
+            "maxLength": 1024,
+            "minLength": 32,
+            "title": "Proof",
+            "type": "string"
+          },
+          "serialNumber": {
+            "maxLength": 128,
+            "minLength": 8,
+            "pattern": "^SIM-[A-Z0-9-]{5,120}$",
+            "title": "Serialnumber",
+            "type": "string"
+          }
+        },
+        "required": [
+          "serialNumber",
+          "nonce",
+          "proof",
+          "deviceToken"
+        ],
+        "title": "SimulatorProvisionRequest",
         "type": "object"
       },
       "Snapshot": {
@@ -1952,6 +2068,77 @@
         ]
       }
     },
+    "/api/v1/admin/orders/{order_id}/adjudication": {
+      "post": {
+        "operationId": "adjudicate_order_api_v1_admin_orders__order_id__adjudication_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "order_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Order Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 160,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrderAdjudicationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Adjudicate Order Api V1 Admin Orders  Order Id  Adjudication Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "adminBearer": []
+          }
+        ],
+        "summary": "Adjudicate Order",
+        "tags": [
+          "admin-operations"
+        ]
+      }
+    },
     "/api/v1/admin/session": {
       "get": {
         "operationId": "admin_session_api_v1_admin_session_get",
@@ -2903,6 +3090,2158 @@
         ]
       }
     },
+    "/api/v1/merchant/audit": {
+      "get": {
+        "operationId": "audit_api_v1_merchant_audit_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Audit",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/auth/accept-invitation": {
+      "post": {
+        "operationId": "accept_api_v1_merchant_auth_accept_invitation_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Data",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Accept",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/auth/config": {
+      "get": {
+        "operationId": "auth_config_api_v1_merchant_auth_config_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Auth Config",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/auth/forgot-password": {
+      "post": {
+        "operationId": "forgot_api_v1_merchant_auth_forgot_password_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Data",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Forgot",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/auth/login": {
+      "post": {
+        "operationId": "login_api_v1_merchant_auth_login_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Data",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Login",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/auth/logout": {
+      "post": {
+        "operationId": "logout_api_v1_merchant_auth_logout_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Logout",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/auth/reauthenticate": {
+      "post": {
+        "operationId": "reauthenticate_api_v1_merchant_auth_reauthenticate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Data",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reauthenticate",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/auth/register": {
+      "post": {
+        "operationId": "register_api_v1_merchant_auth_register_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Data",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Register",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/auth/reset-password": {
+      "post": {
+        "operationId": "reset_api_v1_merchant_auth_reset_password_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Data",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reset",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/auth/revoke-other-sessions": {
+      "post": {
+        "operationId": "revoke_others_api_v1_merchant_auth_revoke_other_sessions_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Revoke Others",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/auth/verify-email": {
+      "post": {
+        "operationId": "verify_api_v1_merchant_auth_verify_email_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Data",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Verify",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/dashboard": {
+      "get": {
+        "operationId": "dashboard_api_v1_merchant_dashboard_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Dashboard",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/devices": {
+      "get": {
+        "operationId": "devices_api_v1_merchant_devices_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Devices",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/devices/claim": {
+      "post": {
+        "operationId": "claim_api_v1_merchant_devices_claim_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Data",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Claim",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/devices/{device_id}": {
+      "get": {
+        "operationId": "device_api_v1_merchant_devices__device_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "device_id",
+            "required": true,
+            "schema": {
+              "title": "Device Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Device",
+        "tags": [
+          "merchant"
+        ]
+      },
+      "patch": {
+        "operationId": "update_device_api_v1_merchant_devices__device_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "device_id",
+            "required": true,
+            "schema": {
+              "title": "Device Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Data",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Device",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/devices/{device_id}/commands": {
+      "post": {
+        "operationId": "command_api_v1_merchant_devices__device_id__commands_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "device_id",
+            "required": true,
+            "schema": {
+              "title": "Device Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Data",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Command",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/devices/{device_id}/commands/{command_id}": {
+      "get": {
+        "operationId": "command_status_api_v1_merchant_devices__device_id__commands__command_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "device_id",
+            "required": true,
+            "schema": {
+              "title": "Device Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "command_id",
+            "required": true,
+            "schema": {
+              "title": "Command Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Command Status",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/devices/{device_id}/lifecycle": {
+      "post": {
+        "operationId": "lifecycle_api_v1_merchant_devices__device_id__lifecycle_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "device_id",
+            "required": true,
+            "schema": {
+              "title": "Device Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Data",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Lifecycle",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/devices/{device_id}/transfer-requests": {
+      "post": {
+        "operationId": "transfer_api_v1_merchant_devices__device_id__transfer_requests_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "device_id",
+            "required": true,
+            "schema": {
+              "title": "Device Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Data",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Transfer",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/devices/{device_id}/unbind-requests": {
+      "post": {
+        "operationId": "unbind_api_v1_merchant_devices__device_id__unbind_requests_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "device_id",
+            "required": true,
+            "schema": {
+              "title": "Device Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Data",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Unbind",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/expenses": {
+      "get": {
+        "operationId": "expenses_api_v1_merchant_expenses_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Expenses",
+        "tags": [
+          "merchant"
+        ]
+      },
+      "post": {
+        "operationId": "create_expense_api_v1_merchant_expenses_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Data",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Expense",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/expenses/{expense_id}/post": {
+      "post": {
+        "operationId": "post_expense_api_v1_merchant_expenses__expense_id__post_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "expense_id",
+            "required": true,
+            "schema": {
+              "title": "Expense Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Data",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Post Expense",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/expenses/{expense_id}/reversals": {
+      "post": {
+        "operationId": "reverse_expense_api_v1_merchant_expenses__expense_id__reversals_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "expense_id",
+            "required": true,
+            "schema": {
+              "title": "Expense Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Data",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reverse Expense",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/inventory": {
+      "get": {
+        "operationId": "inventory_api_v1_merchant_inventory_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Inventory",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/inventory/movements": {
+      "get": {
+        "operationId": "movements_api_v1_merchant_inventory_movements_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Movements",
+        "tags": [
+          "merchant"
+        ]
+      },
+      "post": {
+        "operationId": "create_movement_api_v1_merchant_inventory_movements_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Data",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Movement",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/invitations": {
+      "get": {
+        "operationId": "invitations_api_v1_merchant_invitations_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Invitations",
+        "tags": [
+          "merchant"
+        ]
+      },
+      "post": {
+        "operationId": "invite_api_v1_merchant_invitations_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Data",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Invite",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/invitations/{invitation_id}/revoke": {
+      "post": {
+        "operationId": "revoke_invite_api_v1_merchant_invitations__invitation_id__revoke_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "invitation_id",
+            "required": true,
+            "schema": {
+              "title": "Invitation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revoke Invite",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/materials": {
+      "get": {
+        "operationId": "materials_api_v1_merchant_materials_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Materials",
+        "tags": [
+          "merchant"
+        ]
+      },
+      "post": {
+        "operationId": "create_material_api_v1_merchant_materials_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Data",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Material",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/members": {
+      "get": {
+        "operationId": "members_api_v1_merchant_members_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Members",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/members/{member_id}": {
+      "patch": {
+        "operationId": "update_member_api_v1_merchant_members__member_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "member_id",
+            "required": true,
+            "schema": {
+              "title": "Member Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Data",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Member",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/orders": {
+      "get": {
+        "operationId": "order_list_api_v1_merchant_orders_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Order List",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/orders/{order_id}": {
+      "get": {
+        "operationId": "order_detail_api_v1_merchant_orders__order_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "order_id",
+            "required": true,
+            "schema": {
+              "title": "Order Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Order Detail",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/orders/{order_id}/refunds": {
+      "post": {
+        "operationId": "refund_api_v1_merchant_orders__order_id__refunds_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "order_id",
+            "required": true,
+            "schema": {
+              "title": "Order Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Data",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Refund",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/payment-accounts": {
+      "get": {
+        "operationId": "payment_accounts_api_v1_merchant_payment_accounts_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Payment Accounts",
+        "tags": [
+          "merchant"
+        ]
+      },
+      "post": {
+        "operationId": "create_account_api_v1_merchant_payment_accounts_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Data",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Account",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/payment-accounts/{account_id}/{action}": {
+      "post": {
+        "operationId": "account_action_api_v1_merchant_payment_accounts__account_id___action__post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "action",
+            "required": true,
+            "schema": {
+              "title": "Action",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Data",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Account Action",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/preferences": {
+      "get": {
+        "operationId": "preferences_api_v1_merchant_preferences_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Preferences",
+        "tags": [
+          "merchant"
+        ]
+      },
+      "patch": {
+        "operationId": "update_preferences_api_v1_merchant_preferences_patch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Data",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Preferences",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/prices": {
+      "get": {
+        "operationId": "prices_api_v1_merchant_prices_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Prices",
+        "tags": [
+          "merchant"
+        ]
+      },
+      "post": {
+        "operationId": "create_price_api_v1_merchant_prices_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Data",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Price",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/purchases": {
+      "get": {
+        "operationId": "purchases_api_v1_merchant_purchases_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Purchases",
+        "tags": [
+          "merchant"
+        ]
+      },
+      "post": {
+        "operationId": "create_purchase_api_v1_merchant_purchases_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Data",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Purchase",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/purchases/{purchase_id}": {
+      "patch": {
+        "operationId": "update_purchase_api_v1_merchant_purchases__purchase_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "purchase_id",
+            "required": true,
+            "schema": {
+              "title": "Purchase Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Data",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Purchase",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/purchases/{purchase_id}/post": {
+      "post": {
+        "operationId": "post_purchase_api_v1_merchant_purchases__purchase_id__post_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "purchase_id",
+            "required": true,
+            "schema": {
+              "title": "Purchase Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Data",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Post Purchase",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/reports/operating": {
+      "get": {
+        "operationId": "operating_api_v1_merchant_reports_operating_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Operating",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/reports/operating.csv": {
+      "get": {
+        "operationId": "operating_csv_api_v1_merchant_reports_operating_csv_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Operating Csv",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/session": {
+      "get": {
+        "operationId": "session_api_v1_merchant_session_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Session",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/session/tenant": {
+      "post": {
+        "operationId": "switch_api_v1_merchant_session_tenant_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Data",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Switch",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/stores": {
+      "get": {
+        "operationId": "stores_api_v1_merchant_stores_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Stores",
+        "tags": [
+          "merchant"
+        ]
+      },
+      "post": {
+        "operationId": "create_store_api_v1_merchant_stores_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Data",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Store",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/stores/{store_id}": {
+      "patch": {
+        "operationId": "update_store_api_v1_merchant_stores__store_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "store_id",
+            "required": true,
+            "schema": {
+              "title": "Store Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Data",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Store",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/tenant": {
+      "get": {
+        "operationId": "tenant_api_v1_merchant_tenant_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Tenant",
+        "tags": [
+          "merchant"
+        ]
+      },
+      "patch": {
+        "operationId": "update_tenant_api_v1_merchant_tenant_patch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Data",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Tenant",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/transfers": {
+      "get": {
+        "operationId": "transfers_api_v1_merchant_transfers_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Transfers",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/transfers/{transfer_id}/accept": {
+      "post": {
+        "operationId": "accept_transfer_api_v1_merchant_transfers__transfer_id__accept_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "transfer_id",
+            "required": true,
+            "schema": {
+              "title": "Transfer Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Data",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Accept Transfer",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
+    "/api/v1/merchant/transfers/{transfer_id}/cancel": {
+      "post": {
+        "operationId": "cancel_transfer_api_v1_merchant_transfers__transfer_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "transfer_id",
+            "required": true,
+            "schema": {
+              "title": "Transfer Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Data",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel Transfer",
+        "tags": [
+          "merchant"
+        ]
+      }
+    },
     "/api/v1/orders/{order_id}/payments": {
       "post": {
         "operationId": "create_payment_api_v1_orders__order_id__payments_post",
@@ -2990,6 +5329,49 @@
         ]
       }
     },
+    "/api/v1/payments/callback/accounts/{account_id}": {
+      "post": {
+        "operationId": "merchant_payment_callback_api_v1_payments_callback_accounts__account_id__post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Merchant Payment Callback",
+        "tags": [
+          "payments"
+        ]
+      }
+    },
     "/api/v1/payments/callback/alipay": {
       "post": {
         "operationId": "alipay_callback_api_v1_payments_callback_alipay_post",
@@ -3006,6 +5388,27 @@
           }
         },
         "summary": "Alipay Callback",
+        "tags": [
+          "payments"
+        ]
+      }
+    },
+    "/api/v1/payments/callback/alipay_mock": {
+      "post": {
+        "operationId": "alipay_mock_callback_api_v1_payments_callback_alipay_mock_post",
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Alipay Mock Callback",
         "tags": [
           "payments"
         ]
@@ -3436,6 +5839,183 @@
         ]
       }
     },
+    "/api/v1/simulator-bootstrap/sessions": {
+      "post": {
+        "description": "Create a short-lived merchant pairing session for a software simulator.\n\nThis endpoint is explicitly disabled unless SIMULATOR_BOOTSTRAP_ENABLED is\nset. Production hardware will use a separate mTLS path.",
+        "operationId": "simulator_bootstrap_session_api_v1_simulator_bootstrap_sessions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SimulatorBootstrapRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Simulator Bootstrap Session Api V1 Simulator Bootstrap Sessions Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Simulator Bootstrap Session",
+        "tags": [
+          "simulator-pairing"
+        ]
+      }
+    },
+    "/api/v1/simulator-bootstrap/sessions/{session_id}": {
+      "get": {
+        "operationId": "simulator_bootstrap_status_api_v1_simulator_bootstrap_sessions__session_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "serialNumber",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 8,
+              "title": "Serialnumber",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "nonce",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 16,
+              "title": "Nonce",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "proof",
+            "required": true,
+            "schema": {
+              "maxLength": 1024,
+              "minLength": 32,
+              "title": "Proof",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Simulator Bootstrap Status Api V1 Simulator Bootstrap Sessions  Session Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Simulator Bootstrap Status",
+        "tags": [
+          "simulator-pairing"
+        ]
+      }
+    },
+    "/api/v1/simulator-bootstrap/sessions/{session_id}/complete": {
+      "post": {
+        "operationId": "simulator_bootstrap_complete_api_v1_simulator_bootstrap_sessions__session_id__complete_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SimulatorProvisionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Simulator Bootstrap Complete Api V1 Simulator Bootstrap Sessions  Session Id  Complete Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Simulator Bootstrap Complete",
+        "tags": [
+          "simulator-pairing"
+        ]
+      }
+    },
     "/api/v1/tasks/{task_id}/ack": {
       "post": {
         "operationId": "task_ack_api_v1_tasks__task_id__ack_post",
@@ -3529,6 +6109,26 @@
           }
         },
         "summary": "Health"
+      }
+    },
+    "/ready": {
+      "get": {
+        "operationId": "readiness_ready_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Readiness Ready Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Readiness"
       }
     }
   }

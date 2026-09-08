@@ -615,6 +615,30 @@ MIGRATIONS: tuple[tuple[int, str, str], ...] = (
         alter table merchant_tenant add column if not exists default_locale text not null default 'zh-CN';
         alter table terminal add column if not exists ui_locale text not null default 'zh-CN';
     """),
+    (21, "queue-and-price-query-indexes", """
+        -- Separate projection avoids taking the terminal row lock after an order lock.
+        create table terminal_material_watermark (
+            terminal_id bigint primary key,
+            inventory_version bigint not null check(inventory_version>=0)
+        );
+        create index if not exists ix_order_material_commitments on sales_order(terminal_id)
+            where status in ('CREATED','AWAITING_PAYMENT','PAID','QUEUED','DISPATCHED','ACCEPTED','MAKING','HOLD');
+        create index if not exists ix_order_unpaid_expiry on sales_order(created_at)
+            where status='CREATED' and payment_status='NOT_STARTED';
+        create index if not exists ix_merchant_price_lookup on merchant_price(tenant_id,sku,effective_at desc);
+        create index if not exists ix_merchant_price_page on merchant_price(tenant_id,effective_at desc,created_at desc,id);
+    """),
+    (22, "pickup-slot-interlock", """
+        create table terminal_pickup_slot (
+            terminal_id bigint primary key,
+            revision bigint not null,
+            state text not null check(state in ('EMPTY','OCCUPIED','NEEDS_CHECK')),
+            task_id text not null,
+            updated_at timestamptz not null default now()
+        );
+        alter table sales_order add column pickup_required boolean not null default false;
+        alter table sales_order add column collected_at timestamptz;
+    """),
 )
 
 

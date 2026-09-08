@@ -2874,8 +2874,17 @@ function renderPricesView(root) {
 
 async function loadPrices(container) {
   const filters = state.priceFilters || {};
-  const { items } = await adapter.listPrices({ storeId: filters.storeId || undefined, deviceId: filters.deviceId || undefined });
+  const offset = filters.offset || 0;
+  const { items } = await adapter.listPrices({ storeId: filters.storeId || undefined, deviceId: filters.deviceId || undefined, limit: 100, offset });
   clearNode(container);
+  const page = (nextOffset) => {
+    state.priceFilters = { ...filters, offset: nextOffset };
+    loadRegion(container, loadPrices);
+  };
+  container.append(el('div', { class: 'cc-toolbar' },
+    el('button', { class: 'cc-btn', type: 'button', disabled: offset === 0, onclick: () => page(Math.max(0, offset - 100)) }, '上一页'),
+    el('span', null, `第 ${Math.floor(offset / 100) + 1} 页`),
+    el('button', { class: 'cc-btn', type: 'button', disabled: items.length < 100 || offset >= 10000, onclick: () => page(offset + 100) }, '下一页')));
   if (!items.length) {
     container.append(el('div', { class: 'cc-tablewrap' }, emptyState('没有价格记录', can(PERM.pricesManage) ? '使用「新增价格」配置菜单售价' : '需要 prices.manage 权限')));
     return;

@@ -88,6 +88,12 @@ class DeviceMessageRepository:
             (terminal_id, event_id),
         ).fetchone()
 
+    def require_inventory_version(self, terminal_id: int, version: int) -> None:
+        self.connection.execute("""insert into terminal_material_watermark(terminal_id,inventory_version)
+            values(%s,%s) on conflict(terminal_id) do update set inventory_version=
+            greatest(terminal_material_watermark.inventory_version,excluded.inventory_version)""",
+            (terminal_id, version))
+
     def insert_event(
         self, *, terminal_id: int, event_id: str, boot_id: str | None, sequence: int | None,
         event_type: str, occurred_at: Any, digest: str, body: dict[str, Any],

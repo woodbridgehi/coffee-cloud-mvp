@@ -793,7 +793,8 @@ export function createDemoAdapter() {
       let items = db.prices.filter(p => p.tenantId === currentTenantId());
       if (params.storeId) items = items.filter(p => p.storeId === params.storeId);
       if (params.deviceId) items = items.filter(p => p.deviceId === params.deviceId);
-      return { items: clone(items), nextCursor: null, total: items.length };
+      const offset = Number(params.offset || 0);
+      return { items: clone(items.slice(offset, offset + Number(params.limit || 100))), nextCursor: null, total: items.length };
     },
     async createPrice(body) {
       await gate();

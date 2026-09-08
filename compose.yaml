@@ -49,7 +49,7 @@ services:
       MQTT_GATEWAY_ID: coffee-mqtt-gateway-v1
       MQTT_TELEMETRY_BATCH_SIZE: "100"
       MQTT_TELEMETRY_BATCH_WAIT_SECONDS: "0.1"
-    command: ["python", "-m", "app.mqtt_gateway"]
+    command: ["python", "-m", "app.supervised_process", "gateway"]
     healthcheck:
       test: ["CMD", "python", "-m", "app.file_healthcheck", "gateway", "/tmp/mqtt-gateway.json"]
       interval: 10s
@@ -86,7 +86,7 @@ services:
       RUN_ORDER_SSE_LISTENER: "false"
       OFFLINE_THRESHOLD_SECONDS: "90"
       TELEMETRY_ONLINE_TTL_SECONDS: "120"
-    command: ["python", "-m", "app.domain_worker"]
+    command: ["python", "-m", "app.supervised_process", "domain"]
     restart: unless-stopped
     init: true
     read_only: true

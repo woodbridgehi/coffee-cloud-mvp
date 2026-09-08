@@ -8,8 +8,9 @@ from typing import Any, Callable
 from ..command_state import decide_transition, TERMINAL_STATES
 from ..command_state import EXPIRED as COMMAND_EXPIRED
 from ..command_state import UNKNOWN as COMMAND_UNKNOWN
-from ..order_logic import TERMINAL_ORDER_STATUSES, device_progress
+from ..order_logic import TERMINAL_ORDER_STATUSES, device_progress, terminal_is_online
 from ..production_state import EVENT_TARGETS, FINAL_JOBS, FINAL_ORDERS, decide_job_event, device_is_busy, order_transition_allowed
+from ..repositories.pickup import PickupRepository
 from ..protocol import canonical_digest, utc_now
 from ..repositories import CommandRepository, DeviceMessageRepository, DispatchRepository, OrderRepository, PaymentRepository
 from ..settings import Settings
@@ -315,10 +316,9 @@ class ProductionService:
     def dispatch_next_order(self, connection: Any, terminal_id: int) -> dict[str, Any] | None:
         orders = OrderRepository(connection)
         terminal = orders.terminal_for_update(terminal_id)
-        cutoff = utc_now() - timedelta(seconds=self.settings.offline_threshold_seconds)
-        if not terminal or not terminal.get("last_heartbeat_at") or terminal["last_heartbeat_at"] < cutoff or terminal.get("lifecycle_status") != "ACTIVE":
+        if not terminal or not terminal_is_online(terminal, self.settings.offline_threshold_seconds) or terminal.get("lifecycle_status") != "ACTIVE":
             return None
-        if orders.active_job_exists(terminal_id) or device_is_busy(terminal.get("reported_status")):
+        if orders.active_job_exists(terminal_id) or PickupRepository(connection).blocked(terminal_id) or device_is_busy(terminal.get("reported_status")):
             return None
         job = orders.next_queued_job(terminal_id)
         if not job:

@@ -4,6 +4,7 @@ import json
 import logging
 import threading
 import time
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Iterator
@@ -12,6 +13,7 @@ from redis import Redis
 from redis.exceptions import RedisError
 
 from .live_progress import PROGRESS_CHANNEL, PROGRESS_TTL_SECONDS, STORE_PROGRESS_LUA, progress_key, validate_progress
+from .telemetry_leases import CLAIM, SETTLE
 
 
 class TelemetryCache:
@@ -247,31 +249,37 @@ class TelemetryCache:
         if not self.client:
             return []
         try:
-            claimed = self.client.zpopmin(self._dirty_key(), count=limit)
-            device_ids = [str(item[0]) for item in claimed]
+            token = uuid.uuid4().hex
+            device_ids = self.client.eval(CLAIM, 3, *self._lease_keys(), time.time(), 30, token, max(1, limit))
             if not device_ids:
                 return []
             pipe = self.client.pipeline(transaction=False)
             for device_id in device_ids:
                 pipe.hgetall(self._state_key(device_id))
             states = pipe.execute()
-            return [(device_id, state) for device_id, state in zip(device_ids, states) if state.get("terminalId")]
+            return [(device_id, {**state, "_leaseToken": token}) for device_id, state in zip(device_ids, states)]
         except RedisError as exc:
             self.logger.warning("telemetry dirty batch claim failed: %s", exc)
             return []
 
-    def restore_dirty(self, device_ids: list[str]) -> None:
-        if not self.client or not device_ids:
+    def _lease_keys(self) -> tuple[str, str, str]:
+        return self._dirty_key(), "coffee:telemetry:processing", "coffee:telemetry:lease-tokens"
+
+    def settle_dirty(self, snapshots: list[tuple[str, dict[str, str]]], *, retry: bool = False) -> None:
+        if not self.client or not snapshots:
             return
         try:
-            self.client.zadd(self._dirty_key(), {device_id: 0 for device_id in device_ids})
+            pipe = self.client.pipeline(transaction=False)
+            for device_id, state in snapshots:
+                pipe.eval(SETTLE, 3, *self._lease_keys(), device_id, state["_leaseToken"], "retry" if retry else "ack")
+            pipe.execute()
         except RedisError as exc:
-            self.logger.error("telemetry dirty batch restore failed: %s", exc)
+            self.logger.error("telemetry lease settle failed; will retry after lease expiry: %s", exc)
 
     def dirty_count(self) -> int:
         if not self.client:
             return 0
         try:
-            return int(self.client.zcard(self._dirty_key()))
+            return int(self.client.eval("return #redis.call('ZUNION', 2, KEYS[1], KEYS[2])", 2, *self._lease_keys()[:2]))
         except RedisError:
             return -1

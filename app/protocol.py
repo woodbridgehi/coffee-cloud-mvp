@@ -202,6 +202,8 @@ class CommandResult(BaseModel):
 
 
 class PublicOrderCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     recipeId: str = Field(min_length=1, max_length=160)
     recipeVersion: str = Field(min_length=1, max_length=64)
     quantity: Literal[1] = 1

@@ -69,10 +69,31 @@ class OrderRepository:
     def active_count(self, terminal_id: int) -> int:
         row = self.connection.execute(
             """select count(*) as count from sales_order where terminal_id=%s
-                 and status in ('QUEUED','DISPATCHED','ACCEPTED','MAKING')""",
+                 and status in ('CREATED','AWAITING_PAYMENT','PAID','QUEUED','DISPATCHED','ACCEPTED','MAKING','HOLD')""",
             (terminal_id,),
         ).fetchone()
         return int(row["count"])
+
+    def material_commitments(self, terminal_id: int) -> list[dict[str, Any]]:
+        return self.connection.execute(
+            """select product_snapshot from sales_order where terminal_id=%s
+                 and status in ('CREATED','AWAITING_PAYMENT','PAID','QUEUED','DISPATCHED','ACCEPTED','MAKING','HOLD')""",
+            (terminal_id,),
+        ).fetchall()
+
+    def required_inventory_version(self, terminal_id: int) -> int:
+        row = self.connection.execute(
+            'select inventory_version from terminal_material_watermark where terminal_id=%s',
+            (terminal_id,),
+        ).fetchone()
+        return row['inventory_version'] if row else 0
+
+    def expired_unpaid(self, ttl_seconds: int) -> list[dict[str, Any]]:
+        return self.connection.execute("""select * from sales_order
+            where status='CREATED' and payment_status='NOT_STARTED'
+            and created_at < now() - (%s * interval '1 second')
+            order by created_at limit 100 for update skip locked""",
+            (ttl_seconds,)).fetchall()
 
     def insert(
         self,

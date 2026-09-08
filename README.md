@@ -293,7 +293,7 @@ Crucial variables must be mounted from `.env` or Docker secrets (never committed
 
 ### 8.3 MQTT Gateway Lifecycle & Health Checks
 - The gateway uses `clean_start=False` with a 7-day session expiry (604800s) to guarantee QoS 1 offline queue delivery.
-- A `Supervisor` thread manages disconnects using a jittered exponential backoff. Deadlocks halt writes to `/tmp/mqtt-gateway.json`, triggering an automatic Docker `unhealthy` container restart.
+- A supervisor thread manages MQTT reconnects. A separate `app.supervised_process` parent checks each Gateway/Domain Worker health file. Sustained failure for 180–240 seconds terminates the child and exits the container; Docker's `unless-stopped` policy then restarts it. Docker does not restart a running container merely because its health is `unhealthy`. Transient failures reset the grace timer on recovery.
 
 ### 8.4 Device Activation & Provisioning
 1. Admins register devices in `/admin` to generate a one-time activation code.

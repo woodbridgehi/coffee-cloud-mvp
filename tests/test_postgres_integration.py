@@ -61,6 +61,17 @@ def insert_terminal(connection, device_id: str = "test-device") -> int:
     ).fetchone()["id"]
 
 
+def test_stale_telemetry_flush_cannot_overwrite_newer_offline_state(postgres_database):
+    with postgres_database.connect() as connection:
+        terminal_id = insert_terminal(connection)
+        repository = TelemetryRepository(connection)
+        repository.apply_snapshots([("test-device", {"terminalId": str(terminal_id),
+            "lastSeenAt": "2026-09-08T01:00:10Z", "connectionStatus": "offline"})])
+        repository.apply_snapshots([("test-device", {"terminalId": str(terminal_id),
+            "lastSeenAt": "2026-09-08T01:00:00Z", "connectionStatus": "online"})])
+        assert connection.execute("select connection_status from terminal where id=%s", (terminal_id,)).fetchone()["connection_status"] == "offline"
+
+
 def test_real_postgres_telemetry_batch_and_dispatch_recovery(postgres_database: Database) -> None:
     with postgres_database.connect() as connection:
         terminal_id = insert_terminal(connection)

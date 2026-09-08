@@ -39,6 +39,8 @@ let paymentQrCache = { paymentId: null, url: null, loadedAt: 0, loading: false }
 let hasNotifiedReady = false;
 
 const TERMINAL_STATUSES = ['READY', 'FAILED', 'CANCELLED', 'EXPIRED'];
+const orderIsFinished = order => [...TERMINAL_STATUSES, 'REFUNDED'].includes(order.status)
+  && !(order.status === 'READY' && order.pickupRequired && !order.collectedAt);
 const esc = value => String(value ?? '').replace(/[&<>'"]/g, char => (
   { '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]
 ));
@@ -350,7 +352,7 @@ function renderMenu(menuData) {
   document.title = t('order.title.menu');
   const online = menu.paymentMode === 'ONLINE';
   const available = (menu.products || []).filter(p => p.available);
-  const totalRemaining = available.reduce((sum, p) => sum + (p.remainingServings || 0), 0);
+  const availableDrinkTypes = available.length;
   const sellable = menu.salesEnabled && available.length > 0;
   const targetDeviceId = (menu && (menu.deviceId || menu.storeId)) || deviceId;
   const activeOrder = getActiveOrder(targetDeviceId);
@@ -385,8 +387,8 @@ function renderMenu(menuData) {
           </div>
         </div>
         <div class="stock-summary">
-          <strong>${totalRemaining}</strong>
-          <small>${t('order.menu.estimatedCups')}</small>
+          <strong>${availableDrinkTypes}</strong>
+          <small>${t('order.menu.availableDrinkTypes')}</small>
         </div>
       </section>
       <div class="section-title">
@@ -517,7 +519,7 @@ async function loadOrder() {
     });
     saveActiveOrder(order, token, order.deviceId || deviceId);
     renderOrder(order);
-    orderStreamTerminal = [...TERMINAL_STATUSES, 'REFUNDED'].includes(order.status);
+    orderStreamTerminal = orderIsFinished(order);
     if (!orderStreamTerminal) startOrderStream(orderId, token);
   } catch (error) {
     globalThis.CoffeeRobotIntegration?.disconnected();
@@ -556,7 +558,7 @@ async function startOrderStream(orderId, token) {
         if (!data) continue;
         const order = JSON.parse(data);
         renderOrder(order);
-        orderStreamTerminal = [...TERMINAL_STATUSES, 'REFUNDED'].includes(order.status);
+        orderStreamTerminal = orderIsFinished(order);
         if (orderStreamTerminal) {
           controller.abort();
           return;
@@ -628,7 +630,7 @@ function statusNote(order) {
 function bannerFor(order) {
   if (order.status === 'READY') {
     return `<div class="banner ready"><span class="b-icon">${iconCheck}</span><div>
-      <strong>${t('order.banner.readyTitle')}</strong><p>${t('order.note.READY')}</p></div></div>`;
+      <strong>${t(order.collectedAt ? 'order.pickup.collected' : 'order.banner.readyTitle')}</strong><p>${t(order.collectedAt ? 'order.pickup.collected' : 'order.note.READY')}</p></div></div>`;
   }
   if (order.status === 'FAILED') {
     return `<div class="banner failed"><span class="b-icon">${iconAlert}</span><div>
@@ -660,7 +662,7 @@ function scheduleReadyRedirect(order) {
 function renderOrder(order) {
   const params = fragment();
   const token = params.get('token');
-  const terminal = [...TERMINAL_STATUSES, 'REFUNDED'].includes(order.status);
+  const terminal = orderIsFinished(order);
 
   if (['CREATED', 'AWAITING_PAYMENT'].includes(order.status)) {
     /* 支付等待页文案：按 order.payment.provider 区分独立模拟（alipay_mock）与支付宝。
@@ -821,7 +823,7 @@ function barcodeMarkup() {
           ${milestoneMarkup(order)}
           <button class="btn-secondary" id="refresh">${t('order.status.refresh')}</button>
           ${order.production?.robotView?.version === 1 ? `<button class="rv-launch" data-open-robot style="width:100%;margin-top:10px">${t('order.status.robotView')}</button>` : ''}
-          ${order.status === 'READY' ? `<a href="/order?device_id=${encodeURIComponent(order.deviceId || '')}" class="btn-primary" style="text-decoration:none;display:flex;align-items:center;justify-content:center;margin-top:10px">${t('order.status.another')}</a>` : ''}
+          ${order.status === 'READY' && (!order.pickupRequired || order.collectedAt) ? `<a href="/order?device_id=${encodeURIComponent(order.deviceId || '')}" class="btn-primary" style="text-decoration:none;display:flex;align-items:center;justify-content:center;margin-top:10px">${t('order.status.another')}</a>` : ''}
           ${barcodeMarkup()}
           <p class="pay-hint" style="margin-top:10px">${terminal ? t('order.status.archived') : t('order.status.keepOpen')}</p>
         </section>
@@ -845,10 +847,10 @@ function barcodeMarkup() {
   scheduleReadyRedirect(order);
   const currentToken = fragment().get('token');
   if (currentToken) saveActiveOrder(order, currentToken, order.deviceId || deviceId);
-  if (['REFUNDED', 'CANCELLED', 'EXPIRED'].includes(order.status)) {
+  if (order.collectedAt || ['REFUNDED', 'CANCELLED', 'EXPIRED'].includes(order.status)) {
     clearActiveOrder(order.deviceId || deviceId);
   }
-  if (order.status === 'READY') {
+  if (order.status === 'READY' && !order.collectedAt) {
     notifyReadySensory();
   }
 }

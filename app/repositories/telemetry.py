@@ -34,7 +34,8 @@ class TelemetryRepository:
                        reported_status=coalesce(incoming.reported_status,target.reported_status),updated_at=now()
                      from (values {}) as incoming(
                        connection_status,last_seen_at,last_heartbeat_at,reported_status,terminal_id)
-                    where target.id=incoming.terminal_id""").format(values),
+                    where target.id=incoming.terminal_id
+                      and (target.last_seen_at is null or incoming.last_seen_at >= target.last_seen_at)""").format(values),
                 tuple(value for row in rows for value in row),
             )
         # Legacy progressPayload fields may remain in existing Redis hashes.

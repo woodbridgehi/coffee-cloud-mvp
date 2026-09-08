@@ -7,9 +7,11 @@ from typing import Any, Callable
 
 from ..db import UnitOfWork
 from ..order_logic import public_menu
+from ..material_commitments import apply_commitments
 from ..payment_service import apply_paid_callback, transition_payment
 from ..protocol import PublicOrderCreateRequest, canonical_digest, utc_now
 from ..repositories import OrderRepository, PaymentRepository, TerminalRepository
+from ..repositories.pickup import PickupRepository
 from ..robot_view import public_robot_view
 from ..security import derive_order_access_token, hash_token, tokens_equal
 from ..settings import Settings
@@ -47,6 +49,7 @@ class PublicOrderService:
         terminal = repository.find(identifier, for_update=for_update)
         if terminal is None:
             raise ServiceError(404, "device not found")
+        terminal['pickupBlocked'] = PickupRepository(repository.connection).blocked(terminal['id'])
         return terminal
 
     def _payment_mode(self, terminal: dict[str, Any]) -> str:
@@ -74,6 +77,8 @@ class PublicOrderService:
             "orderId": str(order["id"]), "orderNo": order["order_no"],
             "deviceId": order.get("device_id"), "storeId": order.get("store_id"),
             "status": order["status"], "paymentMode": order["payment_mode"],
+            "pickupRequired": bool(order.get('pickup_required')),
+            "collectedAt": iso(order.get('collected_at')),
             "paymentStatus": order["payment_status"],
             "payment": payment_payload(payment) if payment else None,
             "totalAmountMinor": order["total_amount_minor"], "currency": order["currency"],
@@ -115,6 +120,9 @@ class PublicOrderService:
                 self.settings.default_product_price_minor, self.settings.payment_currency,
                 payment_mode,
             )
+            orders = OrderRepository(connection)
+            commitments = orders.material_commitments(terminal['id'])
+            apply_commitments(menu, inventory, commitments, orders.required_inventory_version(terminal['id']))
             if getattr(self.settings,'merchant_enabled',False):
                 menu = apply_merchant_catalog(connection,terminal,menu,payment_mode)
         return {**menu,"serverTime":iso(utc_now())}
@@ -151,6 +159,8 @@ class PublicOrderService:
             )
             if getattr(self.settings,'merchant_enabled',False):
                 menu = apply_merchant_catalog(connection,terminal,menu,payment_mode)
+            commitments = orders.material_commitments(terminal['id'])
+            apply_commitments(menu, inventory, commitments, orders.required_inventory_version(terminal['id']))
             product = next((item for item in menu["products"] if item["recipeId"] == payload.recipeId), None)
             if not product or product["recipeVersion"] != payload.recipeVersion:
                 raise ServiceError(409, "recipe is missing or version changed; refresh the menu")
