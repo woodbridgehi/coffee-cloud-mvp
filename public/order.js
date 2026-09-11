@@ -247,7 +247,10 @@ if (typeof document.addEventListener === 'function') {
   document.addEventListener('change', event => {
     if (event.target?.id !== 'order-language') return;
     i18n.setLocale(event.target.value);
-    if (location.pathname === '/order/status') loadOrder();
+    globalThis.addEventListener?.('pagehide',stopMenuRefresh);
+globalThis.addEventListener?.('pageshow',event=>{if(event.persisted && location.pathname!=='/order/status')loadMenu({background:true});});
+globalThis.addEventListener?.('online',()=>{if(location.pathname!=='/order/status')loadMenu({background:true});});
+if (location.pathname === '/order/status') loadOrder();
     else renderMenu();
   });
 }
@@ -366,16 +369,38 @@ function toast(message, kind = 'info') {
 
 /* ---------- 菜单页 ---------- */
 
-async function loadMenu() {
-  if (!deviceId) {
-    renderError(t('order.error.deviceMissing'));
-    return;
-  }
+let menuRefreshTimer=null,menuRefreshController=null,menuRefreshRevision=0;
+function stopMenuRefresh(){clearTimeout(menuRefreshTimer);menuRefreshRevision++;menuRefreshController?.abort();menuRefreshController=null;}
+function menuFingerprint(value){if(!value)return '';const {serverTime,...data}=value;return JSON.stringify(data);}
+async function loadMenu({background=false}={}) {
+  if (!deviceId) {if(!background)renderError(t('order.error.deviceMissing'));return;}
+  if(document.hidden || submitting){clearTimeout(menuRefreshTimer);if(!document.hidden)menuRefreshTimer=setTimeout(()=>loadMenu({background:true}),5000);return;}
+  stopMenuRefresh();const revision=menuRefreshRevision;
+  const controller=new AbortController();menuRefreshController=controller;
+  const timeout=setTimeout(()=>controller.abort(),8000);
   try {
-    menu = await request(`/api/v1/public/devices/${encodeURIComponent(deviceId)}/menu`);
-    renderMenu();
-  } catch (error) {
-    renderError(t('order.error.menu', { message: error.message }));
+    const next=await request(`/api/v1/public/devices/${encodeURIComponent(deviceId)}/menu`,{signal:controller.signal});
+    let activeChanged=false;
+    const active=getActiveOrder(deviceId);
+    if(active?.token)try{
+      const current=await request(`/api/v1/public/orders/${encodeURIComponent(active.orderId)}`,{headers:{'X-Order-Access-Token':active.token},signal:controller.signal});
+      if(revision!==menuRefreshRevision)return;
+      if(current.collectedAt || ['CANCELLED','EXPIRED','REFUNDED'].includes(current.status)){clearActiveOrder(deviceId);activeChanged=true;}
+      else if(current.status!==active.status){saveActiveOrder(current,active.token,deviceId);activeChanged=true;}
+    }catch{/* A failed status read must not erase the customer's order. */}
+    if(revision!==menuRefreshRevision || submitting)return;
+    const changed=menuFingerprint(menu)!==menuFingerprint(next);
+    if(selected){
+      const replacement=next.products.find(p=>p.recipeId===selected.recipeId && p.available);
+      if(!replacement){selected=null;drinkQuote=null;}
+      else{if(replacement.recipeVersion!==selected.recipeVersion || replacement.priceMinor!==selected.priceMinor || JSON.stringify(replacement.optionSchema)!==JSON.stringify(selected.optionSchema))drinkQuote=null;selected=replacement;}
+    }
+    menu=next;
+    if(!background || changed || activeChanged)renderMenu();
+  } catch(error) {if(!background && revision===menuRefreshRevision && !controller.signal.aborted)renderError(t('order.error.menu',{message:error.message}));}
+  finally{
+    clearTimeout(timeout);
+    if(revision===menuRefreshRevision){menuRefreshController=null;if(!document.hidden)menuRefreshTimer=setTimeout(()=>loadMenu({background:true}),5000);}
   }
 }
 
@@ -1047,9 +1072,11 @@ renderOrder = function (order) {
 /* 页面隐藏时释放 SSE 连接，回到前台时重新加载并订阅。 */
 if (typeof document.addEventListener === 'function') {
   document.addEventListener('visibilitychange', () => {
-    if(document.hidden){stopWatching();globalThis.CoffeeRobotIntegration?.watch(null);}
+    if(document.hidden){stopMenuRefresh();stopWatching();globalThis.CoffeeRobotIntegration?.watch(null);}
     if (document.visibilityState === 'visible' && location.pathname === '/order/status') {
       loadOrder();
+    } else if(document.visibilityState==='visible'){
+      loadMenu({background:true});
     } else if (orderStreamAbort) {
       stopWatching();globalThis.CoffeeRobotIntegration?.watch(null);
       globalThis.CoffeeRobotIntegration?.disconnected();
@@ -1059,5 +1086,8 @@ if (typeof document.addEventListener === 'function') {
   });
 }
 
+globalThis.addEventListener?.('pagehide',stopMenuRefresh);
+globalThis.addEventListener?.('pageshow',event=>{if(event.persisted && location.pathname!=='/order/status')loadMenu({background:true});});
+globalThis.addEventListener?.('online',()=>{if(location.pathname!=='/order/status')loadMenu({background:true});});
 if (location.pathname === '/order/status') loadOrder();
 else loadMenu();
