@@ -298,6 +298,17 @@ class OrderRepository:
         ).fetchone()
         return int(row["count"])
 
+    def queue_context(self, order: dict[str, Any]) -> list[dict[str, Any]]:
+        return self.connection.execute(
+            """select j.* from production_job j join sales_order o on o.id=j.order_id
+                 where j.terminal_id=%s and j.order_id<>%s and (
+                   j.status in ('DISPATCHED','ACCEPTED','EXECUTING','PAUSED','RETRY_WAIT','HOLD','UNKNOWN')
+                   or (j.status='QUEUED' and o.status='QUEUED' and (j.created_at,j.id) <
+                     (select created_at,id from production_job where order_id=%s)))
+                 order by j.created_at,j.id""",
+            (order['terminal_id'], order['id'], order['id']),
+        ).fetchall()
+
     def cancel_job(self, order_id: uuid.UUID) -> None:
         self.connection.execute(
             """update production_job set status='CANCELLED',revision=revision+1,

@@ -870,6 +870,15 @@ def get_public_order(
     return public_order_service.get(order_id, access_token)
 
 
+@app.get("/api/v1/public/orders/{order_id}/scene", tags=["public-orders"])
+def watch_public_scene(
+    order_id: uuid.UUID, response: Response,
+    access_token: Annotated[str | None, Header(alias="X-Order-Access-Token")] = None,
+) -> dict[str, Any]:
+    response.headers["Cache-Control"] = "no-store"
+    return public_order_service.watch(order_id, access_token)
+
+
 @app.get("/api/v1/public/orders/{order_id}/events", tags=["public-orders"], include_in_schema=False)
 async def stream_public_order(
     order_id: uuid.UUID,

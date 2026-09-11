@@ -370,7 +370,7 @@ function renderMenu(menuData) {
       <section class="hero">
         <div class="hero-kicker">${t('order.menu.kicker')}</div>
         <h1>${t('order.menu.title')}</h1>
-        <p class="hero-sub">${t('order.menu.subtitle')}</p>
+
       </section>
       <section class="machine-card" aria-label="${esc(t('order.menu.machineAria'))}">
         <div class="machine-meta">
@@ -392,10 +392,9 @@ function renderMenu(menuData) {
       ${menu.products.length ? `<section class="drink-list">${menu.products.map(card).join('')}</section>`
         : `<section class="center-state" style="min-height:32vh"><p>${t('order.menu.noProducts')}</p></section>`}
       ${customizationMarkup()}
-      <p class="stock-footnote">${t('order.menu.stockNote')}</p>
-      <div class="notice">${online
-        ? t('order.menu.onlineNotice') : t('order.menu.testNotice')}</div>
-      <p class="page-foot">${t('order.menu.footer')}</p>
+
+      ${online ? '' : `<div class="notice">${t('order.menu.testNotice')}</div>`}
+
     </main>
     <section class="checkout" aria-label="${esc(t('order.menu.checkoutAria'))}">
       <div class="checkout-copy">
@@ -655,7 +654,7 @@ function milestoneMarkup(order) {
 
 function statusNote(order) {
   if (order.status === 'FAILED' && order.failure?.message) return order.failure.message;
-  const params = order.status === 'QUEUED' ? { count: Math.max(0, (order.queuePosition || 1) - 1) } : {};
+  const params = order.status === 'QUEUED' ? { count: order.queue?.aheadCount ?? Math.max(0, (order.queuePosition || 1) - 1) } : {};
   return t(`order.note.${order.status}`, params, { defaultValue: t('order.note.default') });
 }
 
@@ -715,18 +714,18 @@ function renderOrder(order) {
         <div class="pay-grid">
           <section class="pay-order-card" aria-label="${esc(t('order.payment.orderAria'))}">
             <h1>${payTitle}</h1>
-            <p class="lead">${payLead}</p>
+            ${isMockProvider ? `<p class="lead">${payLead}</p>` : ''}
             <div class="pay-product-row">
               <span class="pp-name">
                 <strong>${esc(order.product?.name || t('order.product.drink'))} × 1</strong>
-                <small>${t('order.payment.scanOrder')}</small>
+
               </span>
               <span class="pay-amount"><strong>${money({ priceMinor: order.totalAmountMinor, currency: order.currency })}</strong><small>${t('order.payment.total')}</small></span>
             </div>
             ${milestoneMarkup(order)}
             <div class="pay-side-actions">
               <button class="btn-secondary" id="refresh">${t('order.payment.refresh')}</button>
-              <span class="pay-hint">${t('order.payment.pushHint')}</span>
+
             </div>
           </section>
           <aside class="pay-panel" aria-label="${esc(t('order.payment.panelAria'))}">
@@ -737,7 +736,7 @@ function renderOrder(order) {
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15-5-5 1.41-1.41L11 14.17l7.59-7.59L20 8l-9 9z"/></svg>
                     <span>${payButton}</span>
                   </a>
-                  <span class="pay-subhint">${t('order.payment.recommend')}</span>`
+`
                 : `<span class="pay-hint">${t('order.payment.loadingMethod')}</span>`}
             </div>
             <details class="pay-qr-accordion" open>
@@ -831,6 +830,7 @@ function barcodeMarkup() {
     ${baseHeader(terminal ? 'idle' : '', terminal ? t('order.header.confirmed') : t('order.header.syncing'), t('order.header.order', { orderNo: esc(order.orderNo) }))}
     <main class="page-main">
       ${bannerFor(order)}
+      ${order.status !== 'QUEUED' ? `<button id="view-mode" class="rv-launch">${t(orderViewMode==='3d'?'order.view.2d':'order.view.3d')}</button><div id="order-scene"></div>` : ''}
       <div class="status-grid">
         <section class="status-card ticket-card" aria-label="${esc(t('order.status.progressAria'))}">
           <div class="ticket-header-ribbon">
@@ -844,39 +844,36 @@ function barcodeMarkup() {
           </div>` : ''}
           ${order.failure ? `<div class="order-failure" role="status"><strong>${t('order.failure.title')}</strong><p>${esc(order.failure.message || t('order.banner.failedBody'))}</p><small>${t('order.failure.code')}: ${esc(order.failure.code || 'PRODUCTION_FAILED')}</small></div>` : ''}
           ${flavorPillsFor(order.product)}
-          <div class="progress-wrap">
+          <p class="ticket-product">${esc(order.product?.name || t('order.product.drink'))} × 1 · ${money({ priceMinor: order.totalAmountMinor, currency: order.currency })}</p>
+          ${order.status !== 'QUEUED' ? `<div class="progress-wrap">
             <div class="progress-ring" style="--progress:${percent * 3.6}deg" role="img" aria-label="${esc(t('order.status.progressPercent', { percent }))}">
               <div><strong>${percent}%</strong><small>${t('order.status.wholeProgress')}</small></div>
             </div>
             <div class="now-step">
               <strong>${esc(order.production?.currentStepName || orderLabel(order.status))}</strong>
               <span>${timing}</span>
-              <span class="muted-line">${esc(order.product?.name || t('order.product.drink'))} × 1 · ${money({ priceMinor: order.totalAmountMinor, currency: order.currency })}</span>
+
             </div>
-          </div>
+          </div>` : ''}
           <strong>${orderLabel(order.status)}</strong>
-          <div class="status-meta">${esc(statusNote(order))}</div>
+          ${statusNote(order) ? `<div class="status-meta">${esc(statusNote(order))}</div>` : ''}
           ${milestoneMarkup(order)}
           <button class="btn-secondary" id="refresh">${t('order.status.refresh')}</button>
-          ${order.production?.robotView?.version === 1 ? `<button class="rv-launch" data-open-robot style="width:100%;margin-top:10px">${t('order.status.robotView')}</button>` : ''}
+          ${order.status === 'QUEUED' ? `<div class="queue-info" role="status"><p>${order.queue?.estimatedWaitSeconds != null ? t('order.queue.estimate', {minutes: Math.max(1,Math.ceil(order.queue.estimatedWaitSeconds/60))}) : t('order.queue.uncertain')}</p>${order.queue?.watchAvailable ? `<button id="watch-machine" class="rv-launch">${t('order.queue.watch')}</button>` : ''}</div>` : ''}
+
           ${order.status === 'READY' && (!order.pickupRequired || order.collectedAt) ? `<a href="/order?device_id=${encodeURIComponent(order.deviceId || '')}" class="btn-primary" style="text-decoration:none;display:flex;align-items:center;justify-content:center;margin-top:10px">${t('order.status.another')}</a>` : ''}
           ${pickupCodeFor(order) ? barcodeMarkup() : ''}
-          <p class="pay-hint" style="margin-top:10px">${terminal ? t('order.status.archived') : t('order.status.keepOpen')}</p>
+
         </section>
         <section class="status-steps">
           <div class="steps-card">
             <h2>${t('order.status.steps')}</h2>
             <ol class="timeline" aria-label="${esc(t('order.status.steps'))}">${timeline}</ol>
           </div>
-          <div class="ops-card">
-            <strong>${t('order.status.layersTitle')}</strong>
-            <p>${t('order.status.layersBody')}</p>
-          </div>
+
         </section>
       </div>
-      <footer class="status-foot">
-        <span>${terminal ? t('order.status.finalArchived') : t('order.status.live')}</span>
-      </footer>
+
     </main>`;
   const refreshBtn = document.getElementById('refresh');
   if (refreshBtn) refreshBtn.onclick = loadOrder;
@@ -892,6 +889,7 @@ function barcodeMarkup() {
 }
 
 function renderError(message, retry = false) {
+  globalThis.CoffeeRobotIntegration?.inline(null,false);
   document.title = t('order.title.error');
   app.innerHTML = `
     ${baseHeader('idle', t('order.error.interrupted'))}
@@ -956,6 +954,36 @@ function setQrNote(text) {
    跳过整页重渲染，只补挂二维码，避免 DOM 与 Blob URL 被替换。 */
 const renderOrderContent = renderOrder;
 let renderedPaymentId = null;
+let orderViewMode='3d', latestSceneOrder=null, watchTimer=null, watchController=null, watchGeneration=0;
+function stopWatching(){watchGeneration++;clearTimeout(watchTimer);watchController?.abort();watchController=null;}
+function applyOrderView(){
+  const host=document.getElementById('order-scene');
+  const show=orderViewMode==='3d' && !!host;
+  globalThis.CoffeeRobotIntegration?.inline(host,show);
+  const progress=document.querySelector?.('.progress-wrap');if(progress)progress.hidden=show;
+  const button=document.getElementById('view-mode');
+  if(button){button.textContent=t(show?'order.view.2d':'order.view.3d');button.onclick=()=>{orderViewMode=show?'2d':'3d';applyOrderView();};}
+}
+async function watchMachine(){
+  stopWatching();const generation=watchGeneration;
+  const order=latestSceneOrder,token=fragment().get('token');
+  if(order?.status!=='QUEUED' || !token)return;
+  async function poll(){
+    if(generation!==watchGeneration || document.hidden)return;
+    watchController=new AbortController();
+    try{
+      const response=await fetch(`/api/v1/public/orders/${encodeURIComponent(order.orderId)}/scene`,{headers:{'X-Order-Access-Token':token},signal:watchController.signal,cache:'no-store'});
+      if(!response.ok)throw Error('scene unavailable');
+      const data=await response.json();if(generation!==watchGeneration)return;
+      await globalThis.CoffeeRobotIntegration?.watch(data.scene);
+      if(!data.scene){stopWatching();toast(t("order.queue.unavailable"));return;}
+      watchTimer=setTimeout(poll,4000);
+    }catch{if(generation===watchGeneration){stopWatching();globalThis.CoffeeRobotIntegration?.watch(null);toast(t("order.queue.unavailable"));}}
+  }
+  await poll();
+}
+globalThis.addEventListener?.('coffee-watch-closed',stopWatching);
+globalThis.addEventListener?.('pagehide',stopWatching);
 renderOrder = function (order) {
   globalThis.CoffeeRobotIntegration?.order(order);
   globalThis.CoffeeSound?.update({ id: order.orderId, status: ['PAUSED', 'RETRY_WAIT', 'HOLD'].includes(order.production?.status) ? order.production.status : order.status, revision: order.production?.deviceRevision, collected: !!order.collectedAt });
@@ -966,16 +994,21 @@ renderOrder = function (order) {
     return;
   }
   renderedPaymentId = paymentWaiting ? paymentId : null;
+  latestSceneOrder=order;
+  if(order.status!=='QUEUED'){stopWatching();globalThis.CoffeeRobotIntegration?.watch(null);}
   renderOrderContent(order);
-
+  applyOrderView();
+  const watch=document.getElementById('watch-machine');if(watch)watch.onclick=watchMachine;
 };
 
 /* 页面隐藏时释放 SSE 连接，回到前台时重新加载并订阅。 */
 if (typeof document.addEventListener === 'function') {
   document.addEventListener('visibilitychange', () => {
+    if(document.hidden){stopWatching();globalThis.CoffeeRobotIntegration?.watch(null);}
     if (document.visibilityState === 'visible' && location.pathname === '/order/status') {
       loadOrder();
     } else if (orderStreamAbort) {
+      stopWatching();globalThis.CoffeeRobotIntegration?.watch(null);
       globalThis.CoffeeRobotIntegration?.disconnected();
     globalThis.CoffeeSound?.disconnect();
       orderStreamAbort.abort();

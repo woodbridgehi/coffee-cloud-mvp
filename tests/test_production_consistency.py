@@ -432,3 +432,41 @@ def test_retry_attempt_is_durable_and_old_attempt_cannot_complete(production_cas
     assert snapshot(production_case)['job_status'] == 'EXECUTING'
     event(production_case, 'task.succeeded', 5, attempt=2)
     assert snapshot(production_case)['order_status'] == 'READY'
+
+
+def test_queue_wait_watch_privacy_and_fifo(production_case):
+    from app.services.public_orders import PublicOrderService
+    from test_payment_consistency import order_token
+    db, production, _, identity, a, command = production_case
+    event(production_case, 'task.started', 1)
+    plan = [{'stepId':'SECRET-A-STEP','stepName':'SECRET-A-NAME','durationSeconds':60,
+             'visual':{'version':1,'actions':['brew'],'materials':[{'name':'SECRET-MATERIAL','materialId':'secret','amount':40,'unit':'ml'}]}}]
+    with db.connect() as c:
+        c.execute('update production_job set step_durations=%s,current_step_id=%s,remaining_seconds=30 where order_id=%s', (Jsonb(plan),'SECRET-A-STEP',a))
+        queued = [seed_paid_queued_order(c,identity['id'])[0] for _ in range(4)]
+        for i, oid in enumerate(queued):
+            c.execute("update production_job set planned_duration_seconds=120,created_at=now()+(%s * interval '1 second') where order_id=%s", (i+1,oid))
+        assert production.dispatch_next_order(c,identity['id']) is None
+    public = PublicOrderService(UnitOfWork(db),Settings.model_construct(),request_dispatch=production.request_dispatch,payment_provider=lambda _:None)
+    for i, oid in enumerate(queued):
+        snapshot = public.get(oid,order_token(oid))
+        assert snapshot['queue']['aheadCount'] == i+1
+        assert snapshot['queue']['estimatedWaitSeconds'] == 30+120*i
+        assert snapshot['queue']['watchAvailable'] is True
+    scene = public.watch(queued[0],order_token(queued[0]))['scene']
+    assert scene['spectator'] and scene['steps'][0]['visual']['actions']==['brew']
+    assert 'SECRET' not in repr(scene) and command['taskId'] not in repr(scene) and str(a) not in repr(scene)
+    assert set(scene)=={'taskId','attempt','revision','state','stepId','stepIndex','stepProgress','overallProgress','steps','name','source','connected','inventory','spectator'}
+    with pytest.raises(ServiceError):
+        public.watch(queued[0],order_token(queued[1]))
+    with pytest.raises(ServiceError):
+        public.get(a,order_token(queued[0]))
+    event(production_case,'task.paused',2)
+    assert public.get(queued[0],order_token(queued[0]))['queue']['estimatedWaitSeconds'] is None
+    assert public.watch(queued[0],order_token(queued[0])) == {'scene':None}
+    event(production_case,'task.resumed',3)
+    event(production_case,'task.succeeded',4)
+    with db.connect() as c:
+        next_command=production.dispatch_next_order(c,identity['id'])
+        assert next_command['orderId']==str(queued[0])
+    assert public.watch(queued[0],order_token(queued[0])) == {'scene':None}

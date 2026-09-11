@@ -84,7 +84,7 @@ test('keeps the payment DOM and QR node stable across status polls', () => {
   context.renderOrder(order);
   assert.equal(afterFirst, before + 1);
   assert.equal(app.writes, afterFirst);
-  assert.match(app.innerHTML, /二维码加载后保持不变/);
+  assert.doesNotMatch(app.innerHTML, /二维码加载后保持不变|实时推送/);
 });
 
 test('customer order ready state retains details and provides manual reorder without auto redirect', () => {
@@ -94,7 +94,7 @@ test('customer order ready state retains details and provides manual reorder wit
     production: { overallProgress: 1, plannedDurationSeconds: 10 },
   });
   assert.match(app.innerHTML, /制作完成/);
-  assert.match(app.innerHTML, /取杯口令/);
+  assert.match(app.innerHTML, /取杯码/);
   assert.match(app.innerHTML, /再点一杯/);
   assert.doesNotMatch(app.innerHTML, /6 秒后自动返回/);
 });
@@ -156,7 +156,7 @@ test('mobile payment waiting view renders prominent direct payment button', () =
   context.renderOrder(order);
   assert.match(app.innerHTML, /打开支付宝付款/);
   assert.match(app.innerHTML, /btn-alipay-cta/);
-  assert.match(app.innerHTML, /二维码加载后保持不变/);
+  assert.doesNotMatch(app.innerHTML, /二维码加载后保持不变|实时推送/);
 });
 
 test('English locale renders the customer menu and status without changing order data', () => {
@@ -173,7 +173,7 @@ test('English locale renders the customer menu and status without changing order
     production: { overallProgress: 1, plannedDurationSeconds: 10 },
   });
   assert.match(app.innerHTML, /Ready for pickup/);
-  assert.match(app.innerHTML, /PICKUP CODE/);
+  assert.match(app.innerHTML, /Pickup code/);
   assert.match(app.innerHTML, /Store Latte/);
 });
 
@@ -202,4 +202,18 @@ test('rejection stops milestones before making and does not wait for a duration'
   assert.equal((milestones.match(/class="milestone done"/g)||[]).length,3);
   assert.equal((milestones.match(/class="milestone error"/g)||[]).length,1);
   assert.doesNotMatch(app.innerHTML,/等待设备返回计划时长/);
+});
+
+test('queued customer sees active order in ahead count and an optional private watch entry', () => {
+  context.order={orderId:'b',orderNo:'B',status:'QUEUED',product:{name:'B coffee'},queuePosition:1,
+    queue:{aheadCount:3,estimatedWaitSeconds:185,watchAvailable:true}};
+  vm.runInContext('renderOrder(order)',context);
+  assert.match(html,/前方还有 3 杯/);
+  assert.match(html,/约 4 分钟/);
+  assert.match(html,/id="watch-machine"/);
+  assert.doesNotMatch(html,/id="order-scene"/);
+  context.order.queue.estimatedWaitSeconds=null;context.order.queue.watchAvailable=false;
+  vm.runInContext('renderOrder(order)',context);
+  assert.match(html,/等待时间待确认/);
+  assert.doesNotMatch(html,/id="watch-machine"/);
 });

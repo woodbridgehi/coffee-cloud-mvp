@@ -9,13 +9,13 @@ from typing import Any, Callable
 
 from ..customization import select_variant, issue_quote, check_quote
 from ..db import UnitOfWork
-from ..order_logic import public_menu
+from ..order_logic import public_menu, terminal_is_online
 from ..material_commitments import apply_commitments
 from ..payment_service import apply_paid_callback, transition_payment
 from ..protocol import PublicOrderCreateRequest, canonical_digest, utc_now
 from ..repositories import OrderRepository, PaymentRepository, TerminalRepository
 from ..repositories.pickup import PickupRepository
-from ..robot_view import public_robot_view
+from ..robot_view import public_robot_view, anonymous_robot_snapshot
 from ..security import derive_order_access_token, hash_token, tokens_equal
 from ..settings import Settings
 from ..telemetry import TelemetryCache
@@ -248,6 +248,53 @@ class PublicOrderService:
             return snapshot
         return merge_progress(snapshot, self.telemetry_cache.latest_progress(snapshot["deviceId"], job["taskId"]))
 
+    def _queue(self, orders: OrderRepository, order: dict[str, Any]) -> dict[str, Any] | None:
+        if order['status'] != 'QUEUED':
+            return None
+        jobs = orders.queue_context(order)
+        terminal = TerminalRepository(orders.connection).find(order['device_id'])
+        blocked = PickupRepository(orders.connection).blocked(order['terminal_id'])
+        online = bool(terminal and terminal_is_online(terminal, self.settings.offline_threshold_seconds))
+        uncertain = not online or terminal.get('lifecycle_status') != 'ACTIVE' or blocked or any(j['status'] in ('PAUSED','RETRY_WAIT','HOLD','UNKNOWN') for j in jobs)
+        seconds = 0
+        for job in jobs:
+            duration = job.get('remaining_seconds') if job['status'] == 'EXECUTING' else job.get('planned_duration_seconds')
+            if duration is None:
+                duration = job.get('planned_duration_seconds')
+            if duration is None or duration <= 0:
+                uncertain = True
+            else:
+                remaining = float(duration)
+                if job['status'] == 'EXECUTING' and job.get('remaining_seconds') is not None:
+                    remaining = max(0, remaining - max(0, (utc_now()-job['updated_at']).total_seconds()))
+                seconds += remaining
+        return {'aheadCount': len(jobs), 'estimatedWaitSeconds': None if uncertain else round(seconds),
+                'estimateOnly': True, 'blocked': bool(uncertain),
+                'watchAvailable': online and any(j['status']=='EXECUTING' and public_robot_view(j['step_durations']) for j in jobs)}
+
+    def watch(self, order_id: uuid.UUID, access_token: str | None) -> dict[str, Any]:
+        with self.uow.transaction() as connection:
+            orders = OrderRepository(connection)
+            order = self._authenticate(orders, order_id, access_token)
+            if order['status'] != 'QUEUED':
+                return {'scene': None}
+            terminal = TerminalRepository(connection).find(order['device_id'])
+            if not terminal or not terminal_is_online(terminal, self.settings.offline_threshold_seconds):
+                return {'scene': None}
+            job = next((j for j in orders.queue_context(order) if j['status']=='EXECUTING'), None)
+        if not job:
+            return {'scene': None}
+        # Redis progress is validated against the active task, then projected again.
+        if self.telemetry_cache:
+            raw = {'status':'MAKING', 'deviceId':order['device_id'], 'production':{
+                'status':'EXECUTING', 'taskId':job['task_id'], 'deviceRevision':job['last_device_revision'],
+                'overallProgress':job['progress'], 'stepProgress':job['step_progress']}}
+            live = merge_progress(raw, self.telemetry_cache.latest_progress(order['device_id'], job['task_id']))['production']
+            job = {**job, 'current_step_id':live.get('currentStepId',job['current_step_id']),
+                   'step_progress':live['stepProgress'], 'progress':live['overallProgress'],
+                   'last_device_revision':live['deviceRevision']}
+        return {'scene': anonymous_robot_snapshot(job, hash_token(f"{access_token}:{job['task_id']}"))}
+
     def get(self, order_id: uuid.UUID, access_token: str | None, *, include_progress: bool = True) -> dict[str, Any]:
         with self.uow.transaction() as connection:
             orders = OrderRepository(connection)
@@ -257,6 +304,7 @@ class PublicOrderService:
             if order is None or not tokens_equal(order["access_token_hash"].strip(), hash_token(access_token)):
                 raise ServiceError(404, "order not found")
             snapshot = self._payload(orders, PaymentRepository(connection), order)
+            snapshot["queue"] = self._queue(orders, order)
         # Release the SQL connection before any Redis I/O.
         return self.with_live_progress(snapshot) if include_progress else snapshot
 

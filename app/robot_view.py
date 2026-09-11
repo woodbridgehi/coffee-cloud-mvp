@@ -51,3 +51,24 @@ def public_robot_view(plan: Any) -> dict[str, Any] | None:
                       "stepIndex": index, "durationSeconds": duration,
                       "visual": {"version": 1, "actions": actions, "materials": materials, **liquid_reference, **channel_meta, **art_meta}})
     return {"version": 1, "steps": steps} if steps else None
+
+
+def anonymous_robot_snapshot(job: dict[str, Any], view_key: str) -> dict[str, Any] | None:
+    """Allowlisted scene only: never serialize an order, product or raw task identifier."""
+    view = public_robot_view(job.get('step_durations'))
+    if not view:
+        return None
+    current = next((i for i, s in enumerate(view['steps']) if s['stepId'] == job.get('current_step_id')), 0)
+    steps = []
+    for i, step in enumerate(view['steps']):
+        visual = {'version': 1, 'actions': step['visual']['actions'], 'materials': []}
+        if 'latteArt' in step['visual']:
+            visual['latteArt'] = step['visual']['latteArt']
+        steps.append({'stepId': f'scene-{i}', 'stepIndex': i, 'stepName': '',
+                      'durationSeconds': step['durationSeconds'], 'visual': visual})
+    return {'taskId': view_key, 'attempt': job.get('execution_attempt', 1),
+            'revision': int(job.get('last_device_revision') or 0), 'state': 'RUNNING',
+            'stepId': f'scene-{current}', 'stepIndex': current,
+            'stepProgress': float(job.get('step_progress') or 0),
+            'overallProgress': float(job.get('progress') or 0), 'steps': steps,
+            'name': '', 'source': 'order', 'connected': True, 'inventory': [], 'spectator': True}

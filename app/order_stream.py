@@ -33,9 +33,12 @@ async def order_stream(broker: OrderEventBroker, service: PublicOrderService,
                 return
             while True:
                 try:
-                    flags = await asyncio.wait_for(queue.get(), timeout=15)
+                    flags = await asyncio.wait_for(queue.get(), timeout=5 if snapshot["status"] == "QUEUED" else 15)
                     break
                 except TimeoutError:
+                    if snapshot["status"] == "QUEUED":
+                        flags = ORDER_CHANGED
+                        break
                     yield ": keepalive\n\n"
             await asyncio.sleep(0.05)
             while not queue.empty():

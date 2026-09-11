@@ -1052,3 +1052,9 @@ img { max-width: 100%; }
 .order-failure{margin:18px 0;padding:14px 16px;border:1px solid #ddc0b5;border-left:3px solid #a64232;border-radius:6px;background:#fff1eb;color:#783a30;overflow-wrap:anywhere}.order-failure p{margin:8px 0;line-height:1.65}.order-failure small{font-family:monospace}
 
 .timeline li.error .step-dot{border-color:#a64232;background:#a64232}.timeline li.error strong{color:#a64232}
+
+.progress-wrap[hidden]{display:none}.queue-info{margin:16px 0;padding:14px;background:#f5f1e7;border-radius:10px;line-height:1.7}.queue-info small{display:block;color:#657467}.queue-info button{margin-top:10px}
+
+.qr-note:empty{display:none}
+
+.ticket-product{margin:14px 0;color:var(--muted,#657467);font-size:13px;line-height:1.6}
