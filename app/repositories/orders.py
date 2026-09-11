@@ -204,22 +204,23 @@ class OrderRepository:
     def update_job_progress(
         self, job_id: uuid.UUID, *, progress: float, step_progress: float,
         step_id: str | None, step_name: str | None, elapsed: float | None,
-        remaining: float | None, device_revision: int | None,
+        remaining: float | None, device_revision: int | None, attempt: int | None = None,
     ) -> None:
         self.connection.execute(
             """update production_job set progress=%s,step_progress=%s,
                  current_step_id=coalesce(%s,current_step_id),current_step_name=coalesce(%s,current_step_name),
                  elapsed_seconds=coalesce(%s,elapsed_seconds),remaining_seconds=coalesce(%s,remaining_seconds),
                  last_device_revision=greatest(last_device_revision,coalesce(%s,last_device_revision)),
+                 execution_attempt=greatest(execution_attempt,coalesce(%s,execution_attempt)),
                  revision=revision+1,updated_at=now() where id=%s""",
-            (progress, step_progress, step_id, step_name, elapsed, remaining, device_revision, job_id),
+            (progress, step_progress, step_id, step_name, elapsed, remaining, device_revision, attempt, job_id),
         )
 
     def update_job_terminal(
         self, job_id: uuid.UUID, *, status: str, progress: float, step_progress: float,
         planned: float | None, steps: Any, failure: dict[str, Any] | None,
         elapsed: float | None, remaining: float | None, device_revision: int | None,
-        accepted_at: Any, started_at: Any, completed_at: Any,
+        accepted_at: Any, started_at: Any, completed_at: Any, attempt: int | None = None,
     ) -> None:
         self.connection.execute(
             """update production_job set status=%s,progress=%s,step_progress=%s,
@@ -228,9 +229,10 @@ class OrderRepository:
                  failure_json=case when %s in ('EXECUTING','SUCCEEDED') then null else coalesce(%s,failure_json) end,
                  elapsed_seconds=coalesce(%s,elapsed_seconds),remaining_seconds=coalesce(%s,remaining_seconds),
                  last_device_revision=greatest(last_device_revision,coalesce(%s,last_device_revision)),
+                 execution_attempt=greatest(execution_attempt,coalesce(%s,execution_attempt)),
                  revision=revision+1,accepted_at=%s,started_at=%s,completed_at=%s,updated_at=now() where id=%s""",
             (status, progress, step_progress, planned, Jsonb(steps) if steps is not None else None, status,
-             Jsonb(failure) if failure else None, elapsed, remaining, device_revision,
+             Jsonb(failure) if failure else None, elapsed, remaining, device_revision, attempt,
              accepted_at, started_at, completed_at, job_id),
         )
 
@@ -339,7 +341,7 @@ class OrderRepository:
         return self.connection.execute(
             f"""select o.*,t.device_id,t.store_id,j.task_id,j.status as production_status,
                        j.progress,j.step_progress,j.last_device_revision,j.revision as production_revision,
-                       j.current_step_name,j.manual_review_required,j.hold_reason
+                       j.current_step_name,j.current_step_id,j.failure_json,j.completed_at as failure_at,j.manual_review_required,j.hold_reason
                   from sales_order o join terminal t on t.id=o.terminal_id
                   left join production_job j on j.order_id=o.id
                   {where} order by o.created_at desc limit %s""",

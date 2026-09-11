@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from ..failure_info import failure_info
+
 import uuid
 import math
 from datetime import timedelta
@@ -169,6 +171,8 @@ class ProductionService:
 
     @staticmethod
     def _validate_metrics(payload: dict[str, Any]) -> None:
+        if payload.get('attempt') is not None and (type(payload['attempt']) is not int or not 1 <= payload['attempt'] <= 2147483647):
+            raise ServiceError(422, 'attempt must be a positive integer')
         for key in ("taskId", "messageId", "orderId", "stepId", "stepName", "state"):
             if payload.get(key) is not None and not isinstance(payload[key], str):
                 raise ServiceError(422, f"{key} must be a string")
@@ -234,6 +238,8 @@ class ProductionService:
                         "revision": command["revision"], "duplicate": True,
                     }}
 
+        if event_payload.get('attempt') is not None and event_payload['attempt'] < row.get('execution_attempt', 1):
+            return ignored('STALE_ATTEMPT')
         if order["status"] in FINAL_ORDERS or row["status"] in FINAL_JOBS or command["status"] in TERMINAL_STATES:
             return ignored("FINAL_STATE")
         if event_type in {"step.started", "step.completed"}:
@@ -246,7 +252,7 @@ class ProductionService:
                 row["id"], progress=progress, step_progress=step_progress,
                 step_id=event_payload.get("stepId"), step_name=event_payload.get("stepName") or body.get("message"),
                 elapsed=event_payload.get("elapsedSeconds"), remaining=event_payload.get("remainingSeconds"),
-                device_revision=device_revision,
+                device_revision=device_revision, attempt=event_payload.get("attempt"),
             )
             return {"orderId": str(order["id"]), "status": "PROGRESS"}
         order_status, job_status, command_status = EVENT_TARGETS[event_type]
@@ -261,6 +267,10 @@ class ProductionService:
             {"code": event_payload.get("reasonCode"), "details": event_payload.get("details")}
             if event_type == "task.rejected" else None
         )
+        if event_type in {'task.failed', 'task.rejected'}:
+            failure = dict(failure or {})
+            failure['code'] = failure.get('code') or failure.get('errorCode') or ('COMMAND_REJECTED' if event_type == 'task.rejected' else 'PRODUCTION_FAILED')
+            failure['message'] = failure_info({'failure_code': failure['code'], 'failure_message': body.get('message')}, {'failure_json': failure})['message']
         progress, step_progress = device_progress(event_payload, float(row["progress"] or 0), float(row.get("step_progress") or 0))
         if event_type == "task.succeeded":
             progress = step_progress = 1.0
@@ -274,7 +284,7 @@ class ProductionService:
             row["id"], status=job_status, progress=progress, step_progress=step_progress,
             planned=planned, steps=steps, failure=failure, elapsed=elapsed, remaining=remaining,
             device_revision=device_revision, accepted_at=accepted_at, started_at=started_at,
-            completed_at=completed_at,
+            completed_at=completed_at, attempt=event_payload.get("attempt"),
         )
         if job_status == "HOLD":
             orders.update_job_hold(row["id"], hold_reason="DEVICE_RESTARTED_OUTCOME_UNKNOWN")
@@ -282,7 +292,7 @@ class ProductionService:
             orders.clear_job_hold(row["id"])
         if failure:
             failure_code = failure.get("code") or failure.get("errorCode") or "PRODUCTION_FAILED"
-            orders.update_failure(order["id"], failure_code, body.get("message") or "制作失败")
+            orders.update_failure(order["id"], failure_code, failure.get("message") or body.get("message") or "制作失败")
         elif job_status in {"EXECUTING", "SUCCEEDED"} and order.get("failure_code"):
             orders.update_failure(order["id"], None, None)
         order = transition_order(connection, order, order_status, "device-event", reason=event_type, payload=body)
@@ -334,6 +344,9 @@ class ProductionService:
             "orderId": str(job["order_id"]), "orderNo": order["order_no"], "recipeId": job["recipe_id"],
             "recipeVersion": job["recipe_version"], "expiresAt": expires_at.isoformat().replace("+00:00", "Z"),
         }
+        snapshot = order['product_snapshot']
+        if snapshot.get('compiledRecipeDigest'):
+            command.update({key: snapshot[key] for key in ('customization', 'compiledRecipeDigest', 'optionSchemaVersion')})
         commands = CommandRepository(connection)
         command_row = commands.insert(
             terminal_id=terminal_id, message_id=message_id, command_type="MAKE_DRINK",

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from ..failure_info import failure_info
+
 from datetime import timedelta
 from typing import Any, Callable
 
@@ -157,7 +159,9 @@ class AdminOperationsService:
                     "productionStatus": row["production_status"],
                     "taskId": row["task_id"], "productionRevision": row.get("production_revision"),
                     "progress": row["progress"], "currentStepName": row["current_step_name"],
-                    "failureCode": row["failure_code"], "failureMessage": row["failure_message"],
+                    "failureCode": (failure_info(row, row) or {}).get('code'),
+                    "failureMessage": (failure_info(row, row) or {}).get('message'),
+                    "failure": failure_info(row, {**row, 'completed_at': row.get('failure_at')}, internal=True),
                     "manualReviewRequired": bool(row["manual_review_required"]),
                     "holdReason": row["hold_reason"], "createdAt": iso(row["created_at"]),
                     "updatedAt": iso(row["updated_at"]),

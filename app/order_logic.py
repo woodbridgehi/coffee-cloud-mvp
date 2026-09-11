@@ -53,6 +53,8 @@ def public_menu(
         remaining = max(0, int(raw.get("maxServings") or 0))
         available = bool(raw.get("enabled", True) and raw.get("available", False) and remaining > 0 and online and device_ready)
         reasons = list(raw.get("unavailableReasons") or [])
+        if not raw.get("enabled", True):
+            reasons.append("DISABLED")
         if not online:
             reasons.append("DEVICE_OFFLINE")
         if not device_ready:
@@ -61,6 +63,8 @@ def public_menu(
             available = False
             reasons.append('PICKUP_OCCUPIED')
         products.append({
+            "optionSchema": raw.get("optionSchema"),
+            "customizationVariants": raw.get("customizationVariants", []),
             "recipeId": raw.get("recipeId"),
             "recipeVersion": raw.get("version"),
             "skuCode": raw.get("skuCode"),

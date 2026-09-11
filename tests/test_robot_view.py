@@ -19,6 +19,16 @@ def test_old_or_invalid_device_plan_does_not_offer_misleading_3d():
     assert public_robot_view([{"visual":{"version":1,"actions":["brew"],"materials":True},"durationSeconds":4}]) is None
 
 
+def test_public_view_keeps_explicit_dispense_channel_and_liquid_reference():
+    view = public_robot_view([{
+        "stepId": "add-vanilla", "stepName": "香草糖浆", "durationSeconds": 10,
+        "dispenseChannel": "vanilla-pump",
+        "visual": {"version": 1, "actions": ["syrup"], "materials": [], "liquidReferenceMl": 235},
+    }])
+    assert view["steps"][0]["visual"]["dispenseChannel"] == "vanilla-pump"
+    assert view["steps"][0]["visual"]["liquidReferenceMl"] == 235
+
+
 def test_ephemeral_progress_preserves_visual_plan_and_hold_wins():
     view={"version":1,"steps":[{"stepId":"brew"}]}
     original={"deviceId":"d1","status":"MAKING","production":{"taskId":"t1","status":"EXECUTING",
@@ -29,3 +39,19 @@ def test_ephemeral_progress_preserves_visual_plan_and_hold_wins():
     assert result["production"]["stepProgress"] == 0.7
     result["status"]='HOLD'
     assert merge_progress(result,{**event,"payload":{**event["payload"],"taskRevision":3}}) is result
+
+
+def test_latte_art_frozen_pattern_whitelist():
+    from app.robot_view import public_robot_view
+    plan = [{"stepId": "art", "stepName": "螺旋拉花", "durationSeconds": 30,
+             "dispenseChannel": "foam-pitcher", "visual": {"version": 1, "actions": ["latte-art"],
+             "materials": [{"materialId": "milk", "amount": 20, "unit": "ml"}],
+             "latteArt": {"patternId": "spiral", "patternVersion": "1.0.0", "private": "hidden"}}}]
+    result = public_robot_view(plan)
+    assert result['steps'][0]['visual']['latteArt'] == {"patternId": "spiral", "patternVersion": "1.0.0"}
+    assert result['steps'][0]['visual']['dispenseChannel'] == 'foam-pitcher'
+    plan[0]['visual']['latteArt']['patternVersion'] = '2.0.0'
+    assert public_robot_view(plan) is None
+    plan[0]['visual']['latteArt']['patternVersion'] = '1.0.0'
+    plan[0]['durationSeconds'] = 2
+    assert public_robot_view(plan) is None

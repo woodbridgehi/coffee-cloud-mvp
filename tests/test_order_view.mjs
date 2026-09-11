@@ -129,7 +129,7 @@ test('persists active order and renders recovery banner on menu view', () => {
   context.saveActiveOrder(order, 'token-xyz', 'coffee-bot-test');
   const active = context.getActiveOrder('coffee-bot-test');
   assert.equal(active.orderId, 'qa-order-123');
-  assert.equal(active.pickupCode, '8E1A');
+  assert.equal(active.pickupCode, '');
 
   const testMenu = {
     deviceId: 'coffee-bot-test',
@@ -139,8 +139,8 @@ test('persists active order and renders recovery banner on menu view', () => {
     products: [{ recipeId: 'latte', name: '冰拿铁', available: true, priceMinor: 1800 }],
   };
   context.renderMenu(testMenu);
-  assert.match(app.innerHTML, /进行中订单 · 取杯口令/);
-  assert.match(app.innerHTML, /8E1A/);
+  assert.match(app.innerHTML, /我的订单/);
+  assert.doesNotMatch(app.innerHTML, /8E1A/);
   assert.match(app.innerHTML, /查看进度/);
 });
 
@@ -175,4 +175,31 @@ test('English locale renders the customer menu and status without changing order
   assert.match(app.innerHTML, /Ready for pickup/);
   assert.match(app.innerHTML, /PICKUP CODE/);
   assert.match(app.innerHTML, /Store Latte/);
+});
+
+
+test('only an uncollected READY order exposes a pickup code; failure survives refunds', () => {
+  context.CoffeeI18n.setLocale('zh-CN', { translate: false });
+  for (const status of ['QUEUED','MAKING','HOLD','FAILED','REFUNDED','CANCELLED','EXPIRED']) {
+    context.renderOrder({orderNo:'QA-FAIL-ABCD',status,product:{name:'拉花拿铁'},
+      failure:status==='FAILED'||status==='REFUNDED'?{code:'COMPILED_RECIPE_MISMATCH',message:'指令缺少配方指纹 <script>bad()</script>'}:null});
+    assert.doesNotMatch(app.innerHTML,/class="pickup-card"|class="pc-code"|ticket-barcode/);
+    if(status==='FAILED'||status==='REFUNDED') {
+      assert.match(app.innerHTML,/COMPILED_RECIPE_MISMATCH/);
+      assert.match(app.innerHTML,/失败原因/);
+      assert.doesNotMatch(app.innerHTML,/<script>bad/);
+    }
+  }
+  context.renderOrder({orderNo:'QA-READY-ABCD',status:'READY',collectedAt:'2026-09-11T10:00:00Z',product:{name:'拿铁'}});
+  assert.doesNotMatch(app.innerHTML,/class="pickup-card"/);
+});
+
+
+test('rejection stops milestones before making and does not wait for a duration', () => {
+  context.renderOrder({orderNo:'QA-REJECTED',status:'FAILED',product:{name:'拉花拿铁'},
+    production:{status:'REJECTED',overallProgress:0},failure:{code:'COMPILED_RECIPE_MISMATCH',message:'指纹缺失'}});
+  const milestones=context.milestoneMarkup({status:'FAILED',production:{status:'REJECTED'}});
+  assert.equal((milestones.match(/class="milestone done"/g)||[]).length,3);
+  assert.equal((milestones.match(/class="milestone error"/g)||[]).length,1);
+  assert.doesNotMatch(app.innerHTML,/等待设备返回计划时长/);
 });

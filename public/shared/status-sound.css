@@ -1,0 +1,5 @@
+#sound-controls { display:flex; align-items:center; justify-content:flex-end; gap:8px; padding:8px 16px; background:#f7f3ec; color:#4c3827; }
+#sound-controls button { min-height:36px; padding:6px 12px; border:1px solid #b69c79; border-radius:8px; background:transparent; color:inherit; cursor:pointer; font:inherit; }
+#sound-controls input { width:88px; accent-color:#876447; }
+
+#sound-controls label{display:flex;align-items:center;gap:5px;white-space:nowrap;font-size:12px}#sound-controls input[type=checkbox]{width:14px;height:14px}#sound-controls{flex-wrap:wrap}

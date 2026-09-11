@@ -906,7 +906,7 @@ i18n?.configure({
           el('div', null, order.deviceId || '—'),
           el('div', { class: 'cell-sub' }, order.productName || '')), '设备'),
         td(el('span', { class: 'num' }, fmtMoney(order.totalAmountMinor, order.currency)), '金额', 'num'),
-        td(orderBadge(order.status), '状态'),
+        td(el('div', null, orderBadge(order.status), order.failureMessage ? el('div', { class: 'cell-sub', style: 'max-width:240px;overflow-wrap:anywhere' }, order.failureMessage) : null), '状态'),
         td(paymentBadge(order.paymentStatus), '支付'),
         td(el('div', { class: 'm-progress' },
           el('div', { class: 'cc-progress-track' }, el('div', { class: 'cc-progress-fill', style: `width:${progress}%` })),
@@ -948,6 +948,14 @@ i18n?.configure({
       wrap.append(el('div', { class: 'm-factline m-factline--fail' },
         el('span', { html: svgIcon('alert-circle', 16), 'aria-hidden': 'true' }),
         el('span', null, `失败信息：${order.failureMessage}`)));
+    }
+    if (order.failure) {
+      wrap.append(el('dl', { class: 'cc-kv--2col' },
+        kv('失败步骤', order.failure.stepName || order.failure.stepId || '接单校验 / 未开始制作'),
+        kv('任务编号', order.failure.taskId || order.taskId || '—', true),
+        kv('发生时间', fmtTime(order.failure.occurredAt)),
+        kv('排查建议', order.failure.suggestion || '核对设备日志')));
+      if (Object.keys(order.failure.details || {}).length) wrap.append(el('pre', { style: 'white-space:pre-wrap;overflow-wrap:anywhere' }, JSON.stringify(order.failure.details, null, 2)));
     }
     if (order.status === 'HOLD' || order.holdReason) {
       wrap.append(el('div', { class: 'm-factline m-factline--hold' },

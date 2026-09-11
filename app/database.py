@@ -639,6 +639,9 @@ MIGRATIONS: tuple[tuple[int, str, str], ...] = (
         alter table sales_order add column pickup_required boolean not null default false;
         alter table sales_order add column collected_at timestamptz;
     """),
+    (23, "production-execution-attempt", """
+        alter table production_job add column execution_attempt integer not null default 1 check(execution_attempt > 0);
+    """),
 )
 
 

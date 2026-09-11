@@ -776,6 +776,11 @@ def get_public_menu(identifier: str) -> dict[str, Any]:
     return public_order_service.menu(identifier)
 
 
+@app.post("/api/v1/public/devices/{identifier}/quotes", tags=["public-orders"])
+def quote_public_order(identifier: str, payload: PublicOrderCreateRequest) -> dict[str, Any]:
+    return public_order_service.quote(identifier, payload)
+
+
 @app.post("/api/v1/public/devices/{identifier}/orders", tags=["public-orders"], status_code=201)
 def create_public_order(
     identifier: str,

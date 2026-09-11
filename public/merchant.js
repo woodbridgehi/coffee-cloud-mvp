@@ -2080,7 +2080,7 @@ async function loadDashboardRecent(container) {
     tdl((order.items || []).map(item => `${item.name} × ${item.quantity}`).join('、') || '—', '商品'),
     tdl(el('span', { class: 'num' }, fmtMoney(order.totalMinor)), '金额'),
     tdl(statusPill(PAY_STATUS, order.paymentStatus), '支付'),
-    tdl(statusPill(PROD_STATUS, order.productionStatus), '制作'),
+    tdl(el('div', null, statusPill(PROD_STATUS, order.productionStatus), order.failure ? el('div', { class: 'cell-sub', style: 'max-width:260px;overflow-wrap:anywhere' }, order.failure.message) : null), '制作'),
     tdl(el('span', { class: 'u-mono' }, fmtDateTime(order.createdAt, tz())), '时间'),
     tdl(envTag(order.environment), '环境')));
   body.append(makeTable({ headers: ['订单', '门店 / 设备', '商品', '金额', '支付', '制作', '时间', '环境'], rows, minTable: 820 }));
@@ -3016,7 +3016,7 @@ async function loadOrdersPage(container) {
     tdl((order.items || []).map(item => `${item.name} × ${item.quantity}`).join('、') || '—', '商品'),
     tdl(el('span', { class: 'num' }, fmtMoney(order.totalMinor)), '金额'),
     tdl(statusPill(PAY_STATUS, order.paymentStatus), '支付'),
-    tdl(statusPill(PROD_STATUS, order.productionStatus), '制作'),
+    tdl(el('div', null, statusPill(PROD_STATUS, order.productionStatus), order.failure ? el('div', { class: 'cell-sub', style: 'max-width:260px;overflow-wrap:anywhere' }, order.failure.message) : null), '制作'),
     tdl(envTag(order.environment), '环境')));
   container.append(makeTable({ headers: ['订单', '门店 / 设备', '商品', '金额', '支付', '制作', '环境'], rows, minTable: 900 }));
   const more = $('orders-more');
@@ -3072,6 +3072,14 @@ function paintOrderDrawer(drawer, order) {
       statusPill(PAY_STATUS, order.paymentStatus),
       statusPill(PROD_STATUS, order.productionStatus),
       order.environment === 'TEST' ? el('span', { class: 'cc-tag cc-tag--yellow' }, '测试数据') : null),
+    ...(order.failure ? [sec('失败原因与定位',
+      el('p', { role: 'status', style: 'color:#a64232;overflow-wrap:anywhere' }, order.failure.message),
+      kvGrid(kv('错误代码', order.failure.code, { mono: true }),
+        kv('失败步骤', order.failure.stepName || order.failure.stepId || '接单校验 / 未开始制作'),
+        kv('任务编号', order.failure.taskId || '—', { mono: true }),
+        kv('发生时间', fmtDateTime(order.failure.occurredAt, tz()))),
+      el('p', { class: 'cc-caption' }, order.failure.suggestion || '请核对设备日志。'),
+      Object.keys(order.failure.details || {}).length ? el('pre', { style: 'white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px' }, JSON.stringify(order.failure.details, null, 2)) : null)] : []),
     sec('基本信息', kvGrid(
       kv('创建时间', fmtDateTime(order.createdAt, tz()), { mono: true }),
       kv('支付时间', fmtDateTime(order.paidAt, tz()), { mono: true }),

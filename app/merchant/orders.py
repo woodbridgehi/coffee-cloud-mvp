@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from ..failure_info import failure_info
+
 import base64
 import json
 from datetime import date, datetime, time, timedelta
@@ -61,7 +63,10 @@ class MerchantOrders:
                 'items':[{'name':row['product_name'],'quantity':row['product_snapshot'].get('quantity',1),'unitPriceMinor':row['total_amount_minor']}],
                 'totalMinor':row['total_amount_minor'],'receivedMinor':int(amounts['received']),'refundedMinor':int(amounts['refunded']),
                 'paymentStatus':row['payment_status'],'productionStatus':row['status'],'environment':row['environment'],'allowedActions':actions}
+        result['failure'] = failure_info(row)
         if detail:
+            job = c.execute('select * from production_job where order_id=%s', (row['id'],)).fetchone()
+            result['failure'] = failure_info(row, job, internal=True)
             payments=c.execute('select id,provider,status,amount_minor,paid_at from payment where order_id=%s order by created_at',(row['id'],)).fetchall()
             refunds=c.execute('select r.id,r.status,r.amount_minor,r.created_at,r.completed_at from refund r join payment p on p.id=r.payment_id where p.order_id=%s order by r.created_at',(row['id'],)).fetchall()
             timeline=c.execute('select to_status,reason,created_at from order_transition where order_id=%s order by revision',(row['id'],)).fetchall()

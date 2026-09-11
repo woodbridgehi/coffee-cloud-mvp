@@ -4,7 +4,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
-ACTIONS = {"cups", "brew", "water", "milk", "ice", "syrup", "lid", "pickup", "wait"}
+ACTIONS = {"cups", "brew", "water", "milk", "ice", "syrup", "lid", "pickup", "wait", "latte-art"}
 
 
 def public_robot_view(plan: Any) -> dict[str, Any] | None:
@@ -23,6 +23,13 @@ def public_robot_view(plan: Any) -> dict[str, Any] | None:
                 any(not isinstance(action, str) or action not in ACTIONS for action in actions) or
                 not isinstance(duration, (float, int)) or isinstance(duration, bool) or not math.isfinite(duration) or duration <= 0):
             return None
+        art_meta = {}
+        if "latte-art" in actions:
+            art = visual.get("latteArt")
+            if (actions != ["latte-art"] or duration < 24 or not isinstance(art, dict)
+                    or art.get("patternId") != "spiral" or art.get("patternVersion") != "1.0.0"):
+                return None
+            art_meta = {"latteArt": {"patternId": "spiral", "patternVersion": "1.0.0"}}
         materials = []
         raw_materials = visual.get("materials") or []
         if not isinstance(raw_materials, list):
@@ -36,7 +43,11 @@ def public_robot_view(plan: Any) -> dict[str, Any] | None:
             materials.append({"materialId": str(item.get("materialId", ""))[:128],
                               "name": str(item.get("name", ""))[:128], "amount": amount,
                               "unit": str(item.get("unit", ""))[:24]})
+        reference = visual.get('liquidReferenceMl')
+        liquid_reference = {'liquidReferenceMl': reference} if isinstance(reference, (int, float)) and not isinstance(reference, bool) and math.isfinite(reference) and reference > 0 else {}
+        channel = step.get('dispenseChannel')
+        channel_meta = {'dispenseChannel': str(channel)[:128]} if isinstance(channel, str) and channel.strip() else {}
         steps.append({"stepId": str(step.get("stepId", ""))[:128], "stepName": str(step.get("stepName", ""))[:128],
                       "stepIndex": index, "durationSeconds": duration,
-                      "visual": {"version": 1, "actions": actions, "materials": materials}})
+                      "visual": {"version": 1, "actions": actions, "materials": materials, **liquid_reference, **channel_meta, **art_meta}})
     return {"version": 1, "steps": steps} if steps else None

@@ -201,6 +201,13 @@ class CommandResult(BaseModel):
     detail: dict[str, Any] = Field(default_factory=dict)
 
 
+class DrinkCustomization(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    sugar: Literal["NONE", "LIGHT", "LESS", "STANDARD", "EXTRA"] | None = None
+    ice: Literal["NONE", "STANDARD"] | None = None
+    milk: Literal["NONE", "STANDARD"] | None = None
+
+
 class PublicOrderCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -208,6 +215,9 @@ class PublicOrderCreateRequest(BaseModel):
     recipeVersion: str = Field(min_length=1, max_length=64)
     quantity: Literal[1] = 1
     paymentMode: Literal["ONLINE", "TEST_FREE"] = "ONLINE"
+
+    customization: DrinkCustomization | None = None
+    quoteId: str | None = Field(default=None, min_length=1, max_length=256)
 
 
 class OrderAdjudicationRequest(BaseModel):

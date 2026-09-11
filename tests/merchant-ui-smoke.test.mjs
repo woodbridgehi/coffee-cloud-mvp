@@ -536,3 +536,16 @@ test('退款上限缺失或异常时禁用金额与提交，不能把非法金�
     findAll(root, n => n.classList.contains('cc-layer-close'))[0].click();
   }
 });
+
+
+test('failed order drawer exposes actionable diagnostics without treating them as markup', () => {
+  const drawer=views.openDrawer({title:'失败订单'});
+  views.paintOrderDrawer(drawer,{id:'failure-order',productionStatus:'FAILED',paymentStatus:'NOT_REQUIRED',
+    totalMinor:1200,receivedMinor:0,refundedMinor:0,allowedActions:[],
+    failure:{code:'POUR_FAILED',message:'奶泡杯倾倒失败 <script>x</script>',stepName:'螺旋拉花',taskId:'task-art',
+      suggestion:'检查奶泡杯位置',details:{installedDigest:'sha256:expected'}}});
+  const content=textOf(drawer.body);
+  for(const expected of ['失败原因与定位','POUR_FAILED','螺旋拉花','task-art','检查奶泡杯位置','sha256:expected']) assert.ok(content.includes(expected),expected);
+  assert.equal(findAll(drawer.body,n=>n.tagName==='SCRIPT').length,0);
+  drawer.close();
+});

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import secrets
 import uuid
 from datetime import timedelta
 from typing import Any, Callable
@@ -107,6 +108,15 @@ class CommandService:
     def create_raw(self, identity: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
         with self.uow.transaction() as connection:
             repository = CommandRepository(connection)
+            if payload.get('type') == 'MAKE_DRINK' and not payload.get('compiledRecipeDigest'):
+                capabilities = TerminalRepository(connection).snapshot(identity['id'], 'capabilities') or {}
+                product = next((p for p in capabilities.get('products', []) if p['recipeId'] == payload.get('recipeId')), None)
+                if product and product.get('optionSchema'):
+                    defaults = {key: rule['default'] for key, rule in product['optionSchema']['options'].items()}
+                    variant = next((v for v in product.get('customizationVariants', []) if v['customization'] == defaults), None)
+                    if not variant:
+                        raise ServiceError(409, 'default compiled recipe unavailable')
+                    payload.update(recipeVersion=product['version'], **{key: variant[key] for key in ('customization', 'compiledRecipeDigest', 'optionSchemaVersion')})
             row = repository.insert(
                 terminal_id=identity["id"], message_id=payload["messageId"],
                 command_type=payload["type"], payload=payload, digest=canonical_digest(payload),

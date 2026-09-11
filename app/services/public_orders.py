@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from ..failure_info import failure_info
+
 import logging
 import secrets
 import uuid
 from typing import Any, Callable
 
+from ..customization import select_variant, issue_quote, check_quote
 from ..db import UnitOfWork
 from ..order_logic import public_menu
 from ..material_commitments import apply_commitments
@@ -84,10 +87,9 @@ class PublicOrderService:
             "totalAmountMinor": order["total_amount_minor"], "currency": order["currency"],
             "product": order["product_snapshot"],
             "queuePosition": int(order["queue_position_value"]) if projected else orders.queue_position(order),
-            "failure": {"code": order["failure_code"], "message": order["failure_message"]}
-                if order["failure_code"] else None,
+            "failure": failure_info(order, job),
             "production": {
-                "taskId": job["task_id"], "status": job["status"],
+                "taskId": job["task_id"], "status": job["status"], "attempt": job.get("execution_attempt", 1),
                 "deviceRevision": int(job.get("last_device_revision") or 0),
                 "progress": job["progress"], "overallProgress": job["progress"],
                 "stepProgress": job["step_progress"], "currentStepId": job["current_step_id"],
@@ -125,14 +127,57 @@ class PublicOrderService:
             apply_commitments(menu, inventory, commitments, orders.required_inventory_version(terminal['id']))
             if getattr(self.settings,'merchant_enabled',False):
                 menu = apply_merchant_catalog(connection,terminal,menu,payment_mode)
+            # A default ingredient shortage must not hide a valid no-milk/no-ice choice.
+            base_menu = public_menu(terminal, capabilities, inventory, self.settings.offline_threshold_seconds,
+                                    self.settings.default_product_price_minor, self.settings.payment_currency, payment_mode)
+            bases = {p['recipeId']: p for p in base_menu['products']}
+            for product in menu['products']:
+                base = bases[product['recipeId']]
+                if not product.get('optionSchema'):
+                    continue
+                candidates = [select_variant(base, v['customization'], inventory, menu['online']) for v in base['customizationVariants']]
+                apply_commitments({'products': candidates}, inventory, commitments, orders.required_inventory_version(terminal['id']))
+                if any(v['available'] for v in candidates) and not any(reason not in ('MATERIAL_INSUFFICIENT', 'QUEUE_MATERIAL_COMMITTED') for reason in product['unavailableReasons']):
+                    product['available'] = True
+                    product['remainingServings'] = max(v['remainingServings'] for v in candidates if v['available'])
+                    product['unavailableReasons'] = []
+            menu['salesEnabled'] = any(p['available'] for p in menu['products'])
         return {**menu,"serverTime":iso(utc_now())}
+
+    def quote(self, identifier: str, payload: PublicOrderCreateRequest) -> dict[str, Any]:
+        with self.uow.transaction() as connection:
+            terminals = TerminalRepository(connection)
+            orders = OrderRepository(connection)
+            terminal = self._terminal(terminals, identifier, for_update=True)
+            payment_mode = self._payment_mode(terminal)
+            if payload.paymentMode != payment_mode:
+                raise ServiceError(409, 'payment mode changed; refresh menu')
+            inventory = terminals.snapshot(terminal['id'], 'inventory')
+            menu = public_menu(terminal, terminals.snapshot(terminal['id'], 'capabilities'), inventory,
+                              self.settings.offline_threshold_seconds, self.settings.default_product_price_minor,
+                              self.settings.payment_currency, payment_mode)
+            if getattr(self.settings, 'merchant_enabled', False):
+                menu = apply_merchant_catalog(connection, terminal, menu, payment_mode)
+            product = self._selected_product(menu, payload, inventory)
+            apply_commitments({'products': [product]}, inventory, orders.material_commitments(terminal['id']), orders.required_inventory_version(terminal['id']))
+            token = issue_quote(self.settings.order_access_secret or self.settings.admin_token, terminal['device_id'], product, payment_mode)
+            return {'quoteId': token, 'expiresAt': int(token.split('.')[0]), 'product': product,
+                    'available': product['available'], 'paymentMode': payment_mode}
+
+    @staticmethod
+    def _selected_product(menu, payload, inventory):
+        product = next((item for item in menu['products'] if item['recipeId'] == payload.recipeId), None)
+        if not product or product['recipeVersion'] != payload.recipeVersion:
+            raise ServiceError(409, 'recipe is missing or version changed; refresh the menu')
+        options = payload.customization.model_dump(exclude_none=True) if payload.customization else None
+        return select_variant(product, options, inventory, menu['online'])
 
     def create(
         self, identifier: str, payload: PublicOrderCreateRequest, idempotency_key: str | None
     ) -> dict[str, Any]:
         if not idempotency_key or len(idempotency_key) > 160:
             raise ServiceError(400, "Idempotency-Key is required and must be <= 160 characters")
-        digest = canonical_digest(payload.model_dump(mode="json"))
+        digest = canonical_digest(payload.model_dump(mode="json", exclude_none=True))
         with self.uow.transaction() as connection:
             terminals = TerminalRepository(connection)
             orders = OrderRepository(connection)
@@ -160,10 +205,11 @@ class PublicOrderService:
             if getattr(self.settings,'merchant_enabled',False):
                 menu = apply_merchant_catalog(connection,terminal,menu,payment_mode)
             commitments = orders.material_commitments(terminal['id'])
-            apply_commitments(menu, inventory, commitments, orders.required_inventory_version(terminal['id']))
-            product = next((item for item in menu["products"] if item["recipeId"] == payload.recipeId), None)
-            if not product or product["recipeVersion"] != payload.recipeVersion:
-                raise ServiceError(409, "recipe is missing or version changed; refresh the menu")
+            product = self._selected_product(menu, payload, inventory)
+            apply_commitments({'products': [product]}, inventory, commitments, orders.required_inventory_version(terminal['id']))
+            if product.get('optionSchema') or payload.quoteId:
+                check_quote(payload.quoteId, self.settings.order_access_secret or self.settings.admin_token,
+                            terminal['device_id'], product, payment_mode)
             if not product["available"]:
                 raise ServiceError(409, {"code": "PRODUCT_UNAVAILABLE", "reasons": product["unavailableReasons"]})
             if orders.active_count(terminal["id"]) >= self.settings.public_order_queue_limit:
@@ -173,6 +219,7 @@ class PublicOrderService:
             order_status = "QUEUED" if payload.paymentMode == "TEST_FREE" else "CREATED"
             payment_status = "NOT_REQUIRED" if payload.paymentMode == "TEST_FREE" else "NOT_STARTED"
             product_snapshot = {**product, "quantity": 1}
+            product_snapshot.pop("customizationVariants", None)
             orders.insert(
                 order_id=order_id, order_no=f"C{utc_now().strftime('%m%d')}-{secrets.token_hex(3).upper()}",
                 terminal_id=terminal["id"], access_token_hash=hash_token(access_token),

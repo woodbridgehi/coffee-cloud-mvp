@@ -387,3 +387,48 @@ def test_retry_clears_current_failure_but_keeps_original_event(production_case):
             ).fetchone()["n"]
             == 1
         )
+
+
+def test_rejected_ack_keeps_reason_for_public_admin_and_merchant(production_case):
+    from app.services.public_orders import PublicOrderService
+    from app.services.admin_operations import AdminOperationsService
+    from app.repositories.orders import OrderRepository
+    from app.repositories.payments import PaymentRepository
+    from app.merchant.orders import MerchantOrders
+    db, production, _, identity, order_id, command = production_case
+    with db.connect() as c:
+        production.reconcile_order_ack(c,identity['id'],command['taskId'],{
+            'messageId':command['messageId'],'accepted':False,'reasonCode':'COMPILED_RECIPE_MISMATCH',
+            'details':{'requestedDigest':None,'installedDigest':'sha256:expected'}})
+    event(production_case,'task.rejected',99,reasonCode='COMPILED_RECIPE_MISMATCH')
+    with db.connect() as c:
+        repo=OrderRepository(c)
+        row=repo.find_with_terminal(order_id)
+        assert row['status']=='FAILED'
+        assert '指纹' in row['failure_message']
+        public=PublicOrderService._payload(repo,PaymentRepository(c),row)
+        assert set(public['failure'])=={'code','message'}
+        assert '指纹' in public['failure']['message']
+        merchant=object.__new__(MerchantOrders)
+        detail=merchant.payload(c,{'role':'OWNER'},row,True)
+        assert detail['failure']['details']['installedDigest']=='sha256:expected'
+        assert detail['failure']['taskId']==command['taskId']
+    admin=AdminOperationsService(UnitOfWork(db),offline_threshold_seconds=90,refresh_offline_status=lambda:None)
+    item=admin.orders(device_id=None,order_status='FAILED',limit=10)['orders'][0]
+    assert item['failureCode']=='COMPILED_RECIPE_MISMATCH'
+    assert item['failure']['details']['installedDigest']=='sha256:expected'
+    assert item['failure']['suggestion']
+
+
+def test_retry_attempt_is_durable_and_old_attempt_cannot_complete(production_case):
+    db, _, _, _, order_id, _ = production_case
+    event(production_case, 'task.started', 1, attempt=1)
+    event(production_case, 'task.retry_wait', 2, attempt=1)
+    event(production_case, 'task.retry', 3, attempt=2)
+    with db.connect() as connection:
+        job = connection.execute('select execution_attempt from production_job where order_id=%s', (order_id,)).fetchone()
+        assert job['execution_attempt'] == 2
+    event(production_case, 'task.succeeded', 4, attempt=1)
+    assert snapshot(production_case)['job_status'] == 'EXECUTING'
+    event(production_case, 'task.succeeded', 5, attempt=2)
+    assert snapshot(production_case)['order_status'] == 'READY'

@@ -30,6 +30,21 @@ const PAYMENT_QR_REFRESH_MS = 20000;  // 二维码加载失败后的最短重试
 let menu = null;
 let selected = null;
 let submitting = false;
+let drinkOptions = {};
+let drinkQuote = null;
+const optionLabel = key => t(`order.custom.${key}`);
+function customizationSummary(options) {
+  return Object.entries(options || {}).map(([key, value]) => `${optionLabel(key)}：${key === 'sugar' && value === 'NONE' ? t('order.custom.noSugar') : optionLabel(value)}`).join(' · ');
+}
+function customizationMarkup() {
+  if (!selected?.optionSchema) return '';
+  return `<section class="customization-panel" aria-label="${t('order.custom.aria')}">
+    <h2>${t('order.custom.title')}</h2><p>${esc(t(`order.custom.temperature.${selected.optionSchema.temperature}`))}</p>
+    ${Object.entries(selected.optionSchema.options).map(([key, rule]) => `<label>${esc(optionLabel(key))}<select data-drink-option="${key}" ${submitting ? 'disabled' : ''}>${rule.values.map(value => `<option value="${value}" ${drinkOptions[key] === value ? 'selected' : ''}>${esc(key === 'sugar' && value === 'NONE' ? t('order.custom.noSugar') : optionLabel(value))}</option>`).join('')}</select></label>`).join('')}
+    <p>${esc(t('order.custom.notice'))}</p>
+    <p role="status">${drinkQuote ? `${esc(customizationSummary(drinkQuote.product.customization))} · ${money(drinkQuote.product)} · ${duration(drinkQuote.product)} · ${drinkQuote.available ? (t('order.custom.ready')) : (t('order.custom.unavailable'))}` : (t('order.custom.beforeQuote'))}</p>
+  </section>`;
+}
 let orderStreamAbort = null;
 let orderStreamReconnectTimer = null;
 let orderStreamTerminal = false;
@@ -96,6 +111,7 @@ function saveActiveOrder(order, token, targetDeviceId) {
     token,
     deviceId: dId,
     status: order.status,
+    collectedAt: order.collectedAt,
     productName: order.product?.name || t('order.product.generic'),
     pickupCode: pickupCodeFor(order),
     totalAmountMinor: order.totalAmountMinor,
@@ -118,30 +134,7 @@ function notifyReadySensory() {
     try { navigator.vibrate([200, 100, 200, 100, 300]); } catch (_) {}
   }
 
-  try {
-    const AudioContextClass = typeof window !== 'undefined' && (window.AudioContext || window.webkitAudioContext);
-    if (AudioContextClass) {
-      const ctx = new AudioContextClass();
-      const now = ctx.currentTime;
-      const osc1 = ctx.createOscillator();
-      const osc2 = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc1.type = 'sine';
-      osc2.type = 'triangle';
-      osc1.frequency.setValueAtTime(587.33, now);
-      osc1.frequency.exponentialRampToValueAtTime(880.00, now + 0.14);
-      osc2.frequency.setValueAtTime(880.00, now + 0.14);
-      gain.gain.setValueAtTime(0.08, now);
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.55);
-      osc1.connect(gain);
-      osc2.connect(gain);
-      gain.connect(ctx.destination);
-      osc1.start(now);
-      osc2.start(now + 0.14);
-      osc1.stop(now + 0.55);
-      osc2.stop(now + 0.55);
-    }
-  } catch (_) {}
+
 }
 
 /* ---------- 基础请求 ---------- */
@@ -152,7 +145,7 @@ async function request(path, options = {}) {
   try { data = await response.json(); } catch (_) { /* 非 JSON 响应 */ }
   if (!response.ok) {
     const detail = typeof data.detail === 'string' ? data.detail : (data.detail?.code || t('order.error.request'));
-    throw new Error(detail);
+    const error = new Error(detail); error.status = response.status; throw error;
   }
   return data;
 }
@@ -279,6 +272,7 @@ function drinkArt(profileId) {
 }
 
 function pickupCodeFor(order) {
+  if (order?.status !== 'READY' || order?.collectedAt) return '';
   const raw = String(order?.orderNo || order?.orderId || '').trim();
   if (!raw) return '—';
   const hyphenParts = raw.split('-');
@@ -363,7 +357,7 @@ function renderMenu(menuData) {
           <span class="aob-pulse-dot" aria-hidden="true"></span>
           <span class="aob-tag">${t('order.active.label')}</span>
         </div>
-        <strong class="aob-code">${esc(activeOrder.pickupCode || t('order.active.verifying'))}</strong>
+        <strong class="aob-code">${esc(activeOrder.status === 'READY' ? pickupCodeFor(activeOrder) : orderLabel(activeOrder.status))}</strong>
         <span class="aob-sub">${esc(activeOrder.productName || t('order.product.generic'))} · ${orderLabel(activeOrder.status)}</span>
       </div>
       <a class="aob-btn" href="/order/status#order=${encodeURIComponent(activeOrder.orderId)}&token=${encodeURIComponent(activeOrder.token)}">${t('order.active.view')}</a>
@@ -397,6 +391,7 @@ function renderMenu(menuData) {
       </div>
       ${menu.products.length ? `<section class="drink-list">${menu.products.map(card).join('')}</section>`
         : `<section class="center-state" style="min-height:32vh"><p>${t('order.menu.noProducts')}</p></section>`}
+      ${customizationMarkup()}
       <p class="stock-footnote">${t('order.menu.stockNote')}</p>
       <div class="notice">${online
         ? t('order.menu.onlineNotice') : t('order.menu.testNotice')}</div>
@@ -405,16 +400,19 @@ function renderMenu(menuData) {
     <section class="checkout" aria-label="${esc(t('order.menu.checkoutAria'))}">
       <div class="checkout-copy">
         <strong>${selected ? esc(selected.name) : t('order.menu.selectDrink')}</strong>
-        <small>${selected ? (online ? money(selected) : t('order.menu.testFree')) : (online ? t('order.menu.alipay') : t('order.menu.testPayment'))}</small>
+        <small>${selected ? (online ? money(drinkQuote?.product || selected) : t('order.menu.testFree')) : (online ? t('order.menu.alipay') : t('order.menu.testPayment'))}</small>
       </div>
       <button id="submit" class="btn-primary" ${selected && !submitting ? '' : 'disabled'}>
         ${submitting ? '<span class="btn-spinner" aria-hidden="true"></span>' : ''}
-        ${submitting ? (online ? t('order.menu.creatingPayment') : t('order.menu.submitting')) : (online ? t('order.menu.confirmPay') : t('order.menu.confirm'))}
+        ${selected?.optionSchema && !drinkQuote && !submitting ? (t('order.custom.getQuote')) : submitting ? (online ? t('order.menu.creatingPayment') : t('order.menu.submitting')) : (online ? t('order.menu.confirmPay') : t('order.menu.confirm'))}
       </button>
     </section>`;
 
   document.querySelectorAll('.drink-card').forEach(node => {
     node.onclick = () => selectDrink(node.dataset.id);
+  });
+  document.querySelectorAll('[data-drink-option]').forEach(node => {
+    node.onchange = () => { drinkOptions[node.dataset.drinkOption] = node.value; drinkQuote = null; renderMenu(); };
   });
   const submit = document.getElementById('submit');
   if (submit) submit.onclick = submitOrder;
@@ -427,7 +425,7 @@ function card(item) {
   const unavailable = item.unavailableReasons?.[0];
   const isSelected = selected?.recipeId === item.recipeId;
   return `
-    <button class="drink-card ${isSelected ? 'selected' : ''}" data-id="${esc(item.recipeId)}" ${item.available ? '' : 'disabled'} aria-pressed="${isSelected ? 'true' : 'false'}">
+    <button class="drink-card ${isSelected ? 'selected' : ''}" data-id="${esc(item.recipeId)}" ${item.available && !submitting ? '' : 'disabled'} aria-pressed="${isSelected ? 'true' : 'false'}">
       <div class="drink-art">${drinkArt(profile(item.visual?.profile))}</div>
       <div class="drink-copy">
         <h4>${esc(item.name || item.recipeId)}</h4>
@@ -449,27 +447,48 @@ function card(item) {
 
 function selectDrink(id) {
   selected = menu.products.find(p => p.recipeId === id && p.available) || null;
+  drinkOptions = Object.fromEntries(Object.entries(selected?.optionSchema?.options || {}).map(([key, rule]) => [key, rule.default]));
+  drinkQuote = null;
   renderMenu();
 }
 
 async function submitOrder() {
   if (!selected || submitting) return;
+  if (drinkQuote && !drinkQuote.available) drinkQuote = null;
+  if (selected.optionSchema && !drinkQuote) {
+    submitting = true; renderMenu();
+    try {
+      const draftKey = `coffee-quote:${deviceId}:${selected.recipeId}:${selected.recipeVersion}:${JSON.stringify(drinkOptions)}`;
+      let savedQuote = null;
+      try { savedQuote = JSON.parse(sessionStorage.getItem(draftKey) || 'null'); } catch (_) {}
+      drinkQuote = (savedQuote?.available ? savedQuote : null) || await request(`/api/v1/public/devices/${encodeURIComponent(deviceId)}/quotes`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ recipeId: selected.recipeId, recipeVersion: selected.recipeVersion, customization: drinkOptions, paymentMode: menu.paymentMode }),
+      });
+      sessionStorage.setItem(draftKey, JSON.stringify(drinkQuote));
+    } catch (error) { toast(error.message, 'error'); }
+    submitting = false; renderMenu(); return;
+  }
+  if (drinkQuote && !drinkQuote.available) return;
   submitting = true;
   renderMenu();
   /* 幂等键与会话共存：重试不会重复创建订单 */
-  const storageKey = `coffee-order-request:${deviceId}:${selected.recipeId}`;
+  const storageKey = `coffee-order-request:${deviceId}:${selected.recipeId}:${JSON.stringify(drinkOptions)}:${drinkQuote?.quoteId || "legacy"}`;
   let key = sessionStorage.getItem(storageKey);
   if (!key) {
     key = crypto.randomUUID();
     sessionStorage.setItem(storageKey, key);
   }
+  let orderCreated = false;
   try {
     const paymentMode = menu.paymentMode === 'ONLINE' ? 'ONLINE' : 'TEST_FREE';
     const order = await request(`/api/v1/public/devices/${encodeURIComponent(deviceId)}/orders`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': key },
-      body: JSON.stringify({ recipeId: selected.recipeId, recipeVersion: selected.recipeVersion, quantity: 1, paymentMode }),
+      body: JSON.stringify({ recipeId: selected.recipeId, recipeVersion: selected.recipeVersion, quantity: 1, paymentMode, ...(drinkQuote ? { customization: drinkOptions, quoteId: drinkQuote.quoteId } : {}) }),
     });
+    orderCreated = true;
+    saveActiveOrder(order, order.accessToken, deviceId);
     let payment = null;
     if (paymentMode === 'ONLINE') {
       payment = await request(`/api/v1/orders/${encodeURIComponent(order.orderId)}/payments`, {
@@ -483,10 +502,15 @@ async function submitOrder() {
       });
     }
     sessionStorage.removeItem(storageKey);
+    sessionStorage.removeItem(`coffee-quote:${deviceId}:${selected.recipeId}:${selected.recipeVersion}:${JSON.stringify(drinkOptions)}`);
     saveActiveOrder(order, order.accessToken, deviceId);
     location.href = `/order/status#order=${encodeURIComponent(order.orderId)}&token=${encodeURIComponent(order.accessToken)}${payment ? `&payment=${encodeURIComponent(payment.paymentId)}` : ''}`;
   } catch (error) {
     submitting = false;
+    if (!orderCreated && error.status === 409) {
+      sessionStorage.removeItem(`coffee-quote:${deviceId}:${selected.recipeId}:${selected.recipeVersion}:${JSON.stringify(drinkOptions)}`);
+      drinkQuote = null;
+    }
     renderMenu();
     toast(t('order.error.submit', { message: error.message }), 'error');
   }
@@ -523,6 +547,7 @@ async function loadOrder() {
     if (!orderStreamTerminal) startOrderStream(orderId, token);
   } catch (error) {
     globalThis.CoffeeRobotIntegration?.disconnected();
+    globalThis.CoffeeSound?.disconnect();
     renderError(t('order.error.status', { message: error.message }), true);
   }
 }
@@ -570,6 +595,7 @@ async function startOrderStream(orderId, token) {
   }
   if (!orderStreamTerminal && document.visibilityState === 'visible') {
     globalThis.CoffeeRobotIntegration?.disconnected();
+    globalThis.CoffeeSound?.disconnect();
     orderStreamReconnectTimer = setTimeout(() => startOrderStream(orderId, token), 3000);
   }
 }
@@ -611,8 +637,14 @@ const MILESTONE_DEFS = [
 function milestoneMarkup(order) {
   const labels = ['pay', 'queue', 'dispatch', 'accept', 'make', 'done'].map(key => t(`order.milestone.${key}`));
   if (order.paymentMode === 'TEST_FREE') labels[0] = t('order.milestone.submit');
-  const current = Math.max(0, MILESTONE_DEFS.findIndex(m => m.at.includes(order.status)));
-  const failed = ['FAILED', 'CANCELLED', 'EXPIRED'].includes(order.status);
+  const failed = ['FAILED', 'CANCELLED', 'EXPIRED'].includes(order.status) || (order.status === 'REFUNDED' && !!order.failure);
+  let current = Math.max(0, MILESTONE_DEFS.findIndex(m => m.at.includes(order.status)));
+  if (failed) {
+    const reached = (order.timeline || []).map(event => MILESTONE_DEFS.findIndex(m => m.at.includes(event.to))).filter(i => i >= 0 && i < 5);
+    current = Math.max(0, ...reached);
+    if (order.production?.startedAt || (order.production?.overallProgress || 0) > 0) current = 4;
+    else if (order.production?.acceptedAt || order.production?.status === 'REJECTED') current = Math.max(current, 3);
+  }
   return `<ol class="milestones" aria-label="${esc(t('order.milestone.aria'))}">${labels.map((label, index) => {
     let state = '';
     if (index < current) state = 'done';
@@ -725,6 +757,7 @@ function renderOrder(order) {
 
   document.title = t('order.title.status');
   const making = order.status === 'MAKING';
+  const failed = order.status === 'FAILED' || (order.status === 'REFUNDED' && !!order.failure);
   const overall = order.production?.overallProgress ?? order.production?.progress ?? 0;
   const percent = order.status === 'READY' ? 100 : Math.round(Math.max(0, Math.min(1, overall)) * 100);
   const currentStepId = order.production?.currentStepId;
@@ -734,22 +767,24 @@ function renderOrder(order) {
   const timeline = steps.map((step, index) => {
     let state = '';
     if (index === currentIndex && making) state = 'active';
-    else if ((currentIndex >= 0 && index < currentIndex && making) || order.status === 'READY') state = 'done';
+    else if (index === currentIndex && failed) state = 'error';
+    else if ((currentIndex >= 0 && index < currentIndex && (making || failed)) || order.status === 'READY') state = 'done';
     return `<li class="${state}">
       <span class="step-dot" aria-hidden="true"></span>
-      <div><strong>${esc(step.name)}</strong><small>${state === 'active' ? t('order.step.active') : state === 'done' ? t('order.step.done') : t('order.step.pending')}</small></div>
+      <div><strong>${esc(step.name)}</strong><small>${state === 'active' ? t('order.step.active') : state === 'done' ? t('order.step.done') : state === 'error' ? t('order.step.failed') : t('order.step.pending')}</small></div>
       <small class="step-sec">${step.duration ? t('order.step.seconds', { seconds: Math.round(step.duration) }) : ''}</small>
     </li>`;
   }).join('');
 
   const remaining = order.production?.remainingSeconds;
-  const timing = Number.isFinite(remaining)
+  const timing = terminal && order.status !== 'READY' ? t('order.timing.stopped') : Number.isFinite(remaining)
     ? t('order.timing.remaining', { seconds: Math.max(0, Math.ceil(remaining)) })
     : order.production?.plannedDurationSeconds
       ? t('order.timing.planned', { minutes: Math.ceil(order.production.plannedDurationSeconds / 60) })
       : t('order.timing.waiting');
 
 function flavorPillsFor(product) {
+  if (product?.customization) return `<div class="customization-panel">${esc(customizationSummary(product.customization))}</div>`;
   const visualProfile = profile(product?.visual?.profile);
   if (visualProfile === 'iced-latte') {
     return `<div class="flavor-pills">
@@ -802,11 +837,12 @@ function barcodeMarkup() {
             <span>WOODBRIDGE ROASTERY</span>
             <span>ORDER NO. ${esc(order.orderNo)}</span>
           </div>
-          <div class="pickup-card" aria-label="${esc(t('order.status.pickupAria'))}">
+          ${pickupCodeFor(order) ? `<div class="pickup-card" aria-label="${esc(t('order.status.pickupAria'))}">
             <span class="pc-label">${t('order.status.pickupLabel')}</span>
             <strong class="pc-code">${esc(pickupCodeFor(order))}</strong>
             <span class="pc-sub">${t('order.status.pickupHelp')}</span>
-          </div>
+          </div>` : ''}
+          ${order.failure ? `<div class="order-failure" role="status"><strong>${t('order.failure.title')}</strong><p>${esc(order.failure.message || t('order.banner.failedBody'))}</p><small>${t('order.failure.code')}: ${esc(order.failure.code || 'PRODUCTION_FAILED')}</small></div>` : ''}
           ${flavorPillsFor(order.product)}
           <div class="progress-wrap">
             <div class="progress-ring" style="--progress:${percent * 3.6}deg" role="img" aria-label="${esc(t('order.status.progressPercent', { percent }))}">
@@ -824,7 +860,7 @@ function barcodeMarkup() {
           <button class="btn-secondary" id="refresh">${t('order.status.refresh')}</button>
           ${order.production?.robotView?.version === 1 ? `<button class="rv-launch" data-open-robot style="width:100%;margin-top:10px">${t('order.status.robotView')}</button>` : ''}
           ${order.status === 'READY' && (!order.pickupRequired || order.collectedAt) ? `<a href="/order?device_id=${encodeURIComponent(order.deviceId || '')}" class="btn-primary" style="text-decoration:none;display:flex;align-items:center;justify-content:center;margin-top:10px">${t('order.status.another')}</a>` : ''}
-          ${barcodeMarkup()}
+          ${pickupCodeFor(order) ? barcodeMarkup() : ''}
           <p class="pay-hint" style="margin-top:10px">${terminal ? t('order.status.archived') : t('order.status.keepOpen')}</p>
         </section>
         <section class="status-steps">
@@ -922,6 +958,7 @@ const renderOrderContent = renderOrder;
 let renderedPaymentId = null;
 renderOrder = function (order) {
   globalThis.CoffeeRobotIntegration?.order(order);
+  globalThis.CoffeeSound?.update({ id: order.orderId, status: ['PAUSED', 'RETRY_WAIT', 'HOLD'].includes(order.production?.status) ? order.production.status : order.status, revision: order.production?.deviceRevision, collected: !!order.collectedAt });
   const paymentWaiting = ['CREATED', 'AWAITING_PAYMENT'].includes(order.status);
   const paymentId = order.payment?.paymentId || null;
   if (paymentWaiting && renderedPaymentId === paymentId && document.getElementById('payment-qr')) {
@@ -930,6 +967,7 @@ renderOrder = function (order) {
   }
   renderedPaymentId = paymentWaiting ? paymentId : null;
   renderOrderContent(order);
+
 };
 
 /* 页面隐藏时释放 SSE 连接，回到前台时重新加载并订阅。 */
@@ -939,6 +977,7 @@ if (typeof document.addEventListener === 'function') {
       loadOrder();
     } else if (orderStreamAbort) {
       globalThis.CoffeeRobotIntegration?.disconnected();
+    globalThis.CoffeeSound?.disconnect();
       orderStreamAbort.abort();
     }
   });

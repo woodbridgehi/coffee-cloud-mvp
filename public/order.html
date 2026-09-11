@@ -7,10 +7,12 @@
   <meta name="format-detection" content="telephone=no">
   <title data-i18n="order.title.initial">Woodbridge Coffee · 扫码下单</title>
   <link rel="stylesheet" href="/assets/shared/coffee-ui.css?v=20260903-cc2">
-  <link rel="stylesheet" href="/assets/order.css?v=20260903-cc1">
+  <link rel="stylesheet" href="/assets/order.css?v=20260911-failure-reasons">
   <link rel="stylesheet" href="/assets/robot/robot-live.css?v=20260907">
+  <link rel="stylesheet" href="/assets/shared/status-sound.css?v=20260911-process-sound">
 </head>
 <body>
+  <div id="sound-controls"></div>
   <main id="app" class="app-shell" data-od-id="order-app-shell">
     <section class="center-state" aria-live="polite">
       <div class="brew-loader" aria-hidden="true"><i></i><i></i><i></i></div>
@@ -22,9 +24,10 @@
   <script src="/assets/shared/i18n.js?v=20260907-i18n2"></script>
   <script src="/assets/locales/common/zh-CN.js?v=20260907-i18n2"></script>
   <script src="/assets/locales/common/en-US.js?v=20260907-i18n2"></script>
-  <script src="/assets/locales/order/zh-CN.js?v=20260908-pickup"></script>
-  <script src="/assets/locales/order/en-US.js?v=20260908-pickup"></script>
-  <script src="/assets/robot/robot-integration.bundle.js?v=20260908-pickup" defer></script>
-  <script src="/assets/order.js?v=20260908-pickup" defer></script>
+  <script src="/assets/locales/order/zh-CN.js?v=20260911-failure-reasons"></script>
+  <script src="/assets/locales/order/en-US.js?v=20260911-failure-reasons"></script>
+  <script src="/assets/robot/robot-integration.bundle.js?v=20260911-process-sound" defer></script>
+  <script src="/assets/shared/status-sound.js?v=20260911-process-sound"></script>
+  <script src="/assets/order.js?v=20260911-failure-reasons" defer></script>
 </body>
 </html>
