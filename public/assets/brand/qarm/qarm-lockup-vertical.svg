@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 152" fill="none">
+  <title>Qarm — Vertical Lockup</title>
+  <g transform="translate(72 8) scale(.875)">
+    <circle cx="30.5" cy="28.5" r="16.5" stroke="#17382D" stroke-width="4"/>
+    <path d="M41.5 40 47 47.5 55 44.8" stroke="#17382D" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="47" cy="47.5" r="2.1" fill="#17382D"/>
+    <circle cx="55" cy="44.8" r="3.4" fill="#B78A52"/>
+  </g>
+  <text x="100" y="96" text-anchor="middle" font-family="Inter, Manrope, 'Helvetica Neue', Arial, sans-serif" font-size="26" font-weight="700" letter-spacing="7" fill="#17382D" textLength="120" lengthAdjust="spacingAndGlyphs">QARM</text>
+  <text x="100" y="122" text-anchor="middle" font-family="'PingFang SC','Source Han Sans SC','Microsoft YaHei',sans-serif" font-size="14" font-weight="500" letter-spacing="5" fill="#746D64">千臂机器人</text>
+</svg>

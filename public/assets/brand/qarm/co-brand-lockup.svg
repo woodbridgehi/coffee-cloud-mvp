@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 424 64" fill="none">
+  <title>Coffee Terminal by Qarm — Co-Brand Lockup</title>
+  <g transform="translate(0 8) scale(.75)">
+    <rect x="17" y="15" width="25" height="35" rx="7" stroke="#17382D" stroke-width="4"/>
+    <path d="M42 27a7 7 0 0 1 0 12" stroke="#17382D" stroke-width="4"/>
+    <path d="M24.5 27h11" stroke="#B78A52" stroke-width="4" stroke-linecap="round"/>
+  </g>
+  <text x="58" y="35" font-family="Inter, Manrope, 'Helvetica Neue', Arial, sans-serif" font-size="19" font-weight="700" letter-spacing="3" fill="#17382D" textLength="196" lengthAdjust="spacingAndGlyphs">COFFEE TERMINAL</text>
+  <rect x="262" y="29" width="15" height="4.5" rx="1.5" fill="#B78A52"/>
+  <line x1="292" y1="14" x2="292" y2="50" stroke="#C9BFAF" stroke-width="1.2"/>
+  <g transform="translate(304 8) scale(.75)">
+    <circle cx="30.5" cy="28.5" r="16.5" stroke="#17382D" stroke-width="4"/>
+    <path d="M41.5 40 47 47.5 55 44.8" stroke="#17382D" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="47" cy="47.5" r="2.1" fill="#17382D"/>
+    <circle cx="55" cy="44.8" r="3.4" fill="#B78A52"/>
+  </g>
+  <text x="362" y="31" font-family="Inter, Manrope, 'Helvetica Neue', Arial, sans-serif" font-size="16" font-weight="700" letter-spacing="4.5" fill="#17382D">QARM</text>
+  <text x="362" y="50" font-family="'PingFang SC','Source Han Sans SC','Microsoft YaHei',sans-serif" font-size="11.5" letter-spacing="2.5" fill="#746D64">千臂机器人</text>
+</svg>

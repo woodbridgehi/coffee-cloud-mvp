@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" fill="none">
+  <title>Qarm — Arm-Fan Pattern Tile</title>
+  <g stroke="#17382D" stroke-width="1.2" fill="none" opacity=".15">
+    <path d="M30 0A30 30 0 0 1 0 30"/>
+    <path d="M50 0A50 50 0 0 1 0 50"/>
+    <path d="M70 0A70 70 0 0 1 0 70"/>
+    <path d="M64 76 76 64"/>
+  </g>
+  <circle cx="35.4" cy="35.4" r="2" fill="#B78A52" opacity=".3"/>
+  <circle cx="64" cy="76" r="1.6" fill="#17382D" opacity=".3"/>
+</svg>

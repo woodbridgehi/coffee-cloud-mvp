@@ -1,7 +1,7 @@
 'use strict';
 
 /* ============================================================
-   Woodbridge Coffee · 扫码下单 / 订单状态页
+   Coffee Terminal · 扫码下单 / 订单状态页
    - 无框架、无构建、无外部依赖。
    - 接口、鉴权头、幂等键与轮询规则与后端契约严格一致：
        GET  /api/v1/public/devices/{deviceId}/menu
@@ -181,11 +181,7 @@ function orderLabel(status) {
 
 /* ---------- 品牌与图形 ---------- */
 
-const brandCoffeeSvg = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-  <path d="M4 9h12v6.5a4.5 4.5 0 0 1-4.5 4.5h-3A4.5 4.5 0 0 1 4 15.5V9Z" fill="currentColor" opacity=".92"/>
-  <path d="M16 10.5h1.8a2.7 2.7 0 0 1 0 5.4H16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-  <path d="M7.5 6c0-1.2 1-1.6 1-2.8M11 6c0-1.2 1-1.6 1-2.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" opacity=".7"/>
-</svg>`;
+const brandCoffeeSvg = '<img src="/assets/assets/brand/logo-symbol.svg" alt="" width="40" height="40">';
 
 const orderSoundControls=document.getElementById('sound-controls');
 function mountHeaderControls(){
@@ -230,7 +226,7 @@ function baseHeader(pillClass, pillText, sub) {
   return `<header class="devicebar">
     <span class="db-logo" aria-hidden="true">${brandCoffeeSvg}</span>
     <div class="db-info">
-      <strong>Woodbridge Coffee</strong>
+      <strong>Coffee Terminal</strong>
       <span class="db-sub">${sub ? sub : t('order.header.default')}</span>
     </div>
     <label class="order-language">

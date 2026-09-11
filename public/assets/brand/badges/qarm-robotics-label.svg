@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 232 76" fill="none">
+  <title>Qarm Robotics Label</title>
+  <rect x="2" y="2" width="228" height="72" rx="12" stroke="#17382D" stroke-width="1.6"/>
+  <g transform="translate(14 14) scale(.75)">
+    <circle cx="30.5" cy="28.5" r="16.5" stroke="#17382D" stroke-width="4"/>
+    <path d="M41.5 40 47 47.5 55 44.8" stroke="#17382D" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="47" cy="47.5" r="2.1" fill="#17382D"/>
+    <circle cx="55" cy="44.8" r="3.4" fill="#B78A52"/>
+  </g>
+  <text x="74" y="35" font-family="Inter, Manrope, 'Helvetica Neue', Arial, sans-serif" font-size="13.5" font-weight="700" letter-spacing="2.2" fill="#17382D">QARM ROBOTICS</text>
+  <text x="74" y="53" font-family="'PingFang SC','Source Han Sans SC','Microsoft YaHei',sans-serif" font-size="9.5" letter-spacing="1.2" fill="#746D64">千臂机器人 · 母公司品牌</text>
+</svg>

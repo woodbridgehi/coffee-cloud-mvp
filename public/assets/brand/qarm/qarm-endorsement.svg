@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 28" fill="none">
+  <title>Qarm — Endorsement Line</title>
+  <g transform="translate(0 1.2) scale(.4)">
+    <circle cx="30.5" cy="28.5" r="16.5" stroke="#17382D" stroke-width="4"/>
+    <path d="M41.5 40 47 47.5 55 44.8" stroke="#17382D" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="47" cy="47.5" r="2.1" fill="#17382D"/>
+    <circle cx="55" cy="44.8" r="3.4" fill="#B78A52"/>
+  </g>
+  <text x="34" y="19" font-family="'PingFang SC','Source Han Sans SC','Microsoft YaHei',sans-serif" font-size="13" font-weight="600" letter-spacing="1.5" fill="#17382D">千臂机器人旗下品牌</text>
+  <line x1="176" y1="6" x2="176" y2="22" stroke="#C9BFAF" stroke-width="1"/>
+  <text x="186" y="18" font-family="'JetBrains Mono','SF Mono',Menlo,Consolas,monospace" font-size="9.5" letter-spacing="2" fill="#746D64">A QARM COMPANY</text>
+</svg>

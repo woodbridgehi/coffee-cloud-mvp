@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <title>Qarm — Q-Arm Symbol</title>
+  <circle cx="30.5" cy="28.5" r="16.5" stroke="#F6F0E5" stroke-width="4"/>
+  <path d="M41.5 40 47 47.5 55 44.8" stroke="#F6F0E5" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="47" cy="47.5" r="2.1" fill="#F6F0E5"/>
+  <circle cx="55" cy="44.8" r="3.4" fill="#D7B67E"/>
+</svg>

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 312 64" fill="none">
+  <title>Qarm — Wordmark 千臂机器人</title>
+  <text x="2" y="39" font-family="Inter, Manrope, 'SF Pro Display', 'Helvetica Neue', Arial, sans-serif" font-size="30" font-weight="700" letter-spacing="8" fill="#17382D" textLength="168" lengthAdjust="spacingAndGlyphs">QARM</text>
+  <rect x="178" y="32" width="22" height="6" rx="2" fill="#B78A52"/>
+  <text x="216" y="33" font-family="'PingFang SC','Source Han Sans SC','Microsoft YaHei',sans-serif" font-size="18" font-weight="600" letter-spacing="2" fill="#17382D">千臂机器人</text>
+  <text x="216" y="51" font-family="'JetBrains Mono','SF Mono',Menlo,Consolas,monospace" font-size="9" letter-spacing="1.8" fill="#746D64">QARM ROBOTICS</text>
+</svg>
