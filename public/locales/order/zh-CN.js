@@ -1,4 +1,9 @@
 CoffeeI18n.registerCatalog('zh-CN', {
+"order.sound.label": "声音",
+"order.sound.settings": "声音设置",
+"order.language.short": "中",
+"order.pickup.returnMenu": "点击返回菜单",
+"order.view.label": "制作视图",
   'order.queue.unavailable': "暂时无法观看，请稍后重试",
   "order.queue.estimate": "预计等待约 {minutes} 分钟",
   "order.queue.uncertain": "等待时间待确认",

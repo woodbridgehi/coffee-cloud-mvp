@@ -217,3 +217,19 @@ test('queued customer sees active order in ahead count and an optional private w
   assert.match(html,/等待时间待确认/);
   assert.doesNotMatch(html,/id="watch-machine"/);
 });
+
+test('pickup popup requires uncollected READY, deduplicates updates and returns to the same machine menu', () => {
+  const nodes={button:{},'.pc-label':{},'.pc-code':{},'.pc-sub':{}},events={};
+  let shown=0;
+  const dialog={open:false,setAttribute(){},querySelector:key=>nodes[key],addEventListener:(name,fn)=>events[name]=fn,
+    showModal(){this.open=true;shown++;},close(){this.open=false;events.close?.();}};
+  context.document.createElement=()=>dialog;context.document.body={append(){}};
+  const order={orderId:'popup-1',orderNo:'ORDER-4821',deviceId:'machine-7',status:'FAILED'};
+  context.showPickup(order);assert.equal(shown,0);
+  order.status='READY';context.showPickup(order);context.showPickup(order);
+  assert.equal(shown,1);assert.equal(nodes['.pc-code'].textContent,'4821');
+  nodes.button.onclick();assert.equal(context.location.href,'/order?device_id=machine-7');
+  assert.equal(order.collectedAt,undefined);context.showPickup(order);assert.equal(shown,1);
+  context.showPickup({...order,orderId:'popup-2',collectedAt:'2026-09-11'});assert.equal(shown,1);
+  delete context.document.createElement;delete context.document.body;
+});

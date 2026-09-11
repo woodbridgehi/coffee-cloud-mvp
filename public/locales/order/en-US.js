@@ -1,4 +1,9 @@
 CoffeeI18n.registerCatalog('en-US', {
+"order.sound.label": "Sound",
+"order.sound.settings": "Sound settings",
+"order.language.short": "中",
+"order.pickup.returnMenu": "Tap to return to menu",
+"order.view.label": "Preparation view",
   'order.queue.unavailable': "Live view unavailable. Please try again.",
   "order.queue.estimate": "Estimated wait: {minutes} min",
   "order.queue.uncertain": "Wait time unavailable",

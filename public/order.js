@@ -187,6 +187,45 @@ const brandCoffeeSvg = `<svg width="16" height="16" viewBox="0 0 24 24" fill="no
   <path d="M7.5 6c0-1.2 1-1.6 1-2.8M11 6c0-1.2 1-1.6 1-2.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" opacity=".7"/>
 </svg>`;
 
+const orderSoundControls=document.getElementById('sound-controls');
+function mountHeaderControls(){
+  const header=document.querySelector?.('.devicebar');
+  if(!header || !orderSoundControls?.querySelector)return;
+  if(!orderSoundControls.querySelector('details')){
+    const volume=orderSoundControls.querySelector('input[type=range]'),voice=orderSoundControls.querySelector('label');
+    const details=document.createElement('details'),summary=document.createElement('summary'),panel=document.createElement('div');
+    summary.textContent='•••';panel.className='sound-options';details.append(summary,panel);
+    if(volume)panel.append(volume);if(voice)panel.append(voice);orderSoundControls.append(details);
+  }
+  orderSoundControls.querySelector('button').dataset.label=t('order.sound.label');
+  orderSoundControls.querySelector('summary').setAttribute('aria-label',t('order.sound.settings'));
+  header.querySelector('.order-language').before(orderSoundControls);orderSoundControls.hidden=false;
+}
+let pickupDialog=null,pickupDialogOrder=null;
+const dismissedPickup=new Set();
+function showPickup(order){
+  if(!document.createElement || !document.body)return;
+  const code=pickupCodeFor(order),id=order.orderId || order.orderNo;
+  if(!code){if(pickupDialog?.open)pickupDialog.close();return;}
+  if(dismissedPickup.has(id))return;
+  if(!pickupDialog){
+    pickupDialog=document.createElement('dialog');pickupDialog.className='pickup-dialog';
+    pickupDialog.setAttribute('aria-labelledby','pickup-dialog-title');
+    pickupDialog.innerHTML='<button type="button" class="pickup-card pickup-action"><span id="pickup-dialog-title" class="pc-label"></span><strong class="pc-code"></strong><span class="pc-sub"></span></button>';
+    pickupDialog.addEventListener('close',()=>{if(pickupDialogOrder)dismissedPickup.add(pickupDialogOrder);});
+    document.body.append(pickupDialog);
+  }
+  pickupDialogOrder=id;
+  pickupDialog.querySelector('.pc-label').textContent=t('order.status.pickupLabel');
+  pickupDialog.querySelector('.pc-code').textContent=code;
+  pickupDialog.querySelector('.pc-sub').textContent=t('order.pickup.returnMenu');
+  pickupDialog.querySelector('button').onclick=()=>{
+    dismissedPickup.add(id);pickupDialog.close();
+    location.href=`/order?device_id=${encodeURIComponent(order.deviceId || deviceId || '')}`;
+  };
+  if(!pickupDialog.open)pickupDialog.showModal();
+}
+
 function baseHeader(pillClass, pillText, sub) {
   return `<header class="devicebar">
     <span class="db-logo" aria-hidden="true">${brandCoffeeSvg}</span>
@@ -196,8 +235,8 @@ function baseHeader(pillClass, pillText, sub) {
     </div>
     <label class="order-language">
       <select id="order-language" aria-label="${esc(t('common.language.label'))}">
-        <option value="zh-CN" ${i18n.getLocale() === 'zh-CN' ? 'selected' : ''}>${esc(t('common.locale.zh-CN'))}</option>
-        <option value="en-US" ${i18n.getLocale() === 'en-US' ? 'selected' : ''}>${esc(t('common.locale.en-US'))}</option>
+        <option value="zh-CN" ${i18n.getLocale() === 'zh-CN' ? 'selected' : ''}>${t('order.language.short')}</option>
+        <option value="en-US" ${i18n.getLocale() === 'en-US' ? 'selected' : ''}>EN</option>
       </select>
     </label>
     <span class="db-pill ${pillClass}"><span class="dot" aria-hidden="true"></span><span class="lp-text">${esc(pillText)}</span></span>
@@ -413,6 +452,7 @@ function renderMenu(menuData) {
   document.querySelectorAll('[data-drink-option]').forEach(node => {
     node.onchange = () => { drinkOptions[node.dataset.drinkOption] = node.value; drinkQuote = null; renderMenu(); };
   });
+  mountHeaderControls();
   const submit = document.getElementById('submit');
   if (submit) submit.onclick = submitOrder;
   if (!sellable && menu.products.length) {
@@ -687,7 +727,7 @@ function scheduleReadyRedirect(order) {
     clearInterval(readyRedirectTimer);
     readyRedirectTimer = null;
   }
-  // 手机端作为顾客移动设备凭证，制作完成后永久保留取杯口令与订单详情，不自动跳走
+  // 不定时跳转；由顾客点击取杯码返回菜单，订单取杯状态由设备确认
 }
 
 function renderOrder(order) {
@@ -830,7 +870,7 @@ function barcodeMarkup() {
     ${baseHeader(terminal ? 'idle' : '', terminal ? t('order.header.confirmed') : t('order.header.syncing'), t('order.header.order', { orderNo: esc(order.orderNo) }))}
     <main class="page-main">
       ${bannerFor(order)}
-      ${order.status !== 'QUEUED' ? `<button id="view-mode" class="rv-launch">${t(orderViewMode==='3d'?'order.view.2d':'order.view.3d')}</button><div id="order-scene"></div>` : ''}
+      ${order.status !== 'QUEUED' ? `<div class="scene-toolbar"><div id="view-mode" class="view-segment" role="group" aria-label="${esc(t('order.view.label'))}"><button type="button" data-order-view="3d">3D</button><button type="button" data-order-view="2d">2D</button></div></div><div id="order-scene"></div>` : ''}
       <div class="status-grid">
         <section class="status-card ticket-card" aria-label="${esc(t('order.status.progressAria'))}">
           <div class="ticket-header-ribbon">
@@ -903,6 +943,7 @@ function renderError(message, retry = false) {
         </div>
       </section>
     </main>`;
+  mountHeaderControls();
   if (retry) {
     const node = document.getElementById('retry');
     if (node) node.onclick = () => location.reload();
@@ -962,7 +1003,7 @@ function applyOrderView(){
   globalThis.CoffeeRobotIntegration?.inline(host,show);
   const progress=document.querySelector?.('.progress-wrap');if(progress)progress.hidden=show;
   const button=document.getElementById('view-mode');
-  if(button){button.textContent=t(show?'order.view.2d':'order.view.3d');button.onclick=()=>{orderViewMode=show?'2d':'3d';applyOrderView();};}
+  if(button?.querySelectorAll)for(const item of button.querySelectorAll('[data-order-view]')){item.setAttribute('aria-pressed',String(item.dataset.orderView===orderViewMode));item.onclick=()=>{orderViewMode=item.dataset.orderView;applyOrderView();};}
 }
 async function watchMachine(){
   stopWatching();const generation=watchGeneration;
@@ -997,7 +1038,9 @@ renderOrder = function (order) {
   latestSceneOrder=order;
   if(order.status!=='QUEUED'){stopWatching();globalThis.CoffeeRobotIntegration?.watch(null);}
   renderOrderContent(order);
+  mountHeaderControls();
   applyOrderView();
+  showPickup(order);
   const watch=document.getElementById('watch-machine');if(watch)watch.onclick=watchMachine;
 };
 

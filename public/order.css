@@ -1058,3 +1058,31 @@ img { max-width: 100%; }
 .qr-note:empty{display:none}
 
 .ticket-product{margin:14px 0;color:var(--muted,#657467);font-size:13px;line-height:1.6}
+
+/* Customer controls: forest green / warm white, aligned with the brand marks. */
+#sound-controls[hidden]{display:none}
+.devicebar{gap:10px}.devicebar .db-pill{display:none}
+.devicebar #sound-controls{position:relative;flex:none;display:flex;flex-wrap:nowrap;gap:0;padding:3px;border:1px solid #d6e3d9;border-radius:999px;background:#fffdf8;color:#1f5a46}
+.devicebar #sound-controls>button{display:flex;align-items:center;gap:7px;min-height:30px;padding:0 9px;border:0;border-radius:999px;background:transparent;color:#1f5a46;font-size:0}
+.devicebar #sound-controls>button::before{content:attr(data-label);font-size:11px;font-weight:600}
+
+.devicebar #sound-controls>button::after{content:'';width:7px;height:7px;border-radius:50%;background:#b3c5b9}
+.devicebar #sound-controls>button[aria-pressed=true]{background:#1f5a46;color:#fffdf8}
+.devicebar #sound-controls>button[aria-pressed=true]::after{background:#bfe2ce}
+.devicebar #sound-controls details{display:flex;align-items:center}
+.devicebar #sound-controls summary{display:grid;place-items:center;list-style:none;width:28px;height:30px;cursor:pointer;border-radius:999px;font-size:10px;letter-spacing:1px}
+.devicebar #sound-controls summary::-webkit-details-marker{display:none}
+.sound-options{position:absolute;top:calc(100% + 8px);right:0;z-index:120;min-width:190px;padding:16px;background:#fffdf8;border:1px solid #d6e3d9;border-radius:16px;box-shadow:0 12px 35px #0b2d241c}
+.devicebar #sound-controls .sound-options input[type=range]{width:100%;accent-color:#1f5a46;margin-bottom:14px}
+.devicebar #sound-controls .sound-options input[type=checkbox]{accent-color:#1f5a46}
+.order-language select{min-height:38px;border-color:#d6e3d9;background:#fffdf8;color:#1f5a46;border-radius:999px;font-size:12px;padding:7px 22px 7px 10px}
+.scene-toolbar{display:flex;justify-content:flex-end;margin:0 0 -1px}
+.view-segment{display:inline-flex;gap:3px;padding:3px;background:#eaf0e9;border:1px solid #d6e3d9;border-radius:999px}
+.view-segment button{width:50px;min-height:32px;border:0;border-radius:999px;background:transparent;color:#52745f;font:600 12px var(--font-ui,system-ui);cursor:pointer;transition:background .18s,color .18s,box-shadow .18s}
+.view-segment button[aria-pressed=true]{background:#1f5a46;color:#fffdf8;box-shadow:0 2px 5px #0b2d2420}
+.view-segment button:focus-visible,#sound-controls button:focus-visible,#sound-controls summary:focus-visible{outline:2px solid #34795d;outline-offset:3px}
+.pickup-dialog{position:fixed;inset:0;margin:auto;width:min(360px,calc(100vw - 40px));height:fit-content;max-height:calc(100dvh - 40px);padding:0;border:0;background:transparent;overflow:visible}
+.pickup-dialog::backdrop{background:#0b2d2499;backdrop-filter:blur(7px)}
+.pickup-dialog .pickup-action{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;width:100%;min-height:300px;margin:0;padding:44px 24px;cursor:pointer;border-radius:24px;box-shadow:0 24px 80px #0b2d2440}
+.pickup-dialog .pc-code{font-size:clamp(60px,18vw,90px);line-height:1.1}.pickup-dialog .pc-sub{font-size:13px}.pickup-dialog .pickup-action:focus-visible{outline:3px solid #75a58e;outline-offset:6px}
+@media(max-width:430px){.devicebar{padding-left:12px;padding-right:12px;gap:7px}.db-info strong{font-size:12px}.db-logo{width:26px;height:26px;flex:none}.devicebar #sound-controls>button{padding:0 7px}.devicebar #sound-controls summary{width:24px}.order-language select{max-width:61px}}
