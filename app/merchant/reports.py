@@ -122,6 +122,7 @@ class MerchantReports:
             metrics.update(paidOrderCount=None,deliveredCupCount=None)
             trend=[];completeness={'status':'COMPLETE','missing':[]}
         alerts=[{'id':'offline:'+d['id'],'severity':'WARNING','title':d['name']+' 离线','description':'请检查设备网络和电源','deviceId':d['id']} for d in devices if not d['online']]
+        alerts.extend(alert for device in devices for alert in device.get('alerts', []))
         return {'period':{'from':params.get('from'),'to':params.get('to'),'timezone':p['timezone']},'environment':params.get('environment','LIVE'),
                 'metrics':metrics,'trend':trend,'completeness':completeness,'alerts':alerts,'recentOrders':recent}
 

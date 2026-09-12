@@ -15,6 +15,7 @@ from ..services.refund_intents import create_refund_intent
 from ..services.errors import ServiceError
 from .security import MerchantError, PERMISSIONS, token_hash
 from .service import identifier, now, text_field
+from .recovery import recovery_alerts
 
 
 LEGACY_TENANT = uuid.UUID('00000000-0000-4000-8000-000000000001')
@@ -61,6 +62,7 @@ class MerchantAssets:
                   'provisioningStatus': row.get('provisioning_status', 'LEGACY'),
                   'deviceIdentityKind': row.get('device_identity_kind'), 'ownershipVersion': row['ownership_version'],
                   'version': row['merchant_version'], 'allowedActions': actions}
+        result['alerts'] = recovery_alerts(c, row)
         if detail:
             snapshots = {r['snapshot_type']: r['payload_json'] for r in c.execute('select snapshot_type,payload_json from terminal_snapshot where terminal_id=%s', (row['id'],)).fetchall()}
             job = c.execute("select task_id,status from production_job where terminal_id=%s and status in ('PENDING','DISPATCHED','ACCEPTED','EXECUTING','HOLD') order by created_at desc limit 1", (row['id'],)).fetchone()
@@ -73,8 +75,10 @@ class MerchantAssets:
                           'onHandQuantity': item.get('onHandQuantity', item.get('onHand')),
                           'reservedQuantity': item.get('reservedQuantity', item.get('reserved'))}
                          for item in snapshots.get('inventory', {}).get('materials', [])]
-            result.update(capabilities=capabilities, inventory=inventory, alerts=[],
+            result.update(capabilities=capabilities, inventory=inventory,
                           currentJob={'id': job['task_id'], 'status': job['status']} if job else None)
+            if not result['currentJob'] and result['alerts']:
+                result['currentJob'] = {'id': result['alerts'][0]['taskId'], 'status': 'HOLD', 'taskKind': result['alerts'][0]['taskKind']}
         return result
 
     def devices(self, token, params, device_id=None):

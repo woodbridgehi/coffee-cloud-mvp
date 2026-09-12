@@ -1,4 +1,13 @@
 CoffeeI18n.registerCatalog('zh-CN', {
+  'merchant.recovery.pending': '待人工处理',
+  'merchant.recovery.title': '重启中断／待人工处理',
+  'merchant.recovery.debug': '调试任务',
+  'merchant.recovery.order': '订单任务',
+  'merchant.recovery.time': '发现时间',
+  'merchant.recovery.step': '中断步骤',
+  'merchant.recovery.reason': '原因',
+  'merchant.recovery.help': '人工核验请在终端完成，处理结果同步后告警自动解除。',
+
   'merchant.document.title': 'Coffee Cloud · 客户运营后台',
   'merchant.skip': '跳到主内容',
   'merchant.auth.aria': '账号入口',

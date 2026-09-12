@@ -1,4 +1,13 @@
 CoffeeI18n.registerCatalog('en-US', {
+  'merchant.recovery.pending': 'Operator review required',
+  'merchant.recovery.title': 'Preparation interrupted / Operator review required',
+  'merchant.recovery.debug': 'Debug task',
+  'merchant.recovery.order': 'Order task',
+  'merchant.recovery.time': 'Detected at',
+  'merchant.recovery.step': 'Interrupted step',
+  'merchant.recovery.reason': 'Reason',
+  'merchant.recovery.help': 'Complete the on-site check at the terminal. This alert clears after the result is synchronized.',
+
   'merchant.document.title': 'Coffee Cloud · Merchant Workspace',
   'merchant.skip': 'Skip to main content',
   'merchant.auth.aria': 'Account access',

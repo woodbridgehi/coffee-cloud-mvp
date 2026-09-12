@@ -89,3 +89,47 @@ def test_busy_device_transfer_and_archiving_populated_store_are_rejected(merchan
     with pytest.raises(MerchantError) as error:
         merchant.save_store(at,{'name':store['name'],'status':'ARCHIVED','version':1},a['csrfToken'],'test',store['id'])
     assert error.value.code=='STORE_HAS_DEVICES'
+
+
+def test_recovery_alert_covers_debug_task_and_clears_after_review(merchant):
+    session,token=account(merchant)
+    device=terminal(merchant);owned,_=claim(merchant,session,token,device)
+    task='recovery-'+uuid.uuid4().hex
+    recovery={'taskId':task,'taskKind':'DEBUG','detectedAt':'2026-09-12T00:00:00Z',
+              'stepId':'lid','stepName':'封杯并出杯','reason':'制作中断，等待现场人工核验','reasonCode':'DEVICE_RESTARTED_OUTCOME_UNKNOWN'}
+    with merchant.database.connect() as c:
+        c.execute("update terminal set reported_status=%s,last_seen_at=now() where id=%s",
+                  (Jsonb({'deviceStatus':'RECOVERING','currentTaskId':task,'recovery':recovery}),device['id']))
+        c.execute("""insert into terminal_command(terminal_id,message_id,command_type,payload_json,status)
+                  values(%s,%s,'MAKE_DRINK',%s,'UNKNOWN')""",
+                  (device['id'],'cmd-'+uuid.uuid4().hex,Jsonb({'taskId':task,'orderId':'debug-test'})))
+    assets=MerchantAssets(merchant)
+    alert=assets.devices(token,{},owned['id'])['alerts'][0]
+    assert alert['taskKind']=='DEBUG' and alert['stepName']=='封杯并出杯'
+    assert alert['occurredAt']=='2026-09-12T00:00:00Z'
+    assert len(assets.devices(token,{})[0]['alerts'])==1
+    from app.merchant.reports import MerchantReports
+    dashboard=MerchantReports(merchant).dashboard(token,{'from':'2026-09-12','to':'2026-09-13'})
+    assert any(a.get('taskId')==task for a in dashboard['alerts'])
+    other,other_token=account(merchant,'other-review@test.invalid')
+    assert assets.devices(other_token,{})==[]
+    with pytest.raises(MerchantError): assets.devices(other_token,{},owned['id'])
+    with merchant.database.connect() as c:
+        c.execute("update terminal_command set status='CANCELLED' where terminal_id=%s",(device['id'],))
+        c.execute("update terminal set reported_status=%s where id=%s",(Jsonb({'deviceStatus':'IDLE','recovery':None}),device['id']))
+    assert assets.devices(token,{},owned['id'])['alerts']==[]
+
+
+def test_legacy_unknown_command_appears_without_new_heartbeat(merchant):
+    session,token=account(merchant)
+    device=terminal(merchant);owned,_=claim(merchant,session,token,device)
+    task='legacy-'+uuid.uuid4().hex
+    with merchant.database.connect() as c:
+        command=c.execute("""insert into terminal_command(terminal_id,message_id,command_type,payload_json,status)
+            values(%s,%s,'MAKE_DRINK',%s,'UNKNOWN') returning id""",
+            (device['id'],'cmd-'+uuid.uuid4().hex,Jsonb({'taskId':task,'orderId':'debug-test'}))).fetchone()
+        c.execute("""insert into terminal_command_transition(command_id,revision,to_status,actor,payload_json)
+            values(%s,1,'UNKNOWN','device-event',%s)""",(command['id'],Jsonb({'occurredAt':'2026-09-11T12:00:00Z','payload':{'taskId':task,'orderId':'debug-test'}})))
+    alert=MerchantAssets(merchant).devices(token,{},owned['id'])['alerts'][0]
+    assert alert['taskKind']=='DEBUG' and alert['occurredAt']=='2026-09-11T12:00:00Z'
+    assert alert['stepName']=='未记录'

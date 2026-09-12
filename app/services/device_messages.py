@@ -98,6 +98,7 @@ class DeviceMessageService:
                         "currentTaskId": body.get("currentTaskId"),
                         "currentTaskState": body.get("currentTaskState"),
                         "currentTaskRevision": body.get("currentTaskRevision"),
+                        "recovery": body.get("recovery"),
                         "deliveries": body.get("deliveries"), "sentAt": body.get("sentAt"),
                     },
                 )

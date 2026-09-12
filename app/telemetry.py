@@ -159,6 +159,7 @@ class TelemetryCache:
             "reportedStatus": json.dumps({
                 "deviceStatus": payload.get("deviceStatus"), "currentTaskId": payload.get("currentTaskId"),
                 "currentTaskState": payload.get("currentTaskState"), "currentTaskRevision": payload.get("currentTaskRevision"),
+                "recovery": payload.get("recovery"),
                 "deliveries": payload.get("deliveries"), "sentAt": payload.get("sentAt"),
             }, separators=(",", ":")),
         }

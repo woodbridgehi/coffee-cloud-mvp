@@ -2054,14 +2054,27 @@ async function loadDashboardAlerts(container) {
       el('div', { class: `cc-alert ${alert.severity === 'ERROR' ? 'cc-alert--error' : alert.severity === 'WARNING' ? 'cc-alert--warning' : 'cc-alert--info'}`, style: 'padding:12px' },
         el('span', { html: svgIcon(alert.severity === 'ERROR' ? 'alert-circle' : 'alert-triangle', 16), 'aria-hidden': 'true' }),
         el('div', { class: 'cc-alert-body' },
-          el('div', { class: 'cc-alert-title' }, alert.title),
-          el('div', { class: 'cc-alert-desc' }, alert.description || ''),
+          el('div', { class: 'cc-alert-title' }, recoveryAlertTitle(alert)),
+          el('div', { class: 'cc-alert-desc', style: 'white-space:pre-line;overflow-wrap:anywhere' }, recoveryAlertDescription(alert)),
           el('div', { class: 'cc-alert-actions' },
             el('button', {
               class: 'cc-btn cc-btn--secondary cc-btn--sm', type: 'button',
-              onclick: () => { state.ordersFocusId = null; location.hash = '#/devices'; },
+              onclick: () => { if (alert.action === 'VERIFY_AT_TERMINAL') openDeviceDrawer(alert.deviceId); else { state.ordersFocusId = null; location.hash = '#/devices'; } },
             }, '查看设备'))))))),
-    el('p', { class: 'cc-caption', style: 'margin-top:12px' }, '告警来自设备心跳与物料阈值，当前版本暂不支持标记已处理。'));
+    el('p', { class: 'cc-caption', style: 'margin-top:12px' }, tr('merchant.recovery.help', '人工核验请在终端完成，处理结果同步后告警自动解除。')));
+}
+
+function recoveryAlertTitle(alert) {
+  return alert.action === 'VERIFY_AT_TERMINAL' ? tr('merchant.recovery.title', '重启中断／待人工处理') : alert.title;
+}
+function recoveryAlertDescription(alert) {
+  if (alert.action !== 'VERIFY_AT_TERMINAL') return alert.description || '';
+  return [alert.title.split(' · ')[0],
+    tr(alert.taskKind === 'DEBUG' ? 'merchant.recovery.debug' : 'merchant.recovery.order', alert.taskKind === 'DEBUG' ? '调试任务' : '订单任务') + ' · ' + alert.taskId,
+    tr('merchant.recovery.time', '发现时间') + ': ' + (alert.occurredAt ? fmtDateTime(alert.occurredAt, tz()) : '—'),
+    tr('merchant.recovery.step', '中断步骤') + ': ' + alert.stepName,
+    tr('merchant.recovery.reason', '原因') + ': ' + alert.code + ' · ' + alert.reason,
+    tr('merchant.recovery.help', '人工核验请在终端完成，处理结果同步后告警自动解除。')].join('\n');
 }
 
 async function loadDashboardRecent(container) {
@@ -2148,7 +2161,8 @@ async function loadDeviceList(container) {
   },
     tdl(el('div', null,
       el('div', { class: 'cell-main' }, device.name || '未命名'),
-      el('div', { class: 'cell-sub' }, `${device.deviceId} · ${device.serialNumber || '—'}`)), '设备'),
+      el('div', { class: 'cell-sub' }, `${device.deviceId} · ${device.serialNumber || '—'}`),
+      (device.alerts || []).length ? el('span', { class: 'cc-status cc-status--error' }, tr('merchant.recovery.pending', '待人工处理')) : null), '设备'),
     tdl(device.online
       ? el('span', { class: 'cc-status cc-status--success' }, '在线')
       : el('div', null,
@@ -2287,8 +2301,8 @@ function paintDeviceDrawer(drawer, device) {
           el('div', { class: `cc-alert ${a.severity === 'ERROR' ? 'cc-alert--error' : 'cc-alert--warning'}`, style: 'padding:10px 12px' },
             el('span', { html: svgIcon(a.severity === 'ERROR' ? 'alert-circle' : 'alert-triangle', 16), 'aria-hidden': 'true' }),
             el('div', { class: 'cc-alert-body' },
-              el('div', { class: 'cc-alert-title' }, a.title),
-              el('div', { class: 'cc-alert-desc' }, a.description || ''))))))) : null,
+              el('div', { class: 'cc-alert-title' }, recoveryAlertTitle(a)),
+              el('div', { class: 'cc-alert-desc', style: 'white-space:pre-line;overflow-wrap:anywhere' }, recoveryAlertDescription(a)))))))) : null,
     el('div', { id: 'command-status-slot' }));
   caps.node = el('section', { class: 'cc-stack', style: 'gap:20px' },
     el('div', null,
