@@ -1,4 +1,7 @@
 CoffeeI18n.registerCatalog('en-US', {
+  'admin.auth.registerAction': 'Register',
+  'admin.login.parentBrand': 'A QARM Robotics company',
+  'admin.nav.platform': 'Device Operations',
   'admin.document.title': 'Coffee Cloud · Device Operations',
   'admin.login.aria': 'Sign in',
   'admin.login.heading': 'Device Operations · Token Sign-in',

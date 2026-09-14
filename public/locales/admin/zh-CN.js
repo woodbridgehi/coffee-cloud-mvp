@@ -1,4 +1,7 @@
 CoffeeI18n.registerCatalog('zh-CN', {
+  'admin.auth.registerAction': '注册',
+  'admin.login.parentBrand': '母公司 · QARM 千臂机器人',
+  'admin.nav.platform': '设备运营台',
   'admin.document.title': 'Coffee Cloud · 设备运营台',
   'admin.login.aria': '登录',
   'admin.login.heading': '设备运营台 · Token 登录',

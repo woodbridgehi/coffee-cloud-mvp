@@ -335,10 +335,10 @@ test('USERNAME：初始化先取 /auth/config，登录栏为用户名 text 输�
     assert.equal(inputs[0].getAttribute('autocomplete'), 'username');
     const authText = textOf(authView);
     assert.ok(authText.includes('用户名'), '登录栏标签为“用户名”');
-    assert.ok(authText.includes('已注册邮箱账号仍可用邮箱登录'), '提示邮箱账号仍可用邮箱登录');
+    assert.ok(!authText.includes('已注册邮箱账号仍可用邮箱登录'), '不显示冗余登录说明');
     assert.ok(!authText.includes('忘记密码'), 'mailEnabled=false 隐藏找回邮箱入口');
     assert.ok(!authText.includes('验证邮箱') && !authText.includes('使用邀请链接'), '隐藏验证/邀请入口');
-    assert.ok(authText.includes('创建组织账号'), '注册入口保留');
+    assert.ok(authText.includes('注册'), '注册入口保留');
   } finally { app.restoreFetch(); }
 });
 

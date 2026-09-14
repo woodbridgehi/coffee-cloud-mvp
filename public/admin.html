@@ -10,6 +10,7 @@
   <script src="/assets/shared/cc-icons.js?v=20260911-brand-qarm"></script>
   <link rel="icon" href="/assets/assets/brand/monogram-ct.svg">
   <link rel="stylesheet" href="/assets/shared/brand-system.css?v=20260911-qarm">
+  <link rel="stylesheet" href="/assets/shared/auth-brand.css?v=20260914-layout2">
 </head>
 <body class="admin-body" data-shell="admin">
   <label class="cc-locale-control" for="locale-select">
@@ -30,20 +31,16 @@
 
     <div class="cc-auth-main">
       <div class="cc-auth-grid">
-        <aside class="cc-auth-aside" data-od-id="auth-aside">
-          <div class="cc-auth-kicker">Platform Operations</div>
-          <h2 data-i18n="admin.login.heading">设备运营台 · Token 登录</h2>
-          <p data-i18n="admin.login.intro">面向平台运维与值班人员的设备控制台：终端连接、生命周期、订单异常与运营员权限。商户账号请使用客户运营后台入口。</p>
-          <ul class="cc-auth-points">
-            <li><i data-cc-icon="check" data-size="16"></i><span data-i18n="admin.login.point.memory">运营 Token 只保存在当前页面内存；刷新或关闭后需要重新输入</span></li>
-            <li><i data-cc-icon="check" data-size="16"></i><span data-i18n="admin.login.point.permissions">权限决定可见视图与操作，登录后按 Token 角色渲染</span></li>
-            <li><i data-cc-icon="check" data-size="16"></i><span data-i18n="admin.login.point.data">设备实时快照与账面数据分开展示，未知容量不画百分比</span></li>
-          </ul>
+        <aside class="cc-auth-aside auth-brand-panel">
+          <div class="cc-auth-kicker">COFFEE TERMINAL / CLOUD</div>
+          <img class="auth-wordmark" src="/assets/assets/brand/logo-horizontal-cream.svg" alt="Coffee Terminal">
+          <h2 data-i18n="admin.nav.platform">设备运营台</h2>
+          <div class="auth-seals" aria-hidden="true"><img src="/assets/assets/brand/badges/autonomous-coffee.svg" alt=""><img src="/assets/assets/brand/badges/precision-brew-cream.svg" alt=""></div>
+          <div class="auth-parent"><img src="/assets/assets/brand/qarm/qarm-endorsement.svg" alt="QARM 千臂机器人"><span data-i18n="admin.login.parentBrand">母公司 · QARM 千臂机器人</span></div>
         </aside>
 
         <section class="cc-auth-form" data-od-id="login-form">
           <h1 class="cc-h1" data-i18n="admin.login.title">Token 登录</h1>
-          <p class="cc-form-sub" data-i18n="admin.login.sub">使用运营 Token 登录；不会写入浏览器存储。</p>
           <form id="login-form" autocomplete="off" novalidate>
             <div class="cc-field">
               <label class="cc-label" for="login-token" data-i18n="admin.login.token">运营 Token</label>
@@ -54,12 +51,6 @@
             </div>
             <p id="login-error" class="cc-error-text" role="alert"></p>
           </form>
-          <details class="cc-disc" style="margin-top:16px">
-            <summary><i data-cc-icon="chev-right" data-size="14" class="chev"></i><span data-i18n="admin.login.securityTitle">Token 安全说明</span></summary>
-            <div class="cc-disc-body cc-caption" data-i18n="admin.login.securityBody">
-              当前页面不会将 Token 写入浏览器存储；刷新或关闭后需要重新输入，但不会撤销服务端 Token。完整 Token 仅在创建时显示一次，云端只保存摘要。
-            </div>
-          </details>
         </section>
       </div>
     </div>
@@ -104,9 +95,9 @@
   <script src="/assets/shared/i18n.js?v=20260904-i18n1"></script>
   <script src="/assets/locales/common/zh-CN.js?v=20260904-i18n1"></script>
   <script src="/assets/locales/common/en-US.js?v=20260904-i18n1"></script>
-  <script src="/assets/locales/admin/zh-CN.js?v=20260904-i18n1"></script>
-  <script src="/assets/locales/admin/en-US.js?v=20260904-i18n1"></script>
-  <script type="module" src="/assets/admin.js?v=20260912-silent-refresh"></script>
+  <script src="/assets/locales/admin/zh-CN.js?v=20260914-auth"></script>
+  <script src="/assets/locales/admin/en-US.js?v=20260914-auth"></script>
+  <script type="module" src="/assets/admin.js?v=20260914-auth"></script>
 <div class="brand-credit workspace-credit"><img src="/assets/assets/brand/qarm/qarm-symbol.svg" alt="" aria-hidden="true"><span class="brand-zh">千臂机器人旗下品牌</span><span class="brand-en" lang="en">A QARM COMPANY</span></div>
 </body>
 </html>

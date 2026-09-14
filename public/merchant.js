@@ -1004,15 +1004,16 @@ function authShell(card, heading, subText) {
       el('span', { class: 'cc-brand-sub' }, tr('merchant.workspace', '商户工作台'))),
     el('div', { class: 'cc-auth-main' },
       el('div', { class: 'cc-auth-grid' },
-        el('aside', { class: 'cc-auth-aside' },
-          el('div', { class: 'cc-auth-kicker' }, 'Merchant Workspace'),
-          el('h2', null, tr('merchant.auth.loginHeading', '登录你的咖啡经营组织')),
-          el('p', null, tr('merchant.auth.intro', 'Coffee Cloud 帮助连锁咖啡商户管理自助咖啡机设备、订单与成本。此处为商户账号入口，平台运维请使用独立的 Token 入口。')),
-          el('ul', { class: 'cc-auth-points' },
-            [tr('merchant.auth.point.memberships', '一个账号可归属多个组织，登录后可在范围条切换'),
-              tr('merchant.auth.point.roles', '角色（OWNER / OPERATOR / FINANCE）决定可见模块与操作'),
-              tr('merchant.auth.point.security', '敏感操作需要重新验证密码，会话由服务端管理')].map(text =>
-              el('li', null, el('span', { html: svgIcon('check', 16), 'aria-hidden': 'true' }), el('span', null, text))))),
+        el('aside', { class: 'cc-auth-aside auth-brand-panel' },
+          el('div', { class: 'cc-auth-kicker' }, 'COFFEE TERMINAL / CLOUD'),
+          el('img', { class: 'auth-wordmark', src: '/assets/assets/brand/logo-horizontal-cream.svg', alt: 'Coffee Terminal' }),
+          el('h2', null, tr('merchant.workspace', '商户工作台')),
+          el('div', { class: 'auth-seals', 'aria-hidden': 'true' },
+            el('img', { src: '/assets/assets/brand/badges/autonomous-coffee.svg', alt: '' }),
+            el('img', { src: '/assets/assets/brand/badges/precision-brew-cream.svg', alt: '' })),
+          el('div', { class: 'auth-parent' },
+            el('img', { src: '/assets/assets/brand/qarm/qarm-endorsement.svg', alt: 'QARM 千臂机器人' }),
+            el('span', null, tr('merchant.auth.parentBrand', '母公司 · QARM 千臂机器人')))),
         el('section', { class: 'cc-auth-form' },
           heading ? el('h1', { class: 'cc-h1' }, heading) : null,
           subText ? el('p', { class: 'cc-form-sub' }, subText) : null,
@@ -1042,7 +1043,7 @@ function mailDisabledNotice(title) {
     iconName: 'info',
     title,
     lines: ['邮件服务未配置，此功能暂未开放；忘记密码请联系平台管理员。'],
-    links: [{ label: '返回登录', href: '#/login' }],
+    links: [{ label: tr('merchant.auth.ui.back', '返回登录'), href: '#/login' }],
   }), title);
 }
 
@@ -1071,17 +1072,10 @@ function renderAuth() {
       el('div', { class: 'cc-alert-title' }, '演示模式提示'),
       el('div', { class: 'cc-alert-desc' }, `${demoHints.loginHint}；验证邮箱 token：${demoHints.verifyToken}；重置 token：${demoHints.resetToken}；邀请 token：${demoHints.inviteToken}`))) : null;
 
-  const modeNote = el('div', { class: 'cc-alert cc-alert--info', style: 'margin-bottom:4px' },
-    el('span', { html: svgIcon('info', 16), 'aria-hidden': 'true' }),
-    el('div', { class: 'cc-alert-body' },
-      el('div', { class: 'cc-alert-desc' }, policy.usernameMode
-        ? tr('merchant.auth.mode.username', '当前注册方式：用户名注册；邮箱验证服务未开启，找回密码与邀请链接暂不可用。')
-        : tr('merchant.auth.mode.email', '当前注册方式：邮箱注册，注册后需完成邮箱验证。'))));
-
   if (m === 'login') {
     const usernameMode = policy.usernameMode;
     const ident = usernameMode
-      ? el('input', { class: 'cc-input', type: 'text', autocomplete: 'username', placeholder: '3–32 位用户名，或已注册邮箱', required: true })
+      ? el('input', { class: 'cc-input', type: 'text', autocomplete: 'username', placeholder: tr('merchant.auth.identity.usernameOrEmail', '用户名或邮箱'), required: true })
       : el('input', { class: 'cc-input', type: 'email', autocomplete: 'username', placeholder: 'name@company.com', required: true });
     const password = el('input', { class: 'cc-input', type: 'password', autocomplete: 'current-password', placeholder: tr('merchant.auth.passwordPlaceholder', '请输入密码'), required: true });
     const errorNode = el('p', { class: 'cc-error-text', role: 'alert' });
@@ -1104,28 +1098,23 @@ function renderAuth() {
         }
       },
     },
-      fieldWrap(usernameMode ? tr('merchant.auth.identity.usernameOrEmail', '用户名或邮箱') : tr('merchant.auth.identity.email', '邮箱'), ident, { dataField: usernameMode ? 'username' : 'email', hint: usernameMode ? '已注册邮箱账号仍可用邮箱登录。' : null }),
+      fieldWrap(usernameMode ? tr('merchant.auth.identity.usernameOrEmail', '用户名或邮箱') : tr('merchant.auth.identity.email', '邮箱'), ident, { dataField: usernameMode ? 'username' : 'email', hint: null }),
       passwordFieldWrap(tr('merchant.auth.password', '密码'), password, { dataField: 'password' }),
       el('div', { class: 'cc-field', style: 'margin-top:24px' }, submit),
       errorNode);
-    const links = [{ label: tr('merchant.auth.createAccount', '创建组织账号'), href: '#/register' }];
+    const links = [{ label: tr('merchant.auth.registerAction', '注册'), href: '#/register' }];
     if (policy.mailEnabled) {
       links.push({ label: tr('merchant.auth.forgotPassword', '忘记密码'), href: '#/forgot' });
-      links.push({ label: '使用邀请链接', href: '#/invite' });
-      links.push({ label: '验证邮箱', href: '#/verify' });
+      links.push({ label: tr('merchant.auth.ui.inviteLink', '使用邀请链接'), href: '#/invite' });
+      links.push({ label: tr('merchant.auth.ui.verify', '验证邮箱'), href: '#/verify' });
     }
-    authShell(el('div', null, modeNote,
-      el('details', { class: 'cc-disc', style: 'margin:12px 0 4px' },
-        el('summary', null, el('span', { html: svgIcon('chev-right', 14), class: 'chev', 'aria-hidden': 'true' }), '会话安全说明'),
-        el('div', { class: 'cc-disc-body cc-caption' }, '会话凭据由服务端 HttpOnly Cookie 保护；本页面不保存任何密码或令牌。登录失败多次后将临时限流（HTTP 429）。')),
-      hintBox, form,
-      authLinkRow(links)), tr('merchant.auth.login', '登录'), tr('merchant.auth.loginSub', '使用用户名或邮箱账号登录你的组织。'));
+    authShell(el('div', null, hintBox, form, authLinkRow(links)), tr('merchant.auth.login', '登录'));
     return;
   }
 
   if (m === 'register') {
     const errorNode = el('p', { class: 'cc-error-text', role: 'alert' });
-    const submit = el('button', { class: 'cc-btn cc-btn--primary cc-btn--lg cc-btn--block', type: 'submit' }, '创建账号');
+    const submit = el('button', { class: 'cc-btn cc-btn--primary cc-btn--lg cc-btn--block', type: 'submit' }, tr('merchant.auth.ui.create', '创建账号'));
     let form;
     if (policy.usernameMode) {
       /* USERNAME 模式：用户名 + 姓名 + 组织 + 密码；成功即 REGISTERED，可直接登录 */
@@ -1148,7 +1137,7 @@ function renderAuth() {
           if (!checkPassword.ok) { showFieldErrors(form, { password: checkPassword.reason }); return; }
           if (!displayName.value.trim()) { showFieldErrors(form, { displayName: '请填写你的姓名' }); return; }
           if (!tenantName.value.trim()) { showFieldErrors(form, { tenantName: '请填写组织名称' }); return; }
-          busy(submit, '提交中…');
+          busy(submit, tr('merchant.auth.ui.submitting', '提交中…'));
           try {
             const result = await adapter.register({
               username: checkUsername.value, password: password.value,
@@ -1158,23 +1147,23 @@ function renderAuth() {
             if (result && result.status && result.status !== 'REGISTERED') {
               authResultPage('注册请求已提交', [
                 `服务器返回状态：${result.status}，未确认注册完成。请稍后在登录页尝试，或联系平台管理员。`,
-              ], [{ label: '去登录', href: '#/login' }]);
+              ], [{ label: tr('merchant.auth.ui.goLogin', '去登录'), href: '#/login' }]);
             } else {
               authResultPage('注册成功，可直接登录', [
                 '账号已创建，使用刚设置的用户名和密码即可登录。',
                 '无需验证邮箱；忘记密码时请联系平台管理员重置。',
-              ], [{ label: '去登录', href: '#/login' }]);
+              ], [{ label: tr('merchant.auth.ui.goLogin', '去登录'), href: '#/login' }]);
             }
           } catch (error) {
-            unbusy(submit, '创建账号');
+            unbusy(submit, tr('merchant.auth.ui.create', '创建账号'));
             showFieldErrors(form, error.fields, errorNode, describeMerchantError(error));
           }
         },
       },
-        fieldWrap('用户名', username, { dataField: 'username', hint: '3–32 位：字母开头，后续可用小写字母、数字、点、下划线或连字符；不区分大小写，提交前自动转小写。', required: true }),
-        fieldWrap('你的姓名', displayName, { dataField: 'displayName', required: true }),
-        fieldWrap('组织名称', tenantName, { dataField: 'tenantName', hint: '创建后你将成为该组织的 OWNER。', required: true }),
-        passwordFieldWrap(`设置密码（${passwordLengthLabel()} 个字符）`, password, { dataField: 'password', required: true }),
+        fieldWrap(tr('merchant.auth.ui.username', '用户名'), username, { dataField: 'username', hint: tr('merchant.auth.ui.usernameHint', '3–32 位，字母开头，可用字母、数字、点、下划线和连字符。'), required: true }),
+        fieldWrap(tr('merchant.auth.ui.name', '你的姓名'), displayName, { dataField: 'displayName', required: true }),
+        fieldWrap(tr('merchant.auth.ui.organization', '组织名称'), tenantName, { dataField: 'tenantName', required: true }),
+        passwordFieldWrap(tr('merchant.auth.ui.newPassword', `设置密码（${passwordLengthLabel()} 个字符）`, { length: passwordLengthLabel() }), password, { dataField: 'password', required: true }),
         el('div', { class: 'cc-field', style: 'margin-top:24px' }, submit),
         errorNode);
     } else {
@@ -1195,7 +1184,7 @@ function renderAuth() {
           if (!looksLikeEmail(email.value)) { showFieldErrors(form, { email: '请输入正确的邮箱地址' }); return; }
           const checkPassword = validateNewPassword(password.value, policy);
           if (!checkPassword.ok) { showFieldErrors(form, { password: checkPassword.reason }); return; }
-          busy(submit, '提交中…');
+          busy(submit, tr('merchant.auth.ui.submitting', '提交中…'));
           try {
             await adapter.register({ email: email.value.trim(), password: password.value, displayName: displayName.value.trim(), tenantName: tenantName.value.trim(), locale: i18n?.getLocale() || 'zh-CN' });
             password.value = '';
@@ -1204,62 +1193,61 @@ function renderAuth() {
               '如果长时间未收到邮件，请检查垃圾箱或联系平台管理员。邮件服务未配置时，服务器会明确提示不可用。',
             ]);
           } catch (error) {
-            unbusy(submit, '创建账号');
+            unbusy(submit, tr('merchant.auth.ui.create', '创建账号'));
             showFieldErrors(form, error.fields, errorNode, describeMerchantError(error));
           }
         },
       },
-        fieldWrap('工作邮箱', email, { dataField: 'email', required: true }),
-        passwordFieldWrap(`设置密码（${passwordLengthLabel()} 个字符）`, password, { dataField: 'password', required: true }),
-        fieldWrap('你的姓名', displayName, { dataField: 'displayName', required: true }),
-        fieldWrap('组织名称', tenantName, { dataField: 'tenantName', required: true }),
+        fieldWrap(tr('merchant.auth.ui.email', '工作邮箱'), email, { dataField: 'email', required: true }),
+        passwordFieldWrap(tr('merchant.auth.ui.newPassword', `设置密码（${passwordLengthLabel()} 个字符）`, { length: passwordLengthLabel() }), password, { dataField: 'password', required: true }),
+        fieldWrap(tr('merchant.auth.ui.name', '你的姓名'), displayName, { dataField: 'displayName', required: true }),
+        fieldWrap(tr('merchant.auth.ui.organization', '组织名称'), tenantName, { dataField: 'tenantName', required: true }),
         el('div', { class: 'cc-field', style: 'margin-top:24px' }, submit),
         errorNode);
     }
-    authShell(el('div', null, modeNote, hintBox, form,
-      authLinkRow([{ label: '返回登录', href: '#/login' }])), '创建组织账号', '注册后即可登录商户工作台。');
+    authShell(el('div', null, hintBox, form,
+      authLinkRow([{ label: tr('merchant.auth.ui.back', '返回登录'), href: '#/login' }])), tr('merchant.auth.registerAction', '注册'));
     return;
   }
 
   if (m === 'forgot') {
     const email = el('input', { class: 'cc-input', type: 'email', required: true });
     const errorNode = el('p', { class: 'cc-error-text', role: 'alert' });
-    const submit = el('button', { class: 'cc-btn cc-btn--primary cc-btn--lg cc-btn--block', type: 'submit' }, '发送找回链接');
+    const submit = el('button', { class: 'cc-btn cc-btn--primary cc-btn--lg cc-btn--block', type: 'submit' }, tr('merchant.auth.ui.sendReset', '发送找回链接'));
     const form = el('form', {
       novalidate: true, onsubmit: async event => {
         event.preventDefault();
         errorNode.textContent = '';
-        busy(submit, '发送中…');
+        busy(submit, tr('merchant.auth.ui.sending', '发送中…'));
         try {
           await adapter.forgotPassword({ email: email.value.trim() });
           email.value = '';
           authResultPage('请求已受理', [
             '如果该邮箱注册过账号，重置链接将发送到该邮箱。',
-            '出于防枚举考虑，无论账号是否存在都返回相同结果。',
           ]);
         } catch (error) {
-          unbusy(submit, '发送找回链接');
+          unbusy(submit, tr('merchant.auth.ui.sendReset', '发送找回链接'));
           errorNode.textContent = describeMerchantError(error);
         }
       },
     },
-      fieldWrap('注册邮箱', email, { required: true }),
+      fieldWrap(tr('merchant.auth.ui.registeredEmail', '注册邮箱'), email, { required: true }),
       el('div', { class: 'cc-field', style: 'margin-top:24px' }, submit),
       errorNode);
     authShell(el('div', null, hintBox, form,
-      authLinkRow([{ label: '返回登录', href: '#/login' }])), '找回密码', '通过邮箱链接重置密码。');
+      authLinkRow([{ label: tr('merchant.auth.ui.back', '返回登录'), href: '#/login' }])), tr('merchant.auth.ui.forgotTitle', '找回密码'));
     return;
   }
 
   if (m === 'reset') {
-    const tokenInput = el('input', { class: 'cc-input u-mono', value: state.authToken || '', placeholder: '粘贴重置 token', autocomplete: 'off' });
+    const tokenInput = el('input', { class: 'cc-input u-mono', value: state.authToken || '', placeholder: tr('merchant.auth.ui.resetPlaceholder', '粘贴重置 token'), autocomplete: 'off' });
     const password = el('input', {
       class: 'cc-input', type: 'password', autocomplete: 'new-password',
       minlength: String(policy.passwordMinLength), maxlength: String(policy.passwordMaxLength), required: true,
     });
     const confirm = el('input', { class: 'cc-input', type: 'password', autocomplete: 'new-password', required: true });
     const errorNode = el('p', { class: 'cc-error-text', role: 'alert' });
-    const submit = el('button', { class: 'cc-btn cc-btn--primary cc-btn--lg cc-btn--block', type: 'submit' }, '设置新密码');
+    const submit = el('button', { class: 'cc-btn cc-btn--primary cc-btn--lg cc-btn--block', type: 'submit' }, tr('merchant.auth.ui.setPassword', '设置新密码'));
     const form = el('form', {
       novalidate: true, onsubmit: async event => {
         event.preventDefault();
@@ -1267,39 +1255,39 @@ function renderAuth() {
         const checkPassword = validateNewPassword(password.value, policy);
         if (!checkPassword.ok) { errorNode.textContent = checkPassword.reason; return; }
         if (password.value !== confirm.value) { errorNode.textContent = '两次输入的密码不一致'; return; }
-        busy(submit, '提交中…');
+        busy(submit, tr('merchant.auth.ui.submitting', '提交中…'));
         try {
           await adapter.resetPassword({ token: tokenInput.value.trim(), password: password.value });
           password.value = ''; confirm.value = '';
-          authResultPage('密码已更新', ['请使用新密码登录。'], [{ label: '去登录', href: '#/login' }]);
+          authResultPage('密码已更新', ['请使用新密码登录。'], [{ label: tr('merchant.auth.ui.goLogin', '去登录'), href: '#/login' }]);
         } catch (error) {
-          unbusy(submit, '设置新密码');
+          unbusy(submit, tr('merchant.auth.ui.setPassword', '设置新密码'));
           errorNode.textContent = describeMerchantError(error);
         }
       },
     },
-      fieldWrap('重置 token', tokenInput, { hint: 'token 来自邮件链接的地址栏片段，仅保留在当前页面内存中。', required: true }),
-      passwordFieldWrap(`新密码（${passwordLengthLabel()} 个字符）`, password, { required: true }),
-      passwordFieldWrap('确认新密码', confirm, { required: true }),
+      fieldWrap(tr('merchant.auth.ui.resetToken', '重置 token'), tokenInput, { required: true }),
+      passwordFieldWrap(tr('merchant.auth.ui.resetPassword', `新密码（${passwordLengthLabel()} 个字符）`, { length: passwordLengthLabel() }), password, { required: true }),
+      passwordFieldWrap(tr('merchant.auth.ui.confirmPassword', '确认新密码'), confirm, { required: true }),
       el('div', { class: 'cc-field', style: 'margin-top:24px' }, submit),
       errorNode);
     authShell(el('div', null, form,
-      authLinkRow([{ label: '返回登录', href: '#/login' }])), '重置密码');
+      authLinkRow([{ label: tr('merchant.auth.ui.back', '返回登录'), href: '#/login' }])), tr('merchant.auth.ui.resetTitle', '重置密码'));
     return;
   }
 
   if (m === 'verify') {
-    const tokenInput = el('input', { class: 'cc-input u-mono', value: state.authToken || '', placeholder: '粘贴验证 token', autocomplete: 'off' });
+    const tokenInput = el('input', { class: 'cc-input u-mono', value: state.authToken || '', placeholder: tr('merchant.auth.ui.verifyPlaceholder', '粘贴验证 token'), autocomplete: 'off' });
     const errorNode = el('p', { class: 'cc-error-text', role: 'alert' });
-    const submit = el('button', { class: 'cc-btn cc-btn--primary cc-btn--lg cc-btn--block', type: 'button' }, '确认验证邮箱');
+    const submit = el('button', { class: 'cc-btn cc-btn--primary cc-btn--lg cc-btn--block', type: 'button' }, tr('merchant.auth.ui.verifyAction', '确认验证邮箱'));
     submit.addEventListener('click', async () => {
       errorNode.textContent = '';
       busy(submit, '验证中…');
       try {
         await adapter.verifyEmail({ token: tokenInput.value.trim() });
-        authResultPage('邮箱验证成功', ['现在可以使用该邮箱登录。'], [{ label: '去登录', href: '#/login' }]);
+        authResultPage('邮箱验证成功', ['现在可以使用该邮箱登录。'], [{ label: tr('merchant.auth.ui.goLogin', '去登录'), href: '#/login' }]);
       } catch (error) {
-        unbusy(submit, '确认验证邮箱');
+        unbusy(submit, tr('merchant.auth.ui.verifyAction', '确认验证邮箱'));
         errorNode.textContent = describeMerchantError(error);
       }
     });
@@ -1307,49 +1295,49 @@ function renderAuth() {
       el('div', { class: 'cc-alert cc-alert--info', style: 'margin-bottom:16px' },
         el('span', { html: svgIcon('info', 16), 'aria-hidden': 'true' }),
         el('div', { class: 'cc-alert-body' }, el('div', { class: 'cc-alert-desc' }, '验证不会自动执行：请核对 token 后点击按钮确认，验证链接只能使用一次。'))),
-      fieldWrap('验证 token', tokenInput, { required: true }),
+      fieldWrap(tr('merchant.auth.ui.verifyToken', '验证 token'), tokenInput, { required: true }),
       el('div', { class: 'cc-field', style: 'margin-top:24px' }, submit),
       errorNode,
-      authLinkRow([{ label: '返回登录', href: '#/login' }])), '验证邮箱');
+      authLinkRow([{ label: tr('merchant.auth.ui.back', '返回登录'), href: '#/login' }])), tr('merchant.auth.ui.verify', '验证邮箱'));
     return;
   }
 
   /* invite */
-  const tokenInput = el('input', { class: 'cc-input u-mono', value: state.authToken || '', placeholder: '粘贴邀请 token', autocomplete: 'off' });
+  const tokenInput = el('input', { class: 'cc-input u-mono', value: state.authToken || '', placeholder: tr('merchant.auth.ui.invitePlaceholder', '粘贴邀请 token'), autocomplete: 'off' });
   const displayName = el('input', { class: 'cc-input', required: true });
   const password = el('input', {
     class: 'cc-input', type: 'password', autocomplete: 'new-password',
     minlength: String(policy.passwordMinLength), maxlength: String(policy.passwordMaxLength), required: true,
   });
   const errorNode = el('p', { class: 'cc-error-text', role: 'alert' });
-  const submit = el('button', { class: 'cc-btn cc-btn--primary cc-btn--lg cc-btn--block', type: 'submit' }, '接受邀请');
+  const submit = el('button', { class: 'cc-btn cc-btn--primary cc-btn--lg cc-btn--block', type: 'submit' }, tr('merchant.auth.ui.accept', '接受邀请'));
   const form = el('form', {
     novalidate: true, onsubmit: async event => {
       event.preventDefault();
       errorNode.textContent = '';
       const checkPassword = validateNewPassword(password.value, policy);
       if (!checkPassword.ok) { errorNode.textContent = checkPassword.reason; return; }
-      busy(submit, '提交中…');
+      busy(submit, tr('merchant.auth.ui.submitting', '提交中…'));
       try {
         await adapter.acceptInvitation({ token: tokenInput.value.trim(), displayName: displayName.value.trim(), password: password.value, locale: i18n?.getLocale() || 'zh-CN' });
         password.value = '';
-        authResultPage('已接受邀请', ['你已加入组织，请使用邮箱登录。'], [{ label: '去登录', href: '#/login' }]);
+        authResultPage('已接受邀请', ['你已加入组织，请使用邮箱登录。'], [{ label: tr('merchant.auth.ui.goLogin', '去登录'), href: '#/login' }]);
       } catch (error) {
-        unbusy(submit, '接受邀请');
+        unbusy(submit, tr('merchant.auth.ui.accept', '接受邀请'));
         errorNode.textContent = describeMerchantError(error);
       }
     },
   },
-    fieldWrap('邀请 token', tokenInput, { required: true }),
-    fieldWrap('你的姓名', displayName, { required: true }),
-    passwordFieldWrap(`设置密码（${passwordLengthLabel()} 个字符）`, password, { required: true }),
+    fieldWrap(tr('merchant.auth.ui.inviteToken', '邀请 token'), tokenInput, { required: true }),
+    fieldWrap(tr('merchant.auth.ui.name', '你的姓名'), displayName, { required: true }),
+    passwordFieldWrap(tr('merchant.auth.ui.newPassword', `设置密码（${passwordLengthLabel()} 个字符）`, { length: passwordLengthLabel() }), password, { required: true }),
     el('div', { class: 'cc-field', style: 'margin-top:24px' }, submit),
     errorNode);
   authShell(el('div', null,
     el('div', { class: 'cc-alert cc-alert--info', style: 'margin-bottom:16px' },
       el('span', { html: svgIcon('info', 16), 'aria-hidden': 'true' }),
       el('div', { class: 'cc-alert-body' }, el('div', { class: 'cc-alert-desc' }, '已有账号的成员请先登录，再通过组织内的邀请确认入口接受，无需在此修改密码。'))),
-    form, authLinkRow([{ label: '返回登录', href: '#/login' }])), '接受邀请');
+    form, authLinkRow([{ label: tr('merchant.auth.ui.back', '返回登录'), href: '#/login' }])), tr('merchant.auth.ui.accept', '接受邀请'));
 }
 
 function authResultPage(title, lines, links = []) {
