@@ -97,6 +97,14 @@ i18n?.configure({
 
   function clear(node) { node.replaceChildren(); }
 
+  const renderedSnapshots = new WeakMap();
+  function unchanged(node, data) {
+    const signature = JSON.stringify(data);
+    if (renderedSnapshots.get(node) === signature) return true;
+    renderedSnapshots.set(node, signature);
+    return false;
+  }
+
   /* 状态 → cc 组件变体（流程态 cc-status / 分类态 cc-tag） */
   const STATUS_VARIANT = { green: 'success', amber: 'warning', red: 'error', blue: 'info', gray: 'neutral' };
   const TAG_VARIANT = { green: 'green', amber: 'yellow', red: 'pink', blue: 'blue', gray: '' };
@@ -875,6 +883,7 @@ i18n?.configure({
 
   function renderOrderTable(container, orders, { compact = false, expandable = true } = {}) {
     if (!container) return;
+    if (unchanged(container, { orders, compact, expandable, expanded: state.expandedOrderId })) return;
     const focusKey = captureRowFocus();
     clear(container);
     if (!orders.length) {
@@ -1033,9 +1042,10 @@ i18n?.configure({
   function renderDeviceRows() {
     const container = $('device-rows');
     if (!container) return;
+    const devices = filteredDevices();
+    if (unchanged(container, { devices, selected: state.selectedDeviceId })) return;
     const focusKey = captureRowFocus();
     clear(container);
-    const devices = filteredDevices();
     if (!devices.length) {
       container.append(el('div', { class: 'cc-tablewrap' },
         emptyState(
@@ -1096,6 +1106,7 @@ i18n?.configure({
     if (!card) return;
     const seq = ++state.detailSeq;
     if (!silent) {
+      renderedSnapshots.delete(card);
       clear(card);
       card.append(skeleton(6));
     }
@@ -1109,6 +1120,7 @@ i18n?.configure({
       renderDeviceDetail(card, deviceId, { detail, inventory, capabilities });
     } catch (error) {
       if (seq !== state.detailSeq) return;
+      renderedSnapshots.delete(card);
       clear(card);
       card.append(el('div', { class: 'cc-alert cc-alert--error' },
         el('span', { html: svgIcon('alert-circle', 16), 'aria-hidden': 'true' }),
@@ -1117,6 +1129,7 @@ i18n?.configure({
   }
 
   function renderDeviceDetail(card, deviceId, { detail, inventory, capabilities }) {
+    if (unchanged(card, { deviceId, detail, inventory, capabilities }) && !card.querySelector('.m-skel')) return;
     clear(card);
 
     const head = el('div', { style: 'display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-start' },

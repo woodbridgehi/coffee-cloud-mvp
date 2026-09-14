@@ -22,3 +22,7 @@ npm run sync:cloud-scene
 脚本构建并复制 `robot-live.bundle.js`、`robot-integration.bundle.js`、`robot-live.css` 和 Three.js 许可证到本项目 `public/robot/`。这些文件随普通云端部署发布，由 `/assets/robot/` 同源提供，无 CDN 或终端 localhost 依赖。更新云端及终端后，新接单任务自动启用；历史订单不回填。
 
 渲染在顾客浏览器执行；没有服务器端渲染或逐帧关节上传。此次本地验证包括真实 Python 临时实例与前端/SSE 测试桥、手机窄屏、暂停恢复、物料一致性，以及现有单元测试。未做 VPS 部署、真实支付、真实手机性能测试或 1000 台设备压测。数据库依赖集成测试需要另行提供 PostgreSQL 环境。
+
+### Blender 门店资产
+
+2026-09-12 起，共享 viewer 从自身 bundle 相对地址 `assets/scene/coffee-shop-v1.glb` 加载静态门店 PBR 资源，即云端 `/assets/robot/assets/scene/coffee-shop-v1.glb`。`sync:cloud-scene` 已包含该文件；部署时必须携带完整 `public/robot`。GLB 内嵌烘焙贴图，不请求外部 CDN。资源失败时保留原程序化门店，订单步骤仍按现有协议同步。

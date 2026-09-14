@@ -286,9 +286,9 @@ function triggerAutoRefresh() {
     if (document.visibilityState !== 'visible') return;
     if (activeModal || activeDrawer) return;
     const activeEl = document.activeElement;
-    if (activeEl && ['INPUT', 'TEXTAREA'].includes(activeEl.tagName)) return;
+    if (activeEl && ['INPUT', 'TEXTAREA', 'SELECT'].includes(activeEl.tagName)) return;
   }
-  reloadView();
+  refreshRegions();
 }
 
 if (typeof document !== 'undefined' && document.addEventListener) {
@@ -711,17 +711,67 @@ function handleErrorGlobal(error) {
   return false;
 }
 
-async function loadRegion(container, loader) {
+const regionLoaders = new Map();
+const regionPending = new WeakSet();
+const regionTargets = new WeakMap();
+let regionGeneration = 0;
+let refreshingRegions = false;
+let refreshErrorNotified = false;
+
+async function refreshRegions() {
+  if (refreshingRegions) return;
+  refreshingRegions = true;
+  refreshErrorNotified = false;
+  dashboardMemo = { key: '', promise: null };
+  try {
+    await Promise.all([...regionLoaders].map(([container, loader]) => {
+      if (!container.isConnected) { regionLoaders.delete(container); return; }
+      return loadRegion(container, loader, { background: true });
+    }));
+  } finally { refreshingRegions = false; }
+}
+
+async function loadRegion(container, loader, { background = false } = {}) {
+  container = regionTargets.get(container) || container;
+  regionLoaders.set(container, loader);
+  if (regionPending.has(container)) return;
+  regionPending.add(container);
+  const generation = regionGeneration;
+  // Build offscreen so asynchronous loading never blanks the visible region.
+  const target = background ? container.cloneNode(false) : container;
+  if (background) regionTargets.set(target, container);
   const epoch = state.epoch;
   try {
-    await loader(container);
+    await loader(target, { background });
+    if (background && generation === regionGeneration && container.isConnected && !stale(epoch)) {
+      // Keep the operator's table ordering when refreshed rows are committed.
+      const previousHeaders = [...container.querySelectorAll('th')];
+      const nextHeaders = [...target.querySelectorAll('th')];
+      previousHeaders.forEach((header, index) => {
+        if (header.classList.contains('sorted-asc') || header.classList.contains('sorted-desc')) {
+          nextHeaders[index]?.click();
+          if (header.classList.contains('sorted-desc')) nextHeaders[index]?.click();
+        }
+      });
+      if (container.innerHTML !== target.innerHTML) container.replaceChildren(...target.childNodes);
+      container.removeAttribute('data-refresh-error');
+    }
   } catch (error) {
     if (error && error.aborted) return;
     if (stale(epoch)) return;
     if (handleErrorGlobal(error)) return;
+    if (generation !== regionGeneration) return;
+    if (background && error.status !== 403) {
+      if (!refreshErrorNotified && !container.hasAttribute('data-refresh-error')) {
+        toast(describeMerchantError(error));
+        refreshErrorNotified = true;
+      }
+      container.setAttribute('data-refresh-error', 'true');
+      return;
+    }
     clearNode(container);
     container.append(errorState(error, () => loadRegion(container, loader)));
-  }
+  } finally { regionPending.delete(container); }
 }
 
 /* ---------------- 简单表格（cc-table） ---------------- */
@@ -1784,6 +1834,8 @@ function route() {
     if (!def) { renderNoAccess(); return; }
     if (def.id !== target) { location.hash = `#/${def.id}`; return; }
   }
+  regionGeneration += 1;
+  regionLoaders.clear();
   state.view = def.id;
   document.title = `Coffee Cloud · ${viewText(def, 'title')}`;
   buildShell();
@@ -2999,7 +3051,19 @@ function renderOrdersView(root) {
   refresh(true);
 }
 
-async function loadOrdersPage(container) {
+async function refreshedPages(fetchPage, params, count) {
+  const items = [];
+  let nextCursor;
+  do {
+    const page = await fetchPage({ ...params, cursor: nextCursor });
+    items.push(...page.items);
+    if (!page.nextCursor || page.nextCursor === nextCursor) { nextCursor = null; break; }
+    nextCursor = page.nextCursor;
+  } while (items.length < count);
+  return { items, nextCursor };
+}
+
+async function loadOrdersPage(container, { background = false } = {}) {
   const filters = state.ordersFilters;
   const params = {
     ...periodToApiParams(state.period),
@@ -3009,8 +3073,10 @@ async function loadOrdersPage(container) {
     environment: state.environment,
     cursor: filters.cursor || undefined,
   };
-  const { items, nextCursor } = await adapter.listOrders(params);
-  filters.items = filters.cursor ? filters.items.concat(items) : items;
+  const { items, nextCursor } = background
+    ? await refreshedPages(p => adapter.listOrders(p), params, filters.items.length)
+    : await adapter.listOrders(params);
+  filters.items = !background && filters.cursor ? filters.items.concat(items) : items;
   filters.cursor = nextCursor;
   clearNode(container);
   if (!filters.items.length) {
@@ -4400,14 +4466,17 @@ function renderAuditView(root) {
   refresh(true);
 }
 
-async function loadAuditPage(container) {
+async function loadAuditPage(container, { background = false } = {}) {
   const filters = state.auditFilters;
-  const { items, nextCursor } = await adapter.listAudit({
+  const params = {
     ...periodToApiParams(state.period),
     action: filters.action || undefined,
     cursor: filters.cursor || undefined,
-  });
-  filters.items = filters.cursor ? filters.items.concat(items) : items;
+  };
+  const { items, nextCursor } = background
+    ? await refreshedPages(p => adapter.listAudit(p), params, filters.items.length)
+    : await adapter.listAudit(params);
+  filters.items = !background && filters.cursor ? filters.items.concat(items) : items;
   filters.cursor = nextCursor;
   clearNode(container);
   if (!filters.items.length) {
