@@ -1,5 +1,7 @@
 # Open Design 前端改版发布记录
 
+> **历史归档（2026-09-17分类）**：下文保留当时的计划、交付或环境观察，不是当前实现/部署手册。已实现项、旧限制、测试数量和VPS状态可能变化；请先看 [当前实现](../current-state.md)，部署以当前运维指南为准。
+
 日期：2026-09-01（Asia/Taipei）
 
 本次发布将本地 `main` 的合并提交 `49f514b` 同步到 VPS `/home/alex/coffee-cloud-mvp`，并只重建 `coffee-cloud-mvp` 与 `coffee-domain-worker`。部署前已创建远端私有备份：

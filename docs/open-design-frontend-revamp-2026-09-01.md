@@ -1,5 +1,7 @@
 # Open Design 前端改版交付说明（2026-09-01）
 
+> **历史归档（2026-09-17分类）**：下文保留当时的计划、交付或环境观察，不是当前实现/部署手册。已实现项、旧限制、测试数量和VPS状态可能变化；请先看 [当前实现](current-state.md)，部署以当前运维指南为准。
+
 改版分支：`open-design-revamp`（基于 `2d1e13c`，其父链含基线 `8ab07a7` / 标签 `b2b-username-release-20260831`）。
 工作副本位于 Open Design 项目目录，原仓库 `/Users/alex/Downloads/armaster/coffee-cloud-mvp` 未做任何修改。
 原有未提交内容（`.gitignore` 修改、`docs/system-architecture/`）保持原样，未纳入本次提交。

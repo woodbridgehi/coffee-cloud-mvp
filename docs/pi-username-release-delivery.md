@@ -1,5 +1,7 @@
 # 用户名模式上线 · 前端交付记录（pi）
 
+> **历史归档（2026-09-17分类）**：下文保留当时的计划、交付或环境观察，不是当前实现/部署手册。已实现项、旧限制、测试数量和VPS状态可能变化；请先看 [当前实现](current-state.md)，部署以当前运维指南为准。
+
 > 执行方：pi（本任务代理）。工作目录 `/Users/alex/Downloads/armaster/coffee-cloud-mvp`。
 > 边界：只修改 merchant 前端文件与 `tests/merchant-ui-*.test.mjs`、本文档；未修改 `app/`、旧后台文件；未部署、未创建 commit。
 > 后端 `/api/v1/merchant/*` 由并行工作实现（已落在工作区 `app/merchant/`，非本人改动），本文档第 4 节的核对基于该代码。

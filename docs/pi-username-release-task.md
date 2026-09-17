@@ -1,5 +1,7 @@
 # 用户名模式上线前端任务
 
+> **历史归档（2026-09-17分类）**：下文保留当时的计划、交付或环境观察，不是当前实现/部署手册。已实现项、旧限制、测试数量和VPS状态可能变化；请先看 [当前实现](current-state.md)，部署以当前运维指南为准。
+
 项目根目录 /Users/alex/Downloads/armaster/coffee-cloud-mvp。现状：原生 JS ES modules + 自定义 CSS，public/merchant.html/css/js/api.js/demo.js/format.js 已有 B 端完整页面，真实 API 默认同源 /api/v1/merchant，?demo=1 才用内存演示。请只修改这些 merchant 前端文件、对应 tests/merchant-ui-*.test.mjs 和本任务交付记录 docs/pi-username-release-delivery.md，不修改 app/、其他旧后台文件，不部署、不创建 commit。你的工作与后端并行进行。
 
 用户已明确授权：现在上线，邮件服务未准备好，暂时允许用户名密码注册登录。请保留已有咖啡棕视觉和响应式，不重做整体页面。详细方案如下，直接实施：

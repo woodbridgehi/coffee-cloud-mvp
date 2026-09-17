@@ -1,326 +1,81 @@
 # Coffee Cloud MVP
 
-> English version: [README.md](README.md) · [文档索引](docs/README.md)
+[English](README.md) · [文档索引](docs/README.md)
 
-面向无人自动贩卖咖啡终端的工业级运营后台与控制中枢。当前版本（`0.4.0-production-grade`）已完整实现订单与支付域、Transactional Outbox、多设备 MQTT 5.0 Gateway 协同、MQTT 凭证生命周期，以及不确定物理结果的安全熔断 `HOLD` 机制。
+Coffee Cloud 是与 `coffee-terminal-simulator` 配套的云端业务系统，提供扫码下单、支付退款、设备串行派单、身份与命令管理，以及多租户商户后台。
 
-本仓库包含了云平台的完整实现，配套终端模拟器代码位于 `coffee-terminal-simulator`。系统采用 FastAPI + PostgreSQL 模块化单体架构与独立 Gateway/Worker 进程，目前 A1/A2 版本已部署至 VPS，数据库迁移完成，支持公网支付宝扫码与沙箱联调。
+**本文以 2026-09-17 本地代码核对为准。** 当前 `app/main.py` 的服务版本是 `0.4.0`，数据库迁移最高为 **23**；这不是对线上已部署版本、真实支付验收或硬件生产就绪的证明。
 
----
+## 系统职责
 
-## 目录
-1. [项目全局概述与设计哲学](#1-项目全局概述与设计哲学)
-2. [总体系统架构与拓扑设计](#2-总体系统架构与拓扑设计)
-3. [代码结构与模块分层解析](#3-代码结构与模块分层解析)
-4. [核心业务状态机与物料机制](#4-核心业务状态机与物料机制)
-5. [关键业务流程时序图](#5-关键业务流程时序图)
-6. [核心运营闭环与 API 入口](#6-核心运营闭环与-api-入口)
-7. [二次开发扩展指南](#7-二次开发扩展指南)
-8. [运维部署与生产实战手册](#8-运维部署与生产实战手册)
-9. [当前边界与演进路线](#9-当前边界与演进路线)
+| 部分 | 当前职责 | 代码入口 |
+| --- | --- | --- |
+| HTTP API 与网页 | 顾客、平台、商户接口和静态资源 | `app/main.py`、`public/` |
+| MQTT Gateway | 多设备上行、命令发布与回执、连接代际保护 | `app/mqtt_gateway.py` |
+| Domain Worker | 派单、watchdog、遥测刷库、支付对账、退款与历史清理 | `app/domain_worker.py`、`app/services/background_worker.py` |
+| PostgreSQL | 订单、制作任务、支付退款、Inbox/Outbox、商户账与设备快照 | `app/database.py`、`app/repositories/` |
+| Redis | 瞬时进度、设备热状态和通知 | `app/telemetry.py`、`app/live_progress.py` |
+| 终端模拟器 | 本地配方编译、模拟制作、SQLite 库存与事件、二维/三维显示 | 相邻模拟器仓库 |
 
----
+主业务采用 Route → Service → Repository；`app/merchant/` 是独立商户领域模块，当前仍在领域对象内执行 SQL，不能描述为整个项目已经完成统一分层。
 
-## 1. 项目全局概述与设计哲学
+## 主要业务流程
 
-**Coffee Cloud** 与 **Terminal Simulator** 是一套面向 AI 自动贩卖咖啡机器人设计的软硬件一体化管理平台。它的核心是在不可靠的网络和硬件环境下，构建一个具备高度数据一致性和资金安全防线的业务系统。
-
-### 核心设计哲学
-
-1. **拥抱分布式环境的不确定性**：在工控与物联网场景中，网络抖动、进程重启或断电是常态。我们在设计时不假设“命令下发成功等同于机器执行成功”。系统主要依赖 **Transactional Outbox（事务发件箱）** 来保证数据库状态与外部系统消息投递的最终一致性，结合“至少一次投递（At-Least-Once Delivery）”和“业务端严格幂等去重”，确保消息在异常恢复后不丢、不重。
-2. **设备事实单向流**：云端不做复杂的物理推断。料仓是否扣减成功，以设备确认预占或扣减上报为准；动作是否执行完毕，以设备的事件流水为准。
-3. **资金风控底线（HOLD 状态保护）**：在出现命令已发出但设备失联的场景时，我们无法断定咖啡是否已经物理流出。此时订单会进入 `HOLD`（人工介入态），系统绝不会擅自触发自动退款，必须由店员在后台核对现场实物后进行人工干预结案。只有确定指令仍在系统排队且超时、从未下发给物理机的订单，才会走自动退款链路，从根本上防止“用户端走拿走咖啡又被退了钱”的货损。
-
----
-
-## 2. 总体系统架构与拓扑设计
-
-```mermaid
-flowchart TB
-    subgraph ClientLayer["用户端与展示层"]
-        Customer["顾客手机 H5 (/order)"]
-        Screen["终端大屏显示器 (pywebview)"]
-        Merchant["B端商户工作台 (/merchant)"]
-        Admin["平台运维控制台 (/admin)"]
-    end
-
-    subgraph CloudLayer["Coffee Cloud 容器化服务集群"]
-        API["coffee-cloud-mvp (FastAPI API)<br/>REST API / SSE 广播"]
-        Gateway["coffee-mqtt-gateway (Paho MQTT)<br/>QoS 1 上下行双工网关"]
-        Worker["coffee-domain-worker (Background Worker)<br/>Outbox 消费 / 订单超时 / 离线监控"]
-        
-        DB[("PostgreSQL 16<br/>业务数据 / Outbox / Inbox")]
-        Redis[("Redis 7<br/>实时进度 / SSE 通道 / 瞬时缓存")]
-    end
-
-    subgraph BrokerLayer["消息与通信基础设施"]
-        EMQX["EMQX 5.0 (MQTT Broker)<br/>v1/devices/+/up<br/>v1/devices/+/down"]
-    end
-
-    subgraph EdgeLayer["边缘咖啡终端 (Simulator / 物理机)"]
-        EdgeAgent["终端核心控制进程 (backend.py)<br/>步骤调度器 / 故障模拟 / 状态存储"]
-        EdgeDB[("本地 state/<br/>runtime.db + inventory.json")]
-    end
-
-    Customer -->|"HTTPS / SSE"| API
-    Merchant -->|"HTTPS 授权访问"| API
-    Admin -->|"HTTPS Token 认证"| API
-    Screen --- EdgeAgent
-
-    API ---|"SQL 事务 / Outbox"| DB
-    API ---|"发布 / 订阅"| Redis
-    Worker ---|"扫描 Outbox / 更新状态"| DB
-    Worker ---|"设备保活扫描"| Redis
-
-    Gateway ---|"内部 API / 认领命令"| API
-    Gateway ---|"MQTT 5.0 QoS 1"| EMQX
-    EMQX ---|"双向 TLS 长连接"| EdgeAgent
-    EdgeAgent ---|"读写事务"| EdgeDB
-```
-
-### 三大通信通道
-1. **控制下行通道（Cloud → Edge）**：Topic `v1/devices/{deviceId}/down`（QoS 1），承载 `MAKE_DRINK`、`CLEAN`、`RESTART_APP`、`RELOAD_CONFIG` 等高危或生产命令。
-2. **遥测与事件上行通道（Edge → Cloud）**：Topic `v1/devices/{deviceId}/up`（QoS 1），承载心跳、制作进度（`task.progress`）和硬件事件。
-3. **顾客端实时推流通道（Cloud → Mobile）**：HTTP Server-Sent Events (SSE) `/api/v1/public/orders/{orderId}/events`，通过 PG `LISTEN/NOTIFY` 和 Redis 缓存实现毫秒级同步推送。
-
----
-
-## 3. 代码结构与模块分层解析
-
-项目基于 `Route → Application Service → Repository → PostgreSQL` 分层：路由处理协议，Service 封装业务规则，Repository 集中 SQL。
-
-### 云平台目录架构 (`coffee-cloud-mvp/`)
-```
-coffee-cloud-mvp/
-├── app/
-│   ├── main.py                 # FastAPI 入口：路由、异常处理、生命周期钩子
-│   ├── settings.py             # 配置：环境变量解析与类型校验
-│   ├── database.py             # 数据库引擎：PostgreSQL 连接池与 schema 迁移
-│   ├── protocol.py             # 通信契约：MQTT Payload Schema、正则与时区校验
-│   ├── order_logic.py          # 纯函数：状态映射、菜单计算、在线判定
-│   ├── order_events.py         # SSE 流通道编码与会话分发
-│   ├── payment_service.py      # 支付：回调试错幂等、事务发件箱与意图校验
-│   ├── payment_providers.py    # 渠道适配抽象层：Mock / 支付宝 / 微信接入点
-│   ├── production_state.py     # 生产状态机：指令合法性过滤与流转
-│   ├── live_progress.py        # Redis 热点缓存与高频进度聚合同步
-│   ├── mqtt_gateway.py         # 独立进程：多设备 MQTT 5.0 收发网关与出入站队列
-│   ├── domain_worker.py        # 独立进程：Outbox 异步调度消费与离线检测
-│   ├── emqx_provisioner.py     # EMQX 对接：MQTT 凭证动态下发与 ACL 鉴权管理
-│   ├── merchant/               # B端领域模型：商户组织、物料、财报、RBAC权限
-│   ├── repositories/           # 仓储层：基础 SQL 封装隔离
-│   └── services/               # 领域服务层：处理事务并分发指令
-├── public/                     # 前端 Vanilla JS 单页应用（采用 OpenDesign 规范）
-│   ├── order.html / order.js   # 手机端扫码点单/等位大屏/支付页面
-│   ├── merchant.html / .js     # 商户运营工作台（深林控制台与斜纹进度条）
-│   └── shared/coffee-ui.css    # 品牌系统组件与令牌体系
-├── tests/                      # 契约冒烟测试 (Node) 与 单元测试 (pytest)
-├── compose.yaml                # 生产环境 Docker 容器部署编排配置
-└── Dockerfile                  # Python 3.12 生产多阶段构建镜像
-```
-
-配套模拟器 (`coffee-terminal-simulator/`) 包含基于 `pywebview` 的内置大屏、物料暂扣状态库和可控故障生成模型，提供完整的端到端仿真环境。
-
----
-
-## 4. 核心业务状态机与物料机制
-
-### 4.1 订单生命周期与风控
 ```text
-CREATED → PENDING_PAYMENT → PAID → QUEUED → DISPATCHED → ACCEPTED → MAKING → READY
-   └──────────────→ CANCELLED / EXPIRED / FAILED
-                                      FAILED → REFUNDED
-   └──────────────→ UNKNOWN → HOLD (需人工结案)
-```
-- **ACCEPTED**：机器校验配方版本，成功预占整杯物料。
-- **MAKING**：设备定时上报进度；云端将进度更新到 Redis 并广播 SSE。
-- **HOLD**：出现下发失联断层等情况时，订单锁定，拒绝强行退款，防止货损。客户仅能取消尚未派发的 `QUEUED` 订单，一旦派发后禁止从网页强行取消。
-
-### 4.2 共享物料精密三段式控制
-多个配方消耗共享的咖啡豆、牛奶、水和糖浆，为防超卖：
-1. **预占（Reserved）**：接单瞬间将整杯用量累加至 `reserved`。若 `onHand - reserved < 0` 则拒绝订单。
-2. **扣减（On-Hand Deduction）**：按配方步骤到达对应阶段时才扣除 `onHand` 和 `reserved`。使用 `taskId:stepId:attempt` 保证幂等去重。
-3. **释放（Release）**：任务结束或取消时，未执行耗材一并解除预占，防止库存假死。
-
----
-
-## 5. 关键业务流程时序图
-
-### 5.1 端到端扫码点单、支付与制作协同
-
-```mermaid
-sequenceDiagram
-    autonumber
-    actor Customer as 顾客手机
-    participant CloudAPI as 云端 API
-    participant CloudDB as 云端 DB
-    participant Gateway as MQTT Gateway
-    participant Terminal as 咖啡终端模拟器
-    actor Screen as 终端大屏
-
-    Customer->>CloudAPI: 扫码查单与提交订单 (需携带 Idempotency-Key)
-    CloudAPI-->>Customer: 返回 orderId 与支付参数
-    Note over Customer, CloudAPI: 完成付款 (微信/支付宝/沙箱)
-    CloudAPI->>CloudDB: 事务处理: 订单转 PAID，写入 business_outbox
-    CloudDB-->>Gateway: Worker 消费发件箱，Gateway 认领命令
-    Gateway->>Terminal: MQTT 发布 MAKE_DRINK (QoS 1)
-    Terminal->>Terminal: 校验料仓，整杯预占
-    Terminal->>Gateway: 上报 task.acknowledged (已接单)
-    Gateway-->>Customer: SSE: 更新排队与制作状态
-    loop 步骤执行流
-        Terminal->>Gateway: 进度变化上报 task.progress
-        Gateway-->>Customer: SSE 实时推流制作百分比
-    end
-    Terminal->>Gateway: 制作完成落杯，上报 task.succeeded
-    Gateway->>CloudDB: 事务处理: 转 READY 态，生成取餐凭证
-    CloudAPI-->>Customer: SSE: 出杯取餐震动提醒
-    Terminal->>Screen: 切换至物理大屏绿底取餐界面
+设备上传配方能力和库存
+  → 顾客选择饮品/选项，必要时获取签名报价
+  → 幂等创建订单
+  → TEST_FREE 进入排队；ONLINE 经支付确认后进入排队
+  → 云端检查设备状态、活动任务、取杯位后派发 MAKE_DRINK
+  → 终端校验版本/摘要、预占、按步骤模拟执行
+  → 可靠生命周期事件推进订单，Redis 进度更新界面
+  → READY 提示取杯；取杯位释放后继续下一单
 ```
 
-### 5.2 硬件异常熔断与 HOLD 人工结案时序
+正常在线支付订单使用 `CREATED → AWAITING_PAYMENT → PAID → QUEUED → DISPATCHED → ACCEPTED → MAKING → READY`，各路径可以跳过部分中间状态；详细合法迁移以 [状态与一致性](docs/production-consistency.md) 为准。订单状态、制作任务状态、命令状态和支付状态必须分别理解。
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant Terminal as 咖啡机终端
-    participant Cloud as 云中枢
-    participant DB as 数据库
-    actor Operator as 运营店员
+付款、制作失败、取消和退款是不同事实。结果不明进入 HOLD，不因超时直接退款或重做；明确失败/拒绝/取消及可证明未送达的过期命令等路径可以创建退款意图，退款到账仍取决于渠道结果。
 
-    Note over Terminal, Cloud: 下单后机器突发断网断联，指令发出但无回执
-    Cloud->>Cloud: 定时离线巡检器标记超时
-    Cloud->>DB: 生成告警，订单强制转为 HOLD
-    Cloud-->>Operator: 运营工作台告警
-    Operator->>Cloud: 店长登录，打开深色设备控制台抽屉
-    Operator->>Operator: 现场实地核查: 查验设备是否出杯
-    alt 确未出杯
-        Operator->>Cloud: 确认退款结案 (需二次布防确认)
-        Cloud->>DB: 审计拦截放行，发起冲正退款
-    else 已落杯且顾客拿走
-        Operator->>Cloud: 手动标记完成
-        Cloud->>DB: 审计通过，订单流转 COMPLETED
-    end
-```
+## 页面与接口入口
 
----
+| 入口 | 地址 | 身份 |
+| --- | --- | --- |
+| 顾客菜单 | `/order?device_id=<设备ID>` | 公开菜单 |
+| 顾客订单 | `/order/status` | API/SSE 使用 `X-Order-Access-Token` |
+| 平台运营 | `/admin` | Bearer；VIEWER/OPERATOR/MANAGER/OWNER |
+| 商户经营 | `/assets/merchant.html` | Cookie；OWNER/OPERATOR/FINANCE，租户与门店范围 |
+| API 文档 | `/docs`、`/openapi.json` | 运行时生成的请求模型 |
+| 探针 | `/health`、`/ready` | 存活、数据库就绪；不是全链路验收 |
 
-## 6. 核心运营闭环与 API 入口
+源码没有独立 `/merchant` 页面路由。商户写请求还需同源 Origin、JSON 和相应 CSRF 校验。不同权限体系不能混用。
 
-### 现网页面入口
-- **手机下单（扫码进入）**：`https://coffee-api.woodbridge.top/order?device_id=coffee-bot-002`
-- **订单状态**：自动跳转 `/order/status#order=...&token=...`（基于 fragment，令牌不写日志）。
-- **设备运营台**：`https://coffee-api.woodbridge.top/admin`
-- **API 文档**：`https://coffee-api.woodbridge.top/docs`
-- **就绪探针**：`https://coffee-api.woodbridge.top/ready`（带数据库连通与防抖）
+## 开发启动
 
-### 核心规范
-- **下单幂等约束**：创建订单、发起支付和退款必须请求头携带 `Idempotency-Key`。同键同载荷返回原结果，同键异载荷返回 `409 Conflict`。
-- **支付隔离策略**：受 `PUBLIC_PAYMENT_MODE`（TEST_FREE / ONLINE）控制。线上模式下未支付订单无派发权利；支付渠道回调仅确认账务并落入事务信箱，不会因为回调失败而错过发单，确保在进程崩溃场景下恢复执行。
-- **动态二维码**：为确保扫码一致性，终端仅显示 HTTPS 动态拉取的设备专属下单地址，不使用写死的固化链接。
+在本仓库执行，先按 [运维指南](docs/operations.md) 配置专用本地数据库和 `.env`：
 
-### 角色权限 (RBAC)
-- `VIEWER`：基础查阅设备、订单总览。
-- `OPERATOR`：增加设备登记、生命周期管理与安全远程控制。
-- `MANAGER`：增加操作退款、处理 HOLD 单据并拥有权限只读。
-- `OWNER`：租户最高权限，可颁发 Token 和修改角色配置。
-
-所有后台调用需传递 `Authorization: Bearer <TOKEN>`，新运营 Token 仅在创建响应中显示一次，部分高危命令（退款、凭证吊销、生命周期）将强制写入 `audit_log` 留痕。
-
----
-
-## 7. 二次开发扩展指南
-
-### 7.1 新增一款饮品配方与物料定义
-扩展饮品**无需重构后端 Python 代码**。只需在模拟器 `config/{deviceId}/recipes/` 新建配置（例 `vanilla_latte.json`），定义各制作 `steps` 时长区间、物料消耗。
-通过 `curl -X POST http://127.0.0.1:9101/device/v1/config/reload` 发送热加载，终端随之上报能力快照，云端菜单实时刷新。
-
-### 7.2 扩展全新的硬件控制命令
-1. 在 `app/protocol.py` 中的 `CommandCreateRequest` 类中加入枚举（如 `CALIBRATE_SCALE`）。
-2. 在前端 `public/merchant.js` 利用 `makeArmedButton` 添加两段式二次防误触布防按钮，调用 `sendDeviceCommandFlow` 派发。
-3. 模拟器端在 `backend.py` 注册相应的句柄来执行对应的控制逻辑。
-
-### 7.3 接入第三方全新支付渠道
-实现 `app/payment_providers.py` 中的 `PaymentProvider` 抽象类，提供统一下单、验签回调与退款能力，挂载对应 webhook，系统底层的发件箱将自动为你保障单边账幂等容错。
-
-### 7.4 自动化验证标准
-代码修改提交前必须执行 100% 冒烟与测试保障：
 ```bash
-# 安装开发环境依赖 (严格锁文件)
 uv venv --managed-python --python 3.12 .venv
 uv pip install --python .venv/bin/python -r requirements-dev.lock
+.venv/bin/python -m app.migrate
+RUN_DATABASE_MIGRATIONS=false .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8788
+```
 
-# 1. 云端 Node 契约测试 (前端、逻辑契约)
+单进程开发模式默认启动后台循环。生产 Compose 则显式关闭 API 内迁移与后台循环，分别执行迁移任务和独立 Domain Worker；不要混用两种模式导致重复调度。
+
+```bash
+.venv/bin/python -m pytest -q
 node --test tests/*.mjs
-
-# 2. 云端 Python 业务域测试
-.venv/bin/pytest -q
-
-# 3. 重新生成 API 契约文档
 .venv/bin/python scripts/export_openapi.py
 ```
 
----
+数据库测试需要专用 `TEST_DATABASE_URL`；双通道测试还需要可销毁的 `TEST_REDIS_URL`。未配置时跳过的集成测试不算通过。API 导出脚本会更新 `openapi/openapi.json`。
 
-## 8. 运维部署与生产实战手册
+## 当前边界
 
-### 8.1 Docker 容器集群编排与配置
-项目通过 `compose.yaml` 基于多容器隔离：
-- `coffee-cloud-mvp`（主 API 与前端，不消耗高频状态 IO）
-- `coffee-mqtt-gateway`（MQTT 收发引擎池，轻量无状态且具备自愈 Supervisor 线程）
-- `coffee-domain-worker`（后台事务引擎、掉单与超时审计扫描，单例锁定避免竞态）
+- 支付实现有 `mock`、`alipay`、`alipay_mock`；没有微信 Provider。可用渠道还取决于开关、账户与密钥。
+- 云端已有商户采购、账面库存、费用和报表；不等同于自动同步设备消耗的完整成本闭环。
+- 设备端有配方历史归档、定制选项、取杯占位、现场恢复核验；没有实体机械臂、RS-485、PLC 或物理仿真后端。
+- 手机订单当前默认嵌入可用的三维视图，可切二维；排队顾客可主动观看同机匿名制作场景。
+- 模型展示、代码测试和历史发布记录均不能代替实机、支付渠道及容量验收。
 
-```bash
-# 备份旧版数据库
-docker exec postgres-web pg_dump -U coffee_cloud -Fc coffee_cloud_mvp > coffee-cloud-before-upgrade.dump
-
-# 构建与拉起
-docker compose up -d --build
-docker compose ps
-docker compose logs -f --tail=100 coffee-mqtt-gateway
-```
-数据表迁移采用专门工具运行，应用 API 将跳过并发修改 schema：
-```bash
-docker compose --profile tools run --rm coffee-db-migrate
-```
-
-### 8.2 核心安全与环境变量设置（`.env`）
-
-2026-09-08 的排队库存与访问保护更新需要先运行迁移 21，再启动新版 API/Worker，并重启新版模拟器上传原料需求。云端按未付款、已付款待入队、排队、制作和 HOLD 订单累计预计用料，取消/过期后释放；未发起支付的订单默认 900 秒后过期。库存版本未追上设备事件时暂停新单。当前对制作中的预占采取保守重复计算，旧设备缺少需求明细时不允许叠加排队，不能把此机制视为真实硬件付款后必然成功的保证。
-
-公众访问默认每进程、每 IP 每分钟读取 240 次、写入 30 次；同一写入资源每分钟 60 次。SSE 每进程最多 1000 条、每 IP 12 条、每订单 3 条，断开或异常会释放。可用 `PUBLIC_READ_RATE_LIMIT`、`PUBLIC_WRITE_RATE_LIMIT`、`PUBLIC_SSE_LIMIT` 调整。当前 Compose 为两个 API worker，总额度最多为上述值的两倍；这些是单机进程保护，不是跨副本共享配额。反向代理应通过受信任的 Uvicorn proxy 配置传递真实 client IP，应用不直接信任请求的 X-Forwarded-For。运营价格列表支持 `limit=1..200`（默认 100）和 `offset=0..10000`，权限与筛选在分页前执行。
-
-重要变量必须从隔离的 `.env` 或 Docker secret 挂载，切勿提交至代码库：
-- `DATABASE_URL`：PostgreSQL 连接串。
-- `ORDER_ACCESS_SECRET`：订单页敏感鉴权 HMAC 私钥，**生产必须配置且绝对不能与管理员凭证共用**。
-- `ALIPAY_GATEWAY` / `ALIPAY_APP_ID` / 密钥文件路径：支付宝网关。
-- `MQTT_GATEWAY_ID`：多实例部署下每个网关必须具有独立的 Paho Session ID，否则将引发互踢掉线。
-- `TELEMETRY_REDIS_URL`：Redis 长连接服务，负责处理高频心跳更新，不可用时订单数据强制回退至 SQL 降级。
-- `EMQX_MANAGEMENT_URL` / `EMQX_DASHBOARD_USERNAME`：用于同步签发每台设备的 MQTT 专属账号与 ACL，生产推荐指向内网本地管理口。
-
-### 8.3 MQTT 网关全生命周期与健康检测
-- 网关采用 `clean_start=False` 与长期会话策略（默认 604800s），保证 QoS1 的离线重投堆积能力。
-- MQTT 重连由 Supervisor 线程处理。Gateway 与 Domain Worker 另外由独立的 `app.supervised_process` 父进程监测健康文件；连续失败 180–240 秒后终止子进程并退出容器，由 Docker 的 `unless-stopped` 策略重启。单纯 `unhealthy` 不会触发 Docker 重启；短暂故障恢复后会清零失败计时。
-
-### 8.4 设备激活与上线
-1. 管理员在 `/admin` 登记设备并生成一次性激活码。
-2. 现场装配执行以下指令，注入激活文件至隐藏 `secrets/` 目录：
-```bash
-.venv/bin/python scripts/activate_instance.py coffee-bot-003 \
-  --activation-code-file .secrets/coffee-bot-003.activation-code \
-  --secrets-file .secrets/coffee-bot-003.env
-
-# 启动实例
-./start-instance.command coffee-bot-003 --env-file .secrets/coffee-bot-003.env
-```
-激活期间，`emqx_provisioner.py` 动态向 EMQX Broker 颁发独立的 MQTTS 接入凭证。从根本上截断设备篡改冒充链路。
-
----
-
-## 9. 当前边界与演进路线
-
-当前必须严守架构底线：支付前不派发物理指令、单台机器串行制作不并发、设备事件上报使用持久 Inbox 去重、隔离私密证书文件不泄漏。
-
-**近期优化优先级（2026-08-30）**：
-1. **现网支付切换**：配置支付宝沙箱密钥并完成真实扫码、回调、主动查询与退款验收，再把现网 `PUBLIC_PAYMENT_MODE` 切到 `ONLINE`。
-2. **库存台账补全**：增加云端库存交易明细投影与物料补充工单，而不只是保存机器全量快照。
-3. **高频限流防御**：增加公网下单接口速率限制、WAF 规则与防滥用监控。
-4. **极致性能压测**：完成单节点百万连接与断网消息积压风暴恢复能力的专项压测验证。
+当前功能、配置依赖和遗留问题统一见 [当前实现](docs/current-state.md)、[文档核对记录](docs/documentation-audit-2026-09-17.md)。历史计划与发布记录由 [文档索引](docs/README.md) 单独归档导航。

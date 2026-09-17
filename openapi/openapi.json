@@ -5971,6 +5971,67 @@
         ]
       }
     },
+    "/api/v1/public/orders/{order_id}/scene": {
+      "get": {
+        "operationId": "watch_public_scene_api_v1_public_orders__order_id__scene_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "order_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Order Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Order-Access-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Order-Access-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Watch Public Scene Api V1 Public Orders  Order Id  Scene Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Watch Public Scene",
+        "tags": [
+          "public-orders"
+        ]
+      }
+    },
     "/api/v1/simulator-bootstrap/sessions": {
       "post": {
         "description": "Create a short-lived merchant pairing session for a software simulator.\n\nThis endpoint is explicitly disabled unless SIMULATOR_BOOTSTRAP_ENABLED is\nset. Production hardware will use a separate mTLS path.",

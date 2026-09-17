@@ -1,5 +1,7 @@
 # Coffee Cloud 全量 UI/UX 重设计需求文档
 
+> **历史归档（2026-09-17分类）**：下文保留当时的计划、交付或环境观察，不是当前实现/部署手册。已实现项、旧限制、测试数量和VPS状态可能变化；请先看 [当前实现](current-state.md)，部署以当前运维指南为准。
+
 快速定位：[页面盘点](#2-existing-ui-audit) · [视觉体系](#5-visual-design-language) · [组件规范](#7-component-system) · [逐页设计](#10-page-by-page-redesign) · [OpenDesign执行计划](#14-opendesign-implementation-instructions) · [覆盖矩阵](#15-ui-migration-coverage-matrix)。
 
 版本：1.0 · 审计基线：`e66dd053c6d63a3725e25489cf4c526114d96278`（`main`，标签 `vps-sync-20260831-2249`）。

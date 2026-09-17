@@ -1,94 +1,72 @@
-# 应用分层架构
+# 应用架构与代码导航
 
-当前 HTTP 业务请求统一采用以下依赖方向：
+核对日期：2026-09-17。本文描述本地实现；部署状态与容量必须另外验收。
 
-```text
-FastAPI Route（协议适配、认证依赖、参数解析）
-  ↓
-Application Service（业务规则、状态编排、事务边界）
-  ↓
-Repository（SQL、行锁、持久化映射）
-  ↓
-PostgreSQL
+## 进程与数据流
+
+```mermaid
+flowchart TD
+    UI[顾客 / 平台 / 商户网页] --> API[FastAPI]
+    API --> PG[(PostgreSQL 业务事实)]
+    API <--> R[(Redis 热状态与进度)]
+    W[Domain Worker] --> PG
+    W <--> R
+    G[MQTT Gateway] <-->|内部 HTTP| API
+    G <--> E[EMQX]
+    E <--> T[终端模拟器]
+    T <-->|激活 / 能力 / 库存 / 展示配置 HTTP| API
+    T --> DB[(终端 SQLite)]
 ```
 
-## 各层职责
+HTTP 兼容模式下，终端直接轮询云端命令并上报数据。MQTT 模式也保留 HTTP 身份、能力/库存与展示配置请求。下行 topic 为 `v1/devices/{deviceId}/down`；上行为 `/up`，心跳也使用该topic中的 `heartbeat` 信封（QoS 0）；另外的 `/state`、`/presence` 使用QoS 1和retain。TLS 使用服务端证书验证和 MQTT 用户凭据，不能表述为已实现设备客户端证书双向 TLS。
 
-| 层 | 目录 | 可以做 | 不应做 |
-| --- | --- | --- | --- |
-| HTTP 路由 | `app/main.py` | 接收参数、调用 Service、选择响应类型 | SQL、订单状态判断、跨表编排 |
-| Service | `app/services/` | 校验业务规则、控制事务、调用外部 Provider、组织返回 DTO | 写 SQL、依赖 FastAPI Request/Response |
-| Repository | `app/repositories/` | 查询、更新、行锁、唯一键与数据库映射 | HTTP 状态码、业务流程编排、外部网络调用 |
-| 事务 | `app/db/unit_of_work.py` | 提供一次业务操作的连接和提交/回滚边界 | 业务判断 |
+## 分层的实际范围
 
-Service 使用 `UnitOfWork.transaction()` 开启事务，并在事务内创建所需 Repository。同一个订单、支付、退款或命令状态迁移涉及的多表写入必须共享同一事务。
+主业务：`app/main.py` 的 Route → `app/services/` → `app/repositories/` → PostgreSQL。Service 通过 `app/db/unit_of_work.py` 管理事务，Repository 接收连接。
 
-## 当前模块映射
+商户业务：`app/merchant/router.py` → `MerchantService`、`MerchantAssets`、`MerchantOrders`、`MerchantCosts`、`MerchantAccounts`、`MerchantReports` 等。它们在 `scoped()` 管理的租户/门店事务中执行 SQL。**商户模块尚未拆成同样的 Repository 层**；`tests/test_architecture_layers.py` 检查的范围是主路由与 `app/services/`，不是整个 app。
 
-- `PublicOrderService` → `OrderRepository`、`TerminalRepository`
-- `PaymentApplicationService` → `PaymentRepository`、`OrderRepository`
-- `DeviceIdentityService` → `IdentityRepository`、`TerminalRepository`
-- `DeviceMessageService` → `DeviceMessageRepository`
-- `CommandService` → `CommandRepository`、`TerminalRepository`
-- `MqttGatewayService` → `MqttGatewayRepository`，并将已去重消息交给设备消息 Service
-- `AdminOperationsService` → `TerminalRepository`、`OrderRepository`
-- `AdminAccessService` → `AdminAccessRepository`，负责运营员、角色权限、可撤销令牌与审计日志
-- `ProductionService` → `CommandRepository`、`OrderRepository`、`PaymentRepository`，负责制作任务、设备事件、订单状态和自动退款意图
-- `BackgroundWorkerService` → `WorkerRepository`、`ProductionService`、`OrderRepository`、`PaymentRepository`，负责离线扫描、Business Outbox、支付对账、退款重试、历史清理和 watchdog
-- `OrderEventBroker` → PostgreSQL `LISTEN/NOTIFY` + Redis Pub/Sub 双监听，分别分发订单事实变更和瞬时进度
-- `order_stream` → 事务通知重新查询 SQL；进度通知只读 Redis；首次连接订阅后补读两侧快照
-- `live_progress` → 设备/任务匹配、revision 比较与终态优先；Lua 原子更新快照并发布通知
+平台权限定义在 `services/admin_access.py`；商户权限定义在 `merchant/security.py` 与 `merchant/service.py`，角色不能混用。商户事务设置受限数据库角色及作用域，RLS 定义位于 `merchant/rls_schema.py`。
 
-外部支付和 EMQX 管理 API 由 Service 调用。数据库事务不能跨越耗时网络调用：先保存待处理状态并提交，调用外部系统，再在新事务中保存结果。这样可避免长事务和数据库行锁长期占用。
+## 核心模块
 
-## 可靠性边界
+| 用例 | 代码 |
+| --- | --- |
+| 下单、报价、取消、队列、匿名旁观 | `services/public_orders.py`、`repositories/orders.py` |
+| 派单、生命周期、超时、库存水位 | `services/production.py`、`repositories/dispatch.py`、`production_state.py` |
+| HOLD 裁决 | `services/adjudications.py`、`repositories/adjudications.py` |
+| 支付、退款和回调 | `services/payments.py`、`services/refund_intents.py`、`payment_transitions.py` |
+| 设备身份与软件配对 | `services/device_identity.py`、`services/simulator_pairing.py` |
+| HTTP/MQTT 消息进入业务 | `services/device_messages.py`、`services/mqtt_gateway.py` |
+| MQTT 网络与发布租约 | `mqtt_gateway.py`、`services/commands.py`、`repositories/mqtt_gateway.py` |
+| 遥测与租约 | `telemetry.py`、`telemetry_leases.py`、`repositories/telemetry.py` |
+| SSE | `order_events.py`、`order_stream.py`、`live_progress.py` |
+| 后台补偿和历史清理 | `services/background_worker.py`、`history_maintenance.py` |
+| 进程监督与健康 | `supervised_process.py`、`file_healthcheck.py`、`services/system.py` |
 
-- Route 不持有数据库连接。
-- Service 决定事务范围，但不包含 SQL。
-- Repository 不自行开启事务，因此一个业务用例可以原子更新多张表。
-- MQTT Inbox、Command Outbox、Payment Callback Inbox 和 Business Outbox 的唯一键仍是幂等性的最终保护。
-- Service 抛出 `ServiceError`，统一由 HTTP 层转换为响应；Repository 不依赖 FastAPI。
-- `ADMIN_TOKEN` 只作为应急 OWNER；日常运营使用数据库中仅保存摘要的独立运营 Token。
+## 事务与外部调用
 
-## 后台任务边界
+制作迁移以订单、任务、精确制作命令及相关支付退款记录进行关联检查和锁定。资金操作集中维护退款预算；持久事实提交后才通知浏览器。Pub/Sub、NOTIFY、MQTT PUBACK 都不代表物理动作已经完成。
 
-`main.py` 只保留应用组装、生命周期和线程调度。API 进程不执行 migration 或后台扫描；migration 由一次性 `app.migrate` 完成。独立 `coffee-domain-worker` 将遥测刷库、领域派单、支付退款拆成三个工作循环，避免支付渠道超时阻塞派单或遥测。后台任务仍采用短事务：领取/标记本地状态后提交，外部支付调用完成后再开启新事务保存结果。
+支付及凭证等外部调用需检查具体服务的边界，遵循本地意图提交 → 外部调用 → 本地结果提交；不能把外部设备或渠道纳入数据库回滚。部分平台操作的审计由路由在业务调用后另行调用，不能笼统承诺所有 API 的业务与审计都原子提交；HOLD 裁决有自己的同事务实现。
 
-后台任务的依赖关系如下：
+## API、Worker 与迁移
 
-```text
-OfflineMonitor / Telemetry / Domain / Payment（独立线程调度）
-                 ↓
-      BackgroundWorkerService
-          ├── WorkerRepository
-          ├── ProductionService
-          ├── OrderRepository / PaymentRepository
-          └── 外部支付 Provider
+`Settings` 的 `RUN_DATABASE_MIGRATIONS`、`RUN_BACKGROUND_WORKERS` 默认 true，`main.lifespan()` 按开关执行。仓库 Compose 对 API 显式设为 false：迁移由 `app.migrate` 一次性完成，后台由 `app.domain_worker` 运行。
 
-设备事件 / 订单支付
-        ↓
-  ProductionService
-        ├── CommandRepository
-        ├── OrderRepository
-        └── PaymentRepository
-```
+Domain Worker 启动离线扫描以及遥测、领域、支付三个循环。领域内部的派单/watchdog/清理共享线程，支付对账与退款共享线程。部署按单实例运行 Domain Worker；入口并没有自动选主来保证只有一个进程。两个 API worker 各有数据库池、SSE 监听器和进程内配额。
 
-这样可以在后续拆分独立 Worker 进程时复用 Service 和 Repository，而不需要重新复制 `main.py` 中的 SQL 和状态机逻辑。
+## 热数据与可靠消息
 
-## 性能并发边界
+- `task.progress` 写 Redis 最新快照并通知，按设备/任务/revision 核验，不写进度历史或高频 SQL。
+- 任务/步骤生命周期经持久消息和 PostgreSQL 状态迁移，终态及 HOLD 优先于瞬时进度。
+- 设备 heartbeat/presence/state 采用热缓存与批量投影；`telemetry_leases.py` 提供租约处理，旧文档的单纯 ZPOPMIN 描述已经过时。
+- PG NOTIFY 与 Redis Pub/Sub 只用于唤醒，重连补读最新快照；排队 SSE 还会周期刷新队列信息。
+- MQTT Gateway 按 deviceId 分片上行处理；连接代际防止旧连接回执误用于新连接。
+- 终端 MQTT 先内存入队再 PUBACK，之后才在执行循环记录 SQLite Inbox；此窗口不满足持久接收保证。
 
-- `Database` 使用 psycopg 连接池，连接池大小由 `DB_POOL_MIN_SIZE`、`DB_POOL_MAX_SIZE` 和 `DB_POOL_TIMEOUT_SECONDS` 配置；事务边界仍由 `UnitOfWork` 管理。
-- Business Outbox 由 `BackgroundWorkerService` 一次领取一批事件，并使用 savepoint 隔离单条失败，避免一个坏事件回滚整批事件。
-- MQTT Gateway 按 `deviceId` 将上行消息分片到多个 Worker；同一设备保持在同一分片中，以保留消息顺序，不同设备可以并发处理。
-- MQTT Gateway 的内部 API 使用共享 Keep-Alive HTTP 客户端，命令发布独立于上行消息处理线程。
-- 心跳、presence、state 默认使用 `latest` 模式，Worker 通过集合 SQL 刷新设备快照。`task.progress` 使用独立 Redis 键与 Pub/Sub，不入 dirty 队列、不刷数据库；旧 hash 中的 progressPayload 也不再刷库。
-- `step.started/step.completed`、完成、失败等事实事件仍进入持久 Inbox 并更新 PostgreSQL。SSE 通过双通道通知更新，进度通知不查询数据库。管理订单列表通过 Redis pipeline 合并实时进度。
-- 扩容前应观察 `/metrics` 中的连接池、Redis dirty backlog、SSE 连接数和 Worker 健康文件，并执行容量与故障验收计划。
+## 新功能落点
 
-## 新功能开发规则
+新增命令需同时核对云端 `protocol.py`、命令服务/权限、终端 `backend.py._process_commands()` 和结果回传；当前不存在 `COMMAND_HANDLERS` 注册表。新增饮品通常修改终端配方与物料，云端消费能力快照和冻结版本。新增硬件须先引入动作执行接口，不能把当前计时器或 Three.js IK 直接当硬件控制器。
 
-1. 新接口先定义 Service 用例，再增加 Repository 方法，最后添加 Route。
-2. 禁止在 Route 和 Service 中新增 `.execute()` 或 SQL 字符串。
-3. Repository 方法名表达业务数据动作，例如 `find_refund`、`claim`，不要泄漏 HTTP 概念。
-4. 状态迁移必须在锁定当前记录的事务中完成，并保留 revision/transition/event 记录。
-5. 跨外部系统操作使用“本地意图 → 提交 → 外部调用 → 本地结果”的短事务模式。
+验证与部署见 [operations.md](operations.md)，当前缺口见 [核对记录](documentation-audit-2026-09-17.md)。

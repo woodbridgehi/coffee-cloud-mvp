@@ -1,59 +1,63 @@
-# 制作状态一致性整改（2026-08-30）
+# 制作、取杯与资金一致性
 
-范围：A2 批次；2026-08-30 随后端 `2bc7a0a` 部署 VPS，迁移 12 已执行，不代表全部系统整改完成。见 [发布记录](releases/2026-08-30-a1-a2.md) 和 [后续执行手册](optimization-roadmap-2026-08-30.md)。
+核对日期：2026-09-17。实现依据：`production_state.py`、`services/production.py`、`services/public_orders.py`、`services/adjudications.py`、`services/refund_intents.py`、`repositories/pickup.py`。
 
-## 状态与事务
+## 四套状态分别解释
 
-`DeviceMessageService.event/task_ack` 进入 `ProductionService.reconcile_device_event`。首次只读定位，随后按 **订单 → 制作任务 → 精确关联制作命令 → 支付 → 退款** 加锁；先共同验证状态、关联和设备 revision，再一次事务更新。HTTP 拉取使用只读候选、逐命令事务，过期处理不能先拿命令锁再等待订单。
+- 订单：CREATED、AWAITING_PAYMENT、PAID、QUEUED、DISPATCHED、ACCEPTED、MAKING、READY、HOLD、FAILED、CANCELLED、EXPIRED、REFUNDED。不要使用旧 README 的 PENDING_PAYMENT 或 COMPLETED 作为当前订单状态。
+- 制作任务：QUEUED、DISPATCHED、ACCEPTED、EXECUTING、PAUSED、RETRY_WAIT、HOLD、UNKNOWN 及制作终态。
+- 命令：CREATED、DELIVERING、PUBLISHED、ACKED、EXECUTING、UNKNOWN 及命令终态。Broker PUBACK 仅证明发布确认，不等于任务接受。
+- 支付/退款：各自有状态和金额预算；订单取消并不代表退款已到账，READY 也不代表顾客已经取走杯子。
 
-| 设备事件 | 云端任务 | 订单 | 制作命令 | 资金处理 |
-| --- | --- | --- | --- | --- |
-| task.acknowledged | ACCEPTED | ACCEPTED | ACKED | 无 |
-| task.started / resumed / retry | EXECUTING | MAKING | EXECUTING | 无 |
-| task.paused | PAUSED | MAKING | EXECUTING | 无 |
-| task.retry_wait | RETRY_WAIT | MAKING | EXECUTING | 不退款 |
-| task.recovered，state=PAUSED | HOLD | HOLD | UNKNOWN | 等待人工核对 |
-| task.succeeded | SUCCEEDED | READY | SUCCEEDED | 不退款 |
-| task.failed / rejected | FAILED / REJECTED | FAILED | FAILED / REJECTED | 唯一退款意图 |
-| task.cancelled | CANCELLED | CANCELLED | CANCELLED | 唯一退款意图 |
+## 设备事件映射
 
-表格不代表任意状态均可迁移。例如制作开始后的拒绝 ACK 不再生效，暂停只能 resumed，等待重试只能 retry。终态不能被更大 revision 复活；相同 revision 冲突不覆盖，重复 eventId 比较摘要后幂等返回。旧协议缺少 revision 仍受状态机约束。已认证且关联正确的事件可先于网关 published 回执到达；不要求命令先变为 PUBLISHED。
+| 事件 | 云端任务 | 订单 | 制作命令 |
+| --- | --- | --- | --- |
+| task.acknowledged | ACCEPTED | ACCEPTED | ACKED |
+| task.started / resumed / retry | EXECUTING | MAKING | EXECUTING |
+| task.paused | PAUSED | MAKING | EXECUTING |
+| task.retry_wait | RETRY_WAIT | MAKING | EXECUTING |
+| task.recovered | HOLD | HOLD | UNKNOWN |
+| task.succeeded | SUCCEEDED | READY | SUCCEEDED |
+| task.failed / rejected | FAILED / REJECTED | FAILED | FAILED / REJECTED |
+| task.cancelled | CANCELLED | CANCELLED | CANCELLED |
 
-暂停/重试仍占用该设备活动任务名额。`PRODUCTION_WAIT_TIMEOUT_SECONDS` 默认 900 秒，超时只进入 HOLD，不按制作失败自动退款。制作进度继续按设备 5%/5 秒策略上报，仅保留 Redis 最新值，不参与 SQL 状态迁移。
+此表是目标映射，不允许跳过关联、revision 和合法迁移检查。普通 resumed/retry 不会解除 HOLD；匹配的最终事实或人工裁决可结案。终态不能被更大 revision 复活，旧 revision 与同 revision 冲突被拒绝。制作事件可能早于网关 published 回执到达。
 
-## HOLD 人工结案
+暂停/RETRY_WAIT 仍占用活动任务名额；等待超时进入 HOLD，不按失败直接退款。`task.progress` 仅更新 Redis 进度，不决定 SQL 终态。
 
-接口：`POST /api/v1/admin/orders/{order_id}/adjudication`。
+## 队列、物料承诺与取杯
 
-- Bearer 管理员认证，必须同时具备 `commands.execute` 和 `refunds.manage`（MANAGER/OWNER）。
-- 必填 `Idempotency-Key`，1–160 字符。
-- `taskId`、`expectedRevision`（云端制作任务版本）、`outcome`（SUCCEEDED/FAILED/CANCELLED）、`reason`（1–1000 字符）。不支持“恢复制作”。
-- 管理员订单列表返回 `taskId` 和 `productionRevision`；提交前读取当前版本，版本冲突返回 409。
-- 仅 HOLD 且待人工核对的任务可接受新裁决。同键同内容返回原结果（即使已结案）；同键不同内容 409。
-- 命令/任务/订单结案、退款意图、派单请求、审计和幂等结果在同一 SQL 事务提交。审计失败时整体回滚，不会只扣款/退款而丢审计。
+顾客取消允许未支付或 QUEUED 状态，精确条件见 `PublicOrderService.cancel()`；已派单不能由顾客页面强制撤销设备制作。默认队列准入上限20，由配置控制。
 
-请求正文示例：
+云端对当前快照扣除未决订单物料承诺，并检查库存版本水位，避免生命周期已推进但库存仍旧时继续售卖。终端接单再次检查库存并预占。商户账面库存不参与替代终端物理确认。
 
-```json
-{"taskId":"task-example","expectedRevision":6,"outcome":"SUCCEEDED","reason":"现场确认已出杯，已核对设备停止"}
-```
+`task.succeeded` 后订单 READY，终端取杯位 OCCUPIED；超过两分钟终端标记 NEEDS_CHECK。确认取走后发送 `pickup.collected`，云端保留订单 READY 并记录 collected_at。派单还检查取杯投影，不靠“已制作完成”立即放行下一杯。新终端通过受保护本地接口或现场按钮确认取杯；顾客没有远程清空杯位接口。
 
-响应 `productionRevision` 是结案后的云端任务版本；`deviceReleasePending` 是提交时设备投影的提示，重放幂等结果不会变成实时查询。`physicalStopConfirmedByServer=false` 明确服务器没有感知物理停止。
+## 退款边界
 
-**人工结案不是停止硬件的命令。** 必须先核实现场实际结果、安全停止状态，再选择结案结果。设备仍 RUNNING/PAUSED/RETRY_WAIT/BUSY/RECOVERING 时，调度会独立重新检查并拒绝下一杯。远程重启后的模拟器拒绝普通 resume/retry/skip，需要通过现有受控 CANCEL_TASK 结束旧任务、上报空闲状态。ready 状态变化可靠唤醒派单的完善工作仍属于 B2，不能将本批门禁当成该问题也已解决。
+明确失败/拒绝/取消、顾客派单前取消，以及可证明未送达的命令过期等路径，满足已付款及剩余预算条件时创建幂等退款意图。不是只有“排队超时”才能自动退款。
 
-## 迁移与上线边界
+命令曾被领取发布、有投递证据或物理结果未知时，超时走 HOLD/UNKNOWN，不能推断未制作。REQUESTED、PROCESSING、UNKNOWN 和 SUCCEEDED 退款均占预算；UNKNOWN 不能当失败释放预算。只有渠道确认后的结果才结算支付投影。
 
-- 新迁移 11 扩展活动任务唯一索引，包含 PAUSED/RETRY_WAIT/HOLD/UNKNOWN；迁移 12 创建裁决幂等记录表。此前 A1 的迁移 10 增加主支付关联。
-- 上线前先只读检查同设备多活动任务，不能通过删除历史任务强行使索引创建成功：
+`ensure_automatic_refund_intent()` 是预算入口；付款回调、退款意图与退款完成不能混称一个状态。TEST_FREE 没有真实付款可退。
 
-```sql
-SELECT terminal_id, count(*) AS active_jobs
-FROM production_job
-WHERE status IN ('DISPATCHED','ACCEPTED','EXECUTING','PAUSED','RETRY_WAIT','HOLD','UNKNOWN')
-GROUP BY terminal_id HAVING count(*) > 1;
-```
+## HOLD 的两个独立处理面
 
-- 此查询有结果应停止迁移并逐笔人工核对。新代码不会自动修复历史“已退款但设备仍运行”等物理/财务矛盾，亦不自动对真实历史订单发起退款。
-- 后端需先支持 task.retry_wait，再升级设备；混合新旧版本必须避免旧设备继续采用 FAILED→retry。最终部署时仍需对未决任务进行核对。
-- MQTT 会话/持久接收、SQLite 跨任务与 Outbox 原子性、库存统一事务、Redis dirty 租约、渠道支付金额契约、有界 Worker 和安全配额仍待后续批次；不据此承诺千台容量。
+### 云端订单裁决
+
+`POST /api/v1/admin/orders/{order_id}/adjudication`，要求 commands.execute 与 refunds.manage，以及 `Idempotency-Key`。请求包含 taskId、expectedRevision、outcome（SUCCEEDED/FAILED/CANCELLED）和 reason。版本冲突返回409；同键同内容返回原结果。
+
+裁决在同事务保存状态、必要退款意图、审计和幂等结果。它不发送物理停止，也不支持“恢复制作”；响应 `physicalStopConfirmedByServer=false`。设备释放提示并非实时硬件证明，后续派单仍检查设备状态。
+
+### 终端现场核验
+
+当前终端 remote 重启的活动任务设置 recoveryHold；普通 cancel/resume/retry/skip 均不能绕过。现场 `confirm_recovery(task_id, revision, checks)` 要求版本匹配和三个严格 true 的检查项，取消旧任务并保留核验记录，释放未消耗预占，不退回已经消耗的物料。
+
+该入口通过 pywebview 桥接，没有公共 HTTP 核验接口。见[终端核验说明](../../coffee-terminal-simulator/docs/restart-recovery.md)。云端裁决和终端现场核验不能互相替代。
+
+## 迁移与验证
+
+迁移11包含活动任务唯一索引，12为裁决幂等记录，21为队列/库存水位，22为取杯联锁，23为执行 attempt。部署须运行全部未应用迁移，不应只按旧发布记录停在12或18。
+
+相关测试：`test_production_consistency.py`、`test_adjudications.py`、`test_payment_consistency.py`、`test_queue_materials.py`、`test_pickup_slot.py`、`test_pickup_stream.py`；真实数据库测试需要隔离 TEST_DATABASE_URL。测试文件存在不代表本次已执行，也不代表物理硬件安全已验证。
