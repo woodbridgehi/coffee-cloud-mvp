@@ -206,10 +206,15 @@ class DomainWorker:
     def _domain_run(self) -> None:
         from .history_maintenance import HistoryMaintenance
         last_watchdog = 0.0
+        last_dispatch_repair = None
         maintenance = HistoryMaintenance(settings.maintenance_interval_seconds, settings.history_cleanup_batch_size)
         while not self.stop_event.wait(settings.outbox_scan_seconds):
             try:
                 background_worker_service.process_business_outbox_batch()
+                now = time.monotonic()
+                if last_dispatch_repair is None or now - last_dispatch_repair >= 30:
+                    background_worker_service.repair_missing_dispatch_requests()
+                    last_dispatch_repair = now
                 background_worker_service.process_dispatch_batch()
                 mqtt_gateway_service.recover_pending()
                 now = time.monotonic()

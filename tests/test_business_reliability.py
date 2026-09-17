@@ -192,3 +192,70 @@ def test_recovery_does_not_replay_stale_telemetry(postgres_database):
     assert gateway(db).recover_pending() == 0
     with db.connect() as c:
         assert c.execute("select count(*) as n from mqtt_inbox where status='RECEIVED'").fetchone()["n"] == 3
+
+
+def test_upgrade_repair_restores_lost_dispatch_without_external_event(postgres_database):
+    db = postgres_database
+    settings = Settings.model_construct(offline_threshold_seconds=60)
+    production = ProductionService(settings, payment_provider=lambda _: None)
+    worker = BackgroundWorkerService(UnitOfWork(db), settings, production=production, payment_provider=lambda _: None)
+    with db.connect() as c:
+        tid = insert_terminal(c)
+        c.execute("update terminal set lifecycle_status='ACTIVE',connection_status='online',last_heartbeat_at=now(),reported_status=%s where id=%s", (Jsonb({"deviceStatus": "IDLE"}), tid))
+        seed_paid_queued_order(c, tid)
+    # This is the pre-upgrade orphan: ordinary dispatch cannot discover it.
+    assert worker.process_dispatch_batch(limit=1) == 0
+    assert worker.repair_missing_dispatch_requests() == 1
+    assert worker.repair_missing_dispatch_requests() == 0
+    assert worker.process_dispatch_batch(limit=1) == 1
+    with db.connect() as c:
+        assert c.execute("select count(*) as n from terminal_command").fetchone()["n"] == 1
+    assert worker.repair_missing_dispatch_requests() == 0
+
+
+def test_dispatch_repair_is_concurrent_and_preserves_existing_lease(postgres_database):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    db = postgres_database
+    settings = Settings.model_construct()
+    production = ProductionService(settings, payment_provider=lambda _: None)
+    worker = BackgroundWorkerService(UnitOfWork(db), settings, production=production, payment_provider=lambda _: None)
+    with db.connect() as c:
+        tid = insert_terminal(c)
+        seed_paid_queued_order(c, tid)
+        seed_paid_queued_order(c, tid)
+    barrier = Barrier(2)
+    def repair():
+        barrier.wait(5)
+        return worker.repair_missing_dispatch_requests()
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(repair) for _ in range(2)]
+        assert sum(f.result(timeout=10) for f in futures) == 1
+    with db.connect() as c:
+        c.execute("update terminal_dispatch_request set status='PROCESSING',revision=7,locked_by='active-worker',locked_until=now()+interval '1 minute',attempt_count=4")
+        before = c.execute("select * from terminal_dispatch_request").fetchone()
+    assert worker.repair_missing_dispatch_requests() == 0
+    with db.connect() as c:
+        assert c.execute("select * from terminal_dispatch_request").fetchone() == before
+
+
+@pytest.mark.parametrize("blocker", ["offline", "pickup", "hold"])
+def test_repaired_dispatch_still_obeys_interlocks(production_case, blocker):
+    from test_production_consistency import event
+    db, production, _, identity, order_id, command = production_case
+    if blocker == "pickup":
+        event(production_case, "task.succeeded", pickupSlot={"state": "OCCUPIED", "revision": 1, "taskId": command["taskId"]})
+    with db.connect() as c:
+        if blocker == "hold":
+            c.execute("update production_job set status='HOLD' where order_id=%s", (order_id,))
+            c.execute("update sales_order set status='HOLD' where id=%s", (order_id,))
+        elif blocker == "offline":
+            c.execute("update terminal set connection_status='offline' where id=%s", (identity["id"],))
+        seed_paid_queued_order(c, identity["id"])
+        c.execute("delete from terminal_dispatch_request where terminal_id=%s", (identity["id"],))
+    worker = BackgroundWorkerService(UnitOfWork(db), production.settings, production=production, payment_provider=lambda _: None)
+    assert worker.repair_missing_dispatch_requests() == 1
+    assert worker.process_dispatch_batch(limit=1) == 1
+    with db.connect() as c:
+        assert c.execute("select count(*) as n from terminal_command").fetchone()["n"] == 1
+        assert c.execute("select status from terminal_dispatch_request").fetchone()["status"] == "RETRY"

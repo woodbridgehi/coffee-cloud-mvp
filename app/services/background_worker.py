@@ -126,8 +126,17 @@ class BackgroundWorkerService:
             order = transition_order(connection, order, "QUEUED", "outbox-worker", reason="paid order queued")
         self.production.request_dispatch(connection, order["terminal_id"], "payment-paid")
 
+    def repair_missing_dispatch_requests(self, limit: int = 100) -> int:
+        # Upgrade recovery and a low-frequency liveness safety net. Only enqueue;
+        # ordinary dispatch still enforces heartbeat, HOLD and pickup interlocks.
+        with self.uow.transaction() as connection:
+            repaired = DispatchRepository(connection).repair_missing(max(1, min(limit, 500)))
+        if repaired:
+            log.info("recovered missing dispatch requests count=%s", repaired)
+        return repaired
+
     def process_dispatch_batch(self, limit: int = 50) -> int:
-        """Dispatch only in response to durable domain events, never heartbeats."""
+        """Process durable requests; production retains all dispatch safety checks."""
         processed = 0
         worker_id = f"dispatch-{uuid.uuid4()}"
         for _ in range(max(1, min(limit, 200))):

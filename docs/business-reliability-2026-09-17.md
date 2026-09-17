@@ -26,4 +26,17 @@ MQTT 测试覆盖发布 TTL 与过期拒绝；终端配套仓库覆盖真实 Bro
 
 运行完整 MQTT 测试时，每个仓库应使用全新的独立 Broker。终端测试会留下 retained presence/state；共用累积了这些主题的 Broker，会先占满网关背压测试故意阻塞的接收窗口，导致故障注入条件不成立。此次发现 21 个残留主题后使用独立端口复验，未放宽背压断言。
 
-本次使用独立临时 PostgreSQL、Redis、Mosquitto，仅监听本机；没有访问生产数据或支付渠道。最终验证：Python 286 passed，Node 89 passed，没有失败或跳过项。GUI、真实支付和机械设备未验收。取杯、HOLD、退款状态保护未取消。
+本次使用独立临时 PostgreSQL、Redis、Mosquitto，仅监听本机；没有访问生产数据或支付渠道。首轮验证：Python 286 passed，Node 89 passed，没有失败或跳过项。GUI、真实支付和机械设备未验收。取杯、HOLD、退款状态保护未取消。
+
+## 复审补充：升级时找回已丢失的派单请求
+
+复审基线 30ed73d。原来的重试只能保留已有请求，无法发现旧版删除请求后留下的 QUEUED 任务；该升级缺口成立，已用真实 PostgreSQL 验证。
+
+- domain worker 启动后的首轮执行补偿，此后每 30 秒扫描一次。每次最多补建 100 个设备请求，后续轮次继续处理余下设备，不在每次心跳上扫描。
+- 只为 production_job 与 sales_order 都为 QUEUED、且没有请求的设备补建 `queued-order-recovery` 请求。同一设备多杯只补一个请求。
+- `ON CONFLICT DO NOTHING` 避免多 worker 重复插入，并保留已有请求的 revision、退避状态和租约。补偿只入队，不直接创建制作命令，仍经过原有离线、取杯、活动任务/HOLD 等检查。
+- 验收包含旧请求缺失且无任何新外部事件时恢复派单、并发扫描、重复扫描、已有 PROCESSING 租约不变，以及离线/取杯/HOLD 期间不派单。
+
+本轮不新增数据库迁移；仍需此前的 migration 24。回滚本轮代码会停止自动发现缺失请求，但保留已经补建的请求和既有业务状态。
+
+复审修复后的全量验证：Python 291 passed；Node 89 passed，无失败、无跳过。使用临时 PostgreSQL/Redis 及两个仓库各自独立的本机 Broker；未访问生产服务。

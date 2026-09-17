@@ -21,6 +21,21 @@ class DispatchRepository:
             (terminal_id, reason[:120]),
         )
 
+    def repair_missing(self, limit: int) -> int:
+        """Rebuild lost wakeups without changing any existing revision or lease."""
+        rows = self.connection.execute(
+            """insert into terminal_dispatch_request(terminal_id,reason)
+               select distinct j.terminal_id,'queued-order-recovery'
+                 from production_job j join sales_order o on o.id=j.order_id
+                where j.status='QUEUED' and o.status='QUEUED'
+                  and not exists (select 1 from terminal_dispatch_request r
+                                  where r.terminal_id=j.terminal_id)
+                order by j.terminal_id limit %s
+               on conflict (terminal_id) do nothing returning terminal_id""",
+            (limit,),
+        ).fetchall()
+        return len(rows)
+
     def claim(self, worker_id: str) -> dict[str, Any] | None:
         request = self.connection.execute(
             """select * from terminal_dispatch_request
