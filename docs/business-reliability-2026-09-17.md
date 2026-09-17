@@ -40,3 +40,7 @@ MQTT 测试覆盖发布 TTL 与过期拒绝；终端配套仓库覆盖真实 Bro
 本轮不新增数据库迁移；仍需此前的 migration 24。回滚本轮代码会停止自动发现缺失请求，但保留已经补建的请求和既有业务状态。
 
 复审修复后的全量验证：Python 291 passed；Node 89 passed，无失败、无跳过。使用临时 PostgreSQL/Redis 及两个仓库各自独立的本机 Broker；未访问生产服务。
+
+## 合并与部署状态
+
+修复已合并 main（88cfdb4）并部署云端 API、worker、gateway；migration 24 已应用。VPS 隔离 Python 全套 290 通过、1 项因解释器路径跳过，补齐依赖后含该项的 8 项用例全部通过；Node 89 通过。部署、备份恢复与保留策略见[发布记录](releases/2026-09-17-business-reliability.md)。

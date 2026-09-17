@@ -63,7 +63,7 @@ Domain Worker 启动离线扫描以及遥测、领域、支付三个循环。领
 - 设备 heartbeat/presence/state 采用热缓存与批量投影；`telemetry_leases.py` 提供租约处理，旧文档的单纯 ZPOPMIN 描述已经过时。
 - PG NOTIFY 与 Redis Pub/Sub 只用于唤醒，重连补读最新快照；排队 SSE 还会周期刷新队列信息。
 - MQTT Gateway 按 deviceId 分片上行处理；连接代际防止旧连接回执误用于新连接。
-- 终端 MQTT 先内存入队再 PUBACK，之后才在执行循环记录 SQLite Inbox；此窗口不满足持久接收保证。
+- 终端 MQTT 回调先入队，由运行循环提交 SQLite Inbox 后再 PUBACK；持久化失败断开等待重投，旧连接代际不能确认新连接消息。启动及同步循环恢复 RECEIVED 命令，已开始制作的任务仍须现场核验。
 
 ## 新功能落点
 
