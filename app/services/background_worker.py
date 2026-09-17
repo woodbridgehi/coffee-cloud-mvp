@@ -12,7 +12,6 @@ from ..payment_providers import RefundRequest
 from ..payment_service import apply_paid_callback, transition_payment, transition_refund
 from ..protocol import utc_now
 from ..repositories import DispatchRepository, OrderRepository, PaymentRepository, TelemetryRepository, WorkerRepository
-from ..repositories.pickup import PickupRepository
 from ..settings import Settings
 from ..telemetry import TelemetryCache
 from .order_state import transition_order
@@ -138,12 +137,14 @@ class BackgroundWorkerService:
                     break
             try:
                 with self.uow.transaction() as connection:
-                    dispatched = self.production.dispatch_next_order(connection, request["terminal_id"])
-                    if (not dispatched and request.get('reason') == 'pickup-collected'
-                            and not PickupRepository(connection).blocked(request['terminal_id'])
-                            and OrderRepository(connection).next_queued_job(request['terminal_id'])):
-                        # Collection may arrive before the retained IDLE state.
-                        DispatchRepository(connection).retry(request['terminal_id'], request['revision'], 'waiting for idle state after pickup')
+                    outcome = self.production.dispatch_next_order_result(connection, request["terminal_id"])
+                    if outcome.retryable and OrderRepository(connection).next_queued_job(request["terminal_id"]):
+                        # Durable wakeup survives presence/heartbeat/state ordering.
+                        # Safety blocks remain in force; exponential retry caps at 30s.
+                        DispatchRepository(connection).retry(request["terminal_id"], request["revision"], outcome.reason)
+                        if request.get("attempt_count", 0) in {0, 5, 20}:
+                            log.info("dispatch deferred terminal=%s revision=%s reason=%s attempts=%s",
+                                     request["terminal_id"], request["revision"], outcome.reason, request.get("attempt_count", 0))
                     else:
                         DispatchRepository(connection).complete(request["terminal_id"], request["revision"])
                 processed += 1

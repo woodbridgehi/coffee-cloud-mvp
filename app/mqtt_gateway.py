@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import math
+from datetime import datetime, timezone
 import logging
 import os
 import queue
@@ -591,8 +593,17 @@ class Gateway:
         for command in response.get("commands") or []:
             outbox_id = command["outboxId"]
             try:
+                properties = mqtt.Properties(mqtt.PacketTypes.PUBLISH)
+                expiry = command["envelope"].get("payload", {}).get("expiresAt")
+                if expiry is not None:
+                    deadline = datetime.fromisoformat(expiry.replace("Z", "+00:00"))
+                    remaining = (deadline - datetime.now(timezone.utc)).total_seconds()
+                    if remaining <= 0:
+                        raise ValueError("command expired before publish")
+                    properties.MessageExpiryInterval = max(1, math.ceil(remaining))
                 info = self.client.publish(
                     command["topic"], json.dumps(command["envelope"], ensure_ascii=False), qos=1, retain=False,
+                    properties=properties,
                 )
                 info.wait_for_publish(timeout=8)
                 if not info.is_published():

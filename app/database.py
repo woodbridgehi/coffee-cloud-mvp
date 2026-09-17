@@ -642,6 +642,12 @@ MIGRATIONS: tuple[tuple[int, str, str], ...] = (
     (23, "production-execution-attempt", """
         alter table production_job add column execution_attempt integer not null default 1 check(execution_attempt > 0);
     """),
+    (24, "mqtt-inbox-recovery", """
+        alter table mqtt_inbox add column recovery_attempts integer not null default 0;
+        alter table mqtt_inbox add column next_recovery_at timestamptz not null default (now()+interval '30 seconds');
+        create index ix_mqtt_inbox_recovery on mqtt_inbox(next_recovery_at,id)
+            where status in ('RECEIVED','RETRY');
+    """),
 )
 
 

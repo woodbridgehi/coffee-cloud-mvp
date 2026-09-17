@@ -106,6 +106,7 @@ class CommandService:
         return {"ok": True, "duplicate": False}
 
     def create_raw(self, identity: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+        payload.setdefault("expiresAt", iso(utc_now() + timedelta(minutes=5)))
         with self.uow.transaction() as connection:
             repository = CommandRepository(connection)
             if payload.get('type') == 'MAKE_DRINK' and not payload.get('compiledRecipeDigest'):
@@ -139,6 +140,15 @@ class CommandService:
 
     def create_debug_command(self, identity: dict[str, Any], action: str | None) -> dict[str, Any]:
         command = {"messageId": f"cmd-{uuid.uuid4()}", "type": "DEBUG_COMMAND", "action": action}
+        if action in {"pause", "resume", "skip", "retry", "cancel", "clear", "collect"}:
+            # Bind at creation, never infer the target when the command arrives.
+            with self.uow.transaction() as connection:
+                terminal = TerminalRepository(connection).find(identity["device_id"], for_update=True)
+                status = (terminal or {}).get("reported_status") or {}
+                task_id = status.get("currentTaskId")
+                if not task_id:
+                    raise ServiceError(409, "no reported task to control")
+                command["taskId"] = task_id
         self.create_raw(identity, command)
         return {"ok": True, "command": command}
 

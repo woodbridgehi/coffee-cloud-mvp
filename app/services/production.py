@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from ..failure_info import failure_info
 
+from dataclasses import dataclass
+
 import uuid
 import math
 from datetime import timedelta
@@ -20,6 +22,16 @@ from .command_state import transition_command
 from .order_state import transition_order
 from .refund_intents import REFUNDABLE_PAYMENT_STATUSES, ensure_automatic_refund_intent
 from .errors import ServiceError
+
+
+@dataclass(frozen=True)
+class DispatchResult:
+    reason: str
+    command: dict[str, Any] | None = None
+
+    @property
+    def retryable(self) -> bool:
+        return self.reason in {"DEVICE_DISABLED", "WAITING_HEARTBEAT", "ACTIVE_JOB", "PICKUP_BLOCKED", "DEVICE_BUSY", "QUEUE_CHANGED"}
 
 
 class ProductionService:
@@ -324,19 +336,30 @@ class ProductionService:
         return intent.refund if intent is not None else None
 
     def dispatch_next_order(self, connection: Any, terminal_id: int) -> dict[str, Any] | None:
+        return self.dispatch_next_order_result(connection, terminal_id).command
+
+    def dispatch_next_order_result(self, connection: Any, terminal_id: int) -> DispatchResult:
         orders = OrderRepository(connection)
         terminal = orders.terminal_for_update(terminal_id)
-        if not terminal or not terminal_is_online(terminal, self.settings.offline_threshold_seconds) or terminal.get("lifecycle_status") != "ACTIVE":
-            return None
-        if orders.active_job_exists(terminal_id) or PickupRepository(connection).blocked(terminal_id) or device_is_busy(terminal.get("reported_status")):
-            return None
+        if not terminal:
+            return DispatchResult("DEVICE_MISSING")
+        if terminal.get("lifecycle_status") != "ACTIVE":
+            return DispatchResult("DEVICE_DISABLED")
+        if not terminal_is_online(terminal, self.settings.offline_threshold_seconds):
+            return DispatchResult("WAITING_HEARTBEAT")
+        if orders.active_job_exists(terminal_id):
+            return DispatchResult("ACTIVE_JOB")
+        if PickupRepository(connection).blocked(terminal_id):
+            return DispatchResult("PICKUP_BLOCKED")
+        if device_is_busy(terminal.get("reported_status")):
+            return DispatchResult("DEVICE_BUSY")
         job = orders.next_queued_job(terminal_id)
         if not job:
-            return None
+            return DispatchResult("NO_ORDERS")
         order = orders.find_with_terminal(job["order_id"], for_update=True)
         current_job = orders.lock_job(job["id"])
         if not order or not current_job or order["status"] != "QUEUED" or current_job["status"] != "QUEUED":
-            return None
+            return DispatchResult("QUEUE_CHANGED")
         expires_at = utc_now() + timedelta(minutes=10)
         message_id = f"cmd-{uuid.uuid4()}"
         command = {
@@ -365,7 +388,7 @@ class ProductionService:
         order = orders.find_with_terminal(job["order_id"], for_update=True)
         if order:
             transition_order(connection, order, "DISPATCHED", "order-service", reason="device command created", payload={"messageId": message_id})
-        return command
+        return DispatchResult("DISPATCHED", command)
 
     def request_dispatch(self, connection: Any, terminal_id: int, reason: str) -> None:
         DispatchRepository(connection).enqueue(terminal_id, reason)

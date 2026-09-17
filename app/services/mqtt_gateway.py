@@ -10,6 +10,15 @@ from ..telemetry import TelemetryCache
 from .errors import ServiceError
 
 
+def business_digest(envelope: dict[str, Any]) -> str:
+    """Comparison contract v2: only outer transport sentAt is retry-variant.
+
+    Persisted digests remain v1 for rolling-upgrade/rollback compatibility;
+    v2 comparison is derived from the stored, digest-verified envelope.
+    """
+    return canonical_digest({key: value for key, value in envelope.items() if key != "sentAt"})
+
+
 class MqttGatewayService:
     def __init__(
         self, uow: UnitOfWork, *, logger: logging.Logger,
@@ -39,6 +48,18 @@ class MqttGatewayService:
         if terminal and self.telemetry_cache:
             self.telemetry_cache.remember_terminal(device_id, terminal["id"])
         return terminal
+
+    def recover_pending(self, limit: int = 20) -> int:
+        """Replay stored facts after gateway/process loss, through normal dedup."""
+        with self.uow.transaction() as connection:
+            rows = MqttGatewayRepository(connection).claim_recovery(max(1, min(limit, 100)))
+        for row in rows:
+            try:
+                self.ingest({"topic": row["topic"], "envelope": row["payload_json"]})
+            except Exception as exc:
+                self.logger.warning("MQTT Inbox recovery deferred device=%s message=%s attempt=%s error_type=%s",
+                                    row["device_id"], row["message_id"], row["recovery_attempts"], type(exc).__name__)
+        return len(rows)
 
     def ingest(self, body: dict[str, Any]) -> dict[str, Any]:
         topic = str(body.get("topic") or "")
@@ -121,7 +142,11 @@ class MqttGatewayService:
                 raise ServiceError(404, "device not registered")
             existing = repository.inbox(device_id, message_id)
             if existing and existing["payload_digest"].strip() != digest:
-                raise ServiceError(409, "MQTT messageId payload conflict")
+                stored = existing.get("payload_json")
+                if (not isinstance(stored, dict)
+                        or canonical_digest(stored) != existing["payload_digest"].strip()
+                        or business_digest(stored) != business_digest(envelope)):
+                    raise ServiceError(409, "MQTT messageId payload conflict")
             if existing and existing["status"] == "PROCESSED":
                 return {"ok": True, "duplicate": True, "disposition": existing["disposition"]}
             if not existing and not repository.insert_inbox((

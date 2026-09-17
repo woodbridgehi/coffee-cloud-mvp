@@ -49,7 +49,7 @@ class MqttGatewayRepository:
 
     def retry(self, device_id: str, message_id: str, error: str) -> None:
         self.connection.execute(
-            "update mqtt_inbox set status='RETRY',error_message=%s where device_id=%s and message_id=%s",
+            "update mqtt_inbox set status='RETRY',error_message=%s where device_id=%s and message_id=%s and status!='PROCESSED'",
             (error[:1000], device_id, message_id),
         )
 
@@ -58,3 +58,18 @@ class MqttGatewayRepository:
             """update mqtt_inbox set status='PROCESSED',disposition='APPLIED',processed_at=now(),error_message=null
                  where device_id=%s and message_id=%s""", (device_id, message_id)
         )
+
+    def claim_recovery(self, limit: int) -> list[dict[str, Any]]:
+        # Durable retry schedule also acts as a bounded recovery lease. Domain
+        # handlers retain their own idempotency if a slow attempt overlaps delivery.
+        return self.connection.execute(
+            """with candidates as (
+                   select id from mqtt_inbox
+                   where status in ('RECEIVED','RETRY') and next_recovery_at<=now()
+                     and message_type in ('event','command_result')
+                   order by next_recovery_at,id for update skip locked limit %s
+               ) update mqtt_inbox i set recovery_attempts=i.recovery_attempts+1,
+                   next_recovery_at=now()+make_interval(secs => least(300,30*power(2,least(i.recovery_attempts,4)))::double precision)
+                 from candidates c where i.id=c.id returning i.*""",
+            (limit,),
+        ).fetchall()

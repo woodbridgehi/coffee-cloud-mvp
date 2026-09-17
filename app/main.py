@@ -211,6 +211,7 @@ class DomainWorker:
             try:
                 background_worker_service.process_business_outbox_batch()
                 background_worker_service.process_dispatch_batch()
+                mqtt_gateway_service.recover_pending()
                 now = time.monotonic()
                 if now - last_watchdog >= min(10, settings.offline_scan_seconds):
                     background_worker_service.watchdog_scan_once()

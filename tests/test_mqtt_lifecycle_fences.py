@@ -238,3 +238,22 @@ def test_process_health_requires_subscriptions_and_supervisor(tmp_path, missing)
         [sys.executable, "-m", "app.file_healthcheck", "gateway", str(path)], timeout=5
     )
     assert result.returncode == 1
+
+
+def test_command_publish_carries_remaining_ttl(gateway, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    gateway._connected.set()
+    command = {"outboxId": "test-id", "topic": "v1/devices/test/down", "envelope": {
+        "payload": {"expiresAt": (datetime.now(timezone.utc) + timedelta(seconds=60)).isoformat()}}}
+    monkeypatch.setattr(gateway.api_client, "request", lambda method, *a: {"commands": [command]} if method == "GET" else {})
+    published = []
+    def publish(*args, **kwargs):
+        published.append(kwargs)
+        return SimpleNamespace(wait_for_publish=lambda **kw: None, is_published=lambda: True)
+    monkeypatch.setattr(gateway.client, "publish", publish)
+    gateway.publish_claimed_commands()
+    assert 1 <= published[0]["properties"].MessageExpiryInterval <= 60
+    command["envelope"]["payload"]["expiresAt"] = "2000-01-01T00:00:00Z"
+    with pytest.raises(ValueError, match="expired"):
+        gateway.publish_claimed_commands()
+    assert len(published) == 1
